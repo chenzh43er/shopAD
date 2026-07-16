@@ -1,0 +1,159 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap");
+
+:root {
+  --bg: #f3f7fb;
+  --panel: #ffffff;
+  --ink: #1f2a37;
+  --muted: #6b7c8f;
+  --line: #dce5ef;
+  --accent: #3b9cff;
+  --accent-soft: #e8f3ff;
+  --sidebar: #152a45;
+  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --shadow-sm: 0 1px 2px rgba(21, 42, 69, 0.04);
+  --shadow-md: 0 8px 24px rgba(21, 42, 69, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10% -10%, #d6e8ff 0%, transparent 42%),
+    radial-gradient(circle at 100% 0%, #e8f1fa 0%, transparent 35%),
+    var(--bg);
+  font-family: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 40px 36px;
+  box-shadow: var(--shadow-md);
+}
+
+.login-brand {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin: 0 0 6px;
+  color: var(--accent);
+}
+
+.login-sub {
+  margin: 0 0 28px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.app-shell .ant-layout-sider {
+  background: var(--sidebar) !important;
+  border-inline-end: 1px solid var(--sidebar-border);
+}
+
+.app-shell .ant-layout-sider .ant-menu {
+  background: transparent;
+  border-inline-end: none !important;
+  padding-top: 4px;
+}
+
+.app-shell .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  padding: 18px 16px 14px;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--sidebar-border);
+  margin-bottom: 8px;
+}
+
+.app-shell .brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #5eb3ff 0%, #3b9cff 100%);
+  box-shadow: 0 4px 12px rgba(59, 156, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.app-shell .ant-layout-header {
+  background: rgba(255, 255, 255, 0.92) !important;
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-sm);
+}
+
+.app-content {
+  margin: 16px;
+  padding: 22px 24px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  min-height: calc(100vh - 88px);
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+.cover-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f0f4f8;
+}
+
+.cover-placeholder {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--accent-soft);
+}

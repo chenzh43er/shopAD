@@ -1,0 +1,10 @@
+-- After creating your first admin user in Supabase Auth (Dashboard → Authentication → Users),
+-- the trigger `on_auth_user_created` inserts a row into public.profiles with role = 'admin'.
+--
+-- If you created the user before applying the migration, insert manually:
+--
+--   insert into public.profiles (id, role, display_name)
+--   values ('<auth-user-uuid>', 'admin', 'Admin')
+--   on conflict (id) do update set role = 'admin';
+--
+-- Then optionally run supabase/seed.sql for demo products/orders.

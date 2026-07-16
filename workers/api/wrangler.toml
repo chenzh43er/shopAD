@@ -1,0 +1,13 @@
+name = "shopad-api"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+CORS_ORIGINS = "http://localhost:5173,http://localhost:5174"
+
+# Secrets (set via `wrangler secret put` or `.dev.vars`):
+# SUPABASE_URL
+# SUPABASE_ANON_KEY          (publishable key sb_publishable_...)
+# SUPABASE_SERVICE_ROLE_KEY  (secret key sb_secret_...)
+# SUPABASE_JWT_SECRET        (optional)

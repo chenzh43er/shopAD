@@ -1,0 +1,29 @@
+{
+  "name": "shopad",
+  "private": true,
+  "scripts": {
+    "predev": "pnpm --filter @shopad/shared build",
+    "dev": "pnpm -r --parallel --filter @shopad/web --filter @shopad/api dev",
+    "dev:web": "pnpm --filter @shopad/web dev",
+    "dev:api": "pnpm --filter @shopad/api dev",
+    "build": "pnpm -r --filter @shopad/shared --filter @shopad/web --filter @shopad/api build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd",
+      "sharp"
+    ]
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "dotenv": "^17.4.2",
+    "pg": "^8.22.0",
+    "xlsx": "^0.18.5"
+  }
+}
