@@ -157,3 +157,19 @@ a {
   font-size: 12px;
   background: var(--accent-soft);
 }
+
+/* 所有列表：列按内容撑开，超出时横向滚动，不压缩单元格 */
+.ant-table-content {
+  overflow-x: auto;
+}
+
+.ant-table-content table {
+  table-layout: auto !important;
+  width: max-content !important;
+  min-width: 100%;
+}
+
+.ant-table-thead > tr > th,
+.ant-table-tbody > tr > td {
+  white-space: nowrap;
+}

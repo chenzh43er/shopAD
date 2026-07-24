@@ -1,12 +1,15 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { requireAdmin } from "./middleware/auth";
+import { requireStaff } from "./middleware/auth";
 import { productsRoutes } from "./routes/products";
 import { packagesRoutes } from "./routes/packages";
 import { ordersRoutes } from "./routes/orders";
 import { uploadsRoutes } from "./routes/uploads";
 import { shippersRoutes } from "./routes/shippers";
+import { addressLibrariesRoutes } from "./routes/addressLibraries";
+import { currenciesRoutes } from "./routes/currencies";
+import { employeesRoutes, meRoutes } from "./routes/employees";
 import type { Env, Variables } from "./types";
+import { cors } from "hono/cors";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -34,11 +37,15 @@ app.get("/api/health", (c) =>
 );
 
 const api = new Hono<{ Bindings: Env; Variables: Variables }>();
-api.use("*", requireAdmin);
+api.use("*", requireStaff);
+api.route("/me", meRoutes);
+api.route("/employees", employeesRoutes);
 api.route("/products", packagesRoutes);
 api.route("/products", productsRoutes);
 api.route("/orders", ordersRoutes);
 api.route("/shippers", shippersRoutes);
+api.route("/address-libraries", addressLibrariesRoutes);
+api.route("/currencies", currenciesRoutes);
 api.route("/uploads", uploadsRoutes);
 
 app.route("/api", api);

@@ -18,10 +18,11 @@ export function getOrdersListFrom(): string | null {
 
 export const COD_MENU_PATHS = new Set([
   "/cod/pending_review",
-  "/cod/rejected",
   "/cod/awaiting_shipment",
   "/cod/shipped",
   "/cod/completed",
+  "/cod/refused",
+  "/cod/invalid",
 ]);
 
 export function isCodListPath(path: string | null | undefined): boolean {

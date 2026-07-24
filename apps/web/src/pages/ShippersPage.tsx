@@ -17,6 +17,7 @@ import type {
   UpsertLogisticsShipperInput,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
+import { INPUT_LIMITS } from "../lib/inputLimits";
 
 type ShipperListRes = { data: LogisticsShipper[]; total: number };
 
@@ -101,7 +102,6 @@ export function ShippersPage() {
     {
       title: "寄件地址",
       dataIndex: "address",
-      ellipsis: true,
       width: 220,
     },
     {
@@ -113,7 +113,6 @@ export function ShippersPage() {
       title: "操作",
       key: "actions",
       width: 160,
-      fixed: "right",
       render: (_, row) => (
         <Space>
           <Button size="small" onClick={() => openEdit(row)}>
@@ -157,7 +156,7 @@ export function ShippersPage() {
         loading={loading}
         columns={columns}
         dataSource={data}
-        scroll={{ x: 1100 }}
+        scroll={{ x: "max-content" }}
         pagination={false}
       />
 
@@ -214,27 +213,37 @@ export function ShippersPage() {
             label="寄件人"
             rules={[{ required: true, message: "请填写寄件人" }]}
           >
-            <Input placeholder="如 UBT" />
+            <Input maxLength={INPUT_LIMITS.name} placeholder="如 UBT" />
           </Form.Item>
           <Form.Item name="phone" label="寄件人电话">
-            <Input placeholder="如 087893521997" />
+            <Input
+              maxLength={INPUT_LIMITS.phone}
+              placeholder="如 087893521997"
+            />
           </Form.Item>
           <Space style={{ display: "flex" }} size="middle" wrap>
             <Form.Item name="province" label="寄件省" style={{ width: 180 }}>
-              <Input />
+              <Input maxLength={INPUT_LIMITS.region} />
             </Form.Item>
             <Form.Item name="city" label="寄件城市" style={{ width: 180 }}>
-              <Input placeholder="如 JAKARTA" />
+              <Input
+                maxLength={INPUT_LIMITS.region}
+                placeholder="如 JAKARTA"
+              />
             </Form.Item>
             <Form.Item name="district" label="寄件区域" style={{ width: 180 }}>
-              <Input />
+              <Input maxLength={INPUT_LIMITS.region} />
             </Form.Item>
           </Space>
           <Form.Item name="address" label="寄件地址">
-            <Input.TextArea rows={2} />
+            <Input.TextArea
+              rows={2}
+              maxLength={INPUT_LIMITS.address}
+              showCount
+            />
           </Form.Item>
           <Form.Item name="address_info" label="寄件地址信息">
-            <Input />
+            <Input maxLength={INPUT_LIMITS.addressInfo} />
           </Form.Item>
           <Space style={{ display: "flex" }} size="middle" wrap>
             <Form.Item
@@ -242,21 +251,21 @@ export function ShippersPage() {
               label="委托人标识"
               style={{ width: 140 }}
             >
-              <Input placeholder="默认 0" />
+              <Input maxLength={INPUT_LIMITS.flag} placeholder="默认 0" />
             </Form.Item>
             <Form.Item
               name="consignor_name"
               label="委托人姓名"
               style={{ width: 180 }}
             >
-              <Input />
+              <Input maxLength={INPUT_LIMITS.name} />
             </Form.Item>
             <Form.Item
               name="consignor_phone"
               label="委托人电话"
               style={{ width: 180 }}
             >
-              <Input />
+              <Input maxLength={INPUT_LIMITS.phone} />
             </Form.Item>
           </Space>
           <Form.Item

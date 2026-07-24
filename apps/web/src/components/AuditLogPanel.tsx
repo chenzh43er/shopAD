@@ -57,6 +57,7 @@ export function AuditLogPanel({ entityType, entityId, refreshKey }: Props) {
       loading={loading}
       pagination={false}
       dataSource={logs}
+      scroll={{ x: "max-content" }}
       columns={[
         {
           title: "时间",

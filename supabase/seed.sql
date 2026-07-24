@@ -9,7 +9,7 @@ begin;
 -- ---------------------------------------------------------------------------
 insert into public.products (
   name, description, price, stock, cover_url, status,
-  sku_code, sku_display, weight, item_category, item_type,
+  sku_code, sku_display, weight,
   link_suffix, title_external, packages_enabled,
   gallery_urls, detail_image_urls
 )
@@ -20,7 +20,7 @@ from (
       '示例水杯',
       '不锈钢保温杯 500ml，双层真空保温',
       59.00::numeric, 100, 'https://picsum.photos/seed/shopad-cup/640/640', 'on_sale',
-      '水杯-银', '保温杯 / 银色', 0.50::numeric, '日用百货', 'BARANG',
+      '水杯-银', '保温杯 / 银色', 0.50::numeric,
       'cup-demo', 'Vacuum Flask 500ml', true,
       array[
         'https://picsum.photos/seed/shopad-cup-g1/800/800',
@@ -35,7 +35,7 @@ from (
       '示例笔记本',
       'A5 牛皮纸笔记本，120 页',
       18.50::numeric, 200, 'https://picsum.photos/seed/shopad-note/640/640', 'on_sale',
-      '笔记-A5', '笔记本 / A5', 0.20::numeric, '文具', 'BARANG',
+      '笔记-A5', '笔记本 / A5', 0.20::numeric,
       'notebook-demo', 'Kraft Notebook A5', false,
       array['https://picsum.photos/seed/shopad-note-g1/800/800']::text[],
       array['https://picsum.photos/seed/shopad-note-d1/800/1200']::text[]
@@ -44,7 +44,7 @@ from (
       '蓝牙耳机 Pro',
       '降噪蓝牙耳机，续航 30 小时',
       199.00::numeric, 80, 'https://picsum.photos/seed/shopad-ear/640/640', 'on_sale',
-      '耳机-黑', '蓝牙耳机 / 黑色', 0.15::numeric, '数码配件', 'BARANG',
+      '耳机-黑', '蓝牙耳机 / 黑色', 0.15::numeric,
       'earphone-pro', 'Bluetooth Earphone Pro', true,
       array[
         'https://picsum.photos/seed/shopad-ear-g1/800/800',
@@ -60,7 +60,7 @@ from (
       '护肤精华套装',
       '补水修护精华液 30ml × 套装',
       268.00::numeric, 45, 'https://picsum.photos/seed/shopad-skin/640/640', 'on_sale',
-      '护肤-套', '精华套装', 0.40::numeric, '美妆护肤', 'BARANG',
+      '护肤-套', '精华套装', 0.40::numeric,
       'serum-set', 'Hydrating Serum Set', true,
       array['https://picsum.photos/seed/shopad-skin-g1/800/800']::text[],
       array['https://picsum.photos/seed/shopad-skin-d1/800/1200']::text[]
@@ -69,7 +69,7 @@ from (
       '运动跑鞋',
       '轻量缓震跑鞋，多色可选',
       329.00::numeric, 60, 'https://picsum.photos/seed/shopad-shoe/640/640', 'on_sale',
-      '跑鞋-42', '跑鞋 / 42码', 0.80::numeric, '鞋服', 'BARANG',
+      '跑鞋-42', '跑鞋 / 42码', 0.80::numeric,
       'run-shoes', 'Running Shoes Lite', true,
       array[
         'https://picsum.photos/seed/shopad-shoe-g1/800/800',
@@ -81,7 +81,7 @@ from (
       '桌面小风扇',
       'USB 静音台式风扇',
       49.90::numeric, 150, 'https://picsum.photos/seed/shopad-fan/640/640', 'off_sale',
-      '风扇-白', '小风扇 / 白色', 0.60::numeric, '小家电', 'BARANG',
+      '风扇-白', '小风扇 / 白色', 0.60::numeric,
       'desk-fan', 'USB Desk Fan', false,
       array['https://picsum.photos/seed/shopad-fan-g1/800/800']::text[],
       '{}'::text[]
@@ -90,7 +90,7 @@ from (
       '香氛蜡烛礼盒',
       '大豆蜡香氛蜡烛 3 件套',
       128.00::numeric, 30, 'https://picsum.photos/seed/shopad-candle/640/640', 'draft',
-      '蜡烛-礼', '香氛蜡烛礼盒', 1.20::numeric, '家居', 'BARANG',
+      '蜡烛-礼', '香氛蜡烛礼盒', 1.20::numeric,
       null, 'Scented Candle Gift Box', false,
       '{}'::text[],
       '{}'::text[]
@@ -99,14 +99,14 @@ from (
       '草稿商品',
       '尚未上架的占位商品',
       9.90::numeric, 10, null, 'draft',
-      null, null, 1.00::numeric, null, 'BARANG',
+      null, null, 1.00::numeric,
       null, null, false,
       '{}'::text[],
       '{}'::text[]
     )
 ) as v(
   name, description, price, stock, cover_url, status,
-  sku_code, sku_display, weight, item_category, item_type,
+  sku_code, sku_display, weight,
   link_suffix, title_external, packages_enabled,
   gallery_urls, detail_image_urls
 )
@@ -125,8 +125,6 @@ set
   sku_code = coalesce(p.sku_code, s.sku_code),
   sku_display = coalesce(p.sku_display, s.sku_display),
   weight = s.weight,
-  item_category = coalesce(p.item_category, s.item_category),
-  item_type = coalesce(nullif(p.item_type, ''), s.item_type),
   link_suffix = coalesce(p.link_suffix, s.link_suffix),
   title_external = coalesce(p.title_external, s.title_external),
   packages_enabled = s.packages_enabled,
@@ -135,17 +133,17 @@ set
   updated_at = now()
 from (
   values
-    ('示例水杯', '不锈钢保温杯 500ml，双层真空保温', 59.00::numeric, 100, 'https://picsum.photos/seed/shopad-cup/640/640', 'on_sale', '水杯-银', '保温杯 / 银色', 0.50::numeric, '日用百货', 'BARANG', 'cup-demo', 'Vacuum Flask 500ml', true, array['https://picsum.photos/seed/shopad-cup-g1/800/800','https://picsum.photos/seed/shopad-cup-g2/800/800']::text[], array['https://picsum.photos/seed/shopad-cup-d1/800/1200','https://picsum.photos/seed/shopad-cup-d2/800/1200']::text[]),
-    ('示例笔记本', 'A5 牛皮纸笔记本，120 页', 18.50::numeric, 200, 'https://picsum.photos/seed/shopad-note/640/640', 'on_sale', '笔记-A5', '笔记本 / A5', 0.20::numeric, '文具', 'BARANG', 'notebook-demo', 'Kraft Notebook A5', false, array['https://picsum.photos/seed/shopad-note-g1/800/800']::text[], array['https://picsum.photos/seed/shopad-note-d1/800/1200']::text[]),
-    ('蓝牙耳机 Pro', '降噪蓝牙耳机，续航 30 小时', 199.00::numeric, 80, 'https://picsum.photos/seed/shopad-ear/640/640', 'on_sale', '耳机-黑', '蓝牙耳机 / 黑色', 0.15::numeric, '数码配件', 'BARANG', 'earphone-pro', 'Bluetooth Earphone Pro', true, array['https://picsum.photos/seed/shopad-ear-g1/800/800','https://picsum.photos/seed/shopad-ear-g2/800/800','https://picsum.photos/seed/shopad-ear-g3/800/800']::text[], array['https://picsum.photos/seed/shopad-ear-d1/800/1200','https://picsum.photos/seed/shopad-ear-d2/800/1200']::text[]),
-    ('护肤精华套装', '补水修护精华液 30ml × 套装', 268.00::numeric, 45, 'https://picsum.photos/seed/shopad-skin/640/640', 'on_sale', '护肤-套', '精华套装', 0.40::numeric, '美妆护肤', 'BARANG', 'serum-set', 'Hydrating Serum Set', true, array['https://picsum.photos/seed/shopad-skin-g1/800/800']::text[], array['https://picsum.photos/seed/shopad-skin-d1/800/1200']::text[]),
-    ('运动跑鞋', '轻量缓震跑鞋，多色可选', 329.00::numeric, 60, 'https://picsum.photos/seed/shopad-shoe/640/640', 'on_sale', '跑鞋-42', '跑鞋 / 42码', 0.80::numeric, '鞋服', 'BARANG', 'run-shoes', 'Running Shoes Lite', true, array['https://picsum.photos/seed/shopad-shoe-g1/800/800','https://picsum.photos/seed/shopad-shoe-g2/800/800']::text[], '{}'::text[]),
-    ('桌面小风扇', 'USB 静音台式风扇', 49.90::numeric, 150, 'https://picsum.photos/seed/shopad-fan/640/640', 'off_sale', '风扇-白', '小风扇 / 白色', 0.60::numeric, '小家电', 'BARANG', 'desk-fan', 'USB Desk Fan', false, array['https://picsum.photos/seed/shopad-fan-g1/800/800']::text[], '{}'::text[]),
-    ('香氛蜡烛礼盒', '大豆蜡香氛蜡烛 3 件套', 128.00::numeric, 30, 'https://picsum.photos/seed/shopad-candle/640/640', 'draft', '蜡烛-礼', '香氛蜡烛礼盒', 1.20::numeric, '家居', 'BARANG', null::text, 'Scented Candle Gift Box', false, '{}'::text[], '{}'::text[]),
-    ('草稿商品', '尚未上架的占位商品', 9.90::numeric, 10, null::text, 'draft', null::text, null::text, 1.00::numeric, null::text, 'BARANG', null::text, null::text, false, '{}'::text[], '{}'::text[])
+    ('示例水杯', '不锈钢保温杯 500ml，双层真空保温', 59.00::numeric, 100, 'https://picsum.photos/seed/shopad-cup/640/640', 'on_sale', '水杯-银', '保温杯 / 银色', 0.50::numeric, 'cup-demo', 'Vacuum Flask 500ml', true, array['https://picsum.photos/seed/shopad-cup-g1/800/800','https://picsum.photos/seed/shopad-cup-g2/800/800']::text[], array['https://picsum.photos/seed/shopad-cup-d1/800/1200','https://picsum.photos/seed/shopad-cup-d2/800/1200']::text[]),
+    ('示例笔记本', 'A5 牛皮纸笔记本，120 页', 18.50::numeric, 200, 'https://picsum.photos/seed/shopad-note/640/640', 'on_sale', '笔记-A5', '笔记本 / A5', 0.20::numeric, 'notebook-demo', 'Kraft Notebook A5', false, array['https://picsum.photos/seed/shopad-note-g1/800/800']::text[], array['https://picsum.photos/seed/shopad-note-d1/800/1200']::text[]),
+    ('蓝牙耳机 Pro', '降噪蓝牙耳机，续航 30 小时', 199.00::numeric, 80, 'https://picsum.photos/seed/shopad-ear/640/640', 'on_sale', '耳机-黑', '蓝牙耳机 / 黑色', 0.15::numeric, 'earphone-pro', 'Bluetooth Earphone Pro', true, array['https://picsum.photos/seed/shopad-ear-g1/800/800','https://picsum.photos/seed/shopad-ear-g2/800/800','https://picsum.photos/seed/shopad-ear-g3/800/800']::text[], array['https://picsum.photos/seed/shopad-ear-d1/800/1200','https://picsum.photos/seed/shopad-ear-d2/800/1200']::text[]),
+    ('护肤精华套装', '补水修护精华液 30ml × 套装', 268.00::numeric, 45, 'https://picsum.photos/seed/shopad-skin/640/640', 'on_sale', '护肤-套', '精华套装', 0.40::numeric, 'serum-set', 'Hydrating Serum Set', true, array['https://picsum.photos/seed/shopad-skin-g1/800/800']::text[], array['https://picsum.photos/seed/shopad-skin-d1/800/1200']::text[]),
+    ('运动跑鞋', '轻量缓震跑鞋，多色可选', 329.00::numeric, 60, 'https://picsum.photos/seed/shopad-shoe/640/640', 'on_sale', '跑鞋-42', '跑鞋 / 42码', 0.80::numeric, 'run-shoes', 'Running Shoes Lite', true, array['https://picsum.photos/seed/shopad-shoe-g1/800/800','https://picsum.photos/seed/shopad-shoe-g2/800/800']::text[], '{}'::text[]),
+    ('桌面小风扇', 'USB 静音台式风扇', 49.90::numeric, 150, 'https://picsum.photos/seed/shopad-fan/640/640', 'off_sale', '风扇-白', '小风扇 / 白色', 0.60::numeric, 'desk-fan', 'USB Desk Fan', false, array['https://picsum.photos/seed/shopad-fan-g1/800/800']::text[], '{}'::text[]),
+    ('香氛蜡烛礼盒', '大豆蜡香氛蜡烛 3 件套', 128.00::numeric, 30, 'https://picsum.photos/seed/shopad-candle/640/640', 'draft', '蜡烛-礼', '香氛蜡烛礼盒', 1.20::numeric, null::text, 'Scented Candle Gift Box', false, '{}'::text[], '{}'::text[]),
+    ('草稿商品', '尚未上架的占位商品', 9.90::numeric, 10, null::text, 'draft', null::text, null::text, 1.00::numeric, null::text, null::text, false, '{}'::text[], '{}'::text[])
 ) as s(
   name, description, price, stock, cover_url, status,
-  sku_code, sku_display, weight, item_category, item_type,
+  sku_code, sku_display, weight,
   link_suffix, title_external, packages_enabled,
   gallery_urls, detail_image_urls
 )
@@ -246,6 +244,7 @@ alter table public.orders
       'cod_shipped',
       'completed',
       'cod_completed',
+      'cod_refused',
       'cancelled'
     )
   );
@@ -304,14 +303,21 @@ with demo_orders as (
        '护肤精华套装', '正装套餐', 1, 'cod_shipped', 'cod', 'approved',
        '小赵', '货到付款', 238.00::numeric, 'EZ', 18.00::numeric, 2.00::numeric,
        1, 0.80::numeric, 'BASIC', 'Y', 238.00::numeric, '美妆护肤', 'BARANG',
-       'COD 已发货：可测「改为 COD已完成」'),
-      -- COD 已完成
+       'COD 已发货：可测「确认签收 / 拒绝签收」'),
+      -- COD 已签收
       ('COD-TEST-008', '赵六', '13600136000', '成都市武侯区天府大道 200 号',
        '四川', '成都市', '武侯区', '天府大道 200 号',
        '运动跑鞋', '限量白', 1, 'cod_completed', 'cod', 'approved',
        '小钱', '货到付款', 329.00::numeric, 'EZ', 22.00::numeric, 0::numeric,
        1, 1.00::numeric, 'BASIC', 'Y', 329.00::numeric, '鞋服', 'BARANG',
-       'COD 已完成')
+       'COD 已签收'),
+      -- COD 拒绝签收
+      ('COD-TEST-009', '周七', '13500135000', '南京市鼓楼区中山路 100 号',
+       '江苏', '南京市', '鼓楼区', '中山路 100 号',
+       '示例水杯', '双杯装', 1, 'cod_refused', 'cod', 'approved',
+       '小孙', '货到付款', 89.00::numeric, 'EZ', 12.00::numeric, 0::numeric,
+       1, 0.60::numeric, 'BASIC', 'Y', 89.00::numeric, '日用百货', 'BARANG',
+       'COD 拒绝签收')
   ) as t(
     order_no, customer_name, customer_phone, shipping_address,
     shipping_province, shipping_city, shipping_district, shipping_detail,

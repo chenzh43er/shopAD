@@ -7,10 +7,12 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import dayjs from "dayjs";
 import { useNavigate } from "react-router-dom";
 import {
   PRODUCT_STATUS_LABELS,
@@ -19,6 +21,8 @@ import {
   type ProductStatus,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
+import { INPUT_LIMITS } from "../lib/inputLimits";
+import { formatMoney } from "../lib/formatMoney";
 import { formatActor } from "../components/AuditLogPanel";
 
 const statusColor: Record<ProductStatus, string> = {
@@ -27,15 +31,26 @@ const statusColor: Record<ProductStatus, string> = {
   off_sale: "warning",
 };
 
+type ListTab = "active" | "deleted";
+
+const ACTIVE_STATUS_OPTIONS = (
+  Object.entries(PRODUCT_STATUS_LABELS) as [ProductStatus, string][]
+)
+  .filter(([value]) => value !== "off_sale")
+  .map(([value, label]) => ({ value, label }));
+
 export function ProductsPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState<ListTab>("active");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<ProductStatus | undefined>();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [data, setData] = useState<Product[]>([]);
+
+  const isDeletedTab = tab === "deleted";
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -45,7 +60,11 @@ export function ProductsPage() {
         pageSize: String(pageSize),
       });
       if (q.trim()) params.set("q", q.trim());
-      if (status) params.set("status", status);
+      if (isDeletedTab) {
+        params.set("status", "off_sale");
+      } else if (status) {
+        params.set("status", status);
+      }
 
       const res = await apiFetch<Paginated<Product>>(
         `/api/products?${params.toString()}`,
@@ -57,7 +76,7 @@ export function ProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, q, status]);
+  }, [page, pageSize, q, status, isDeletedTab]);
 
   useEffect(() => {
     void load();
@@ -75,19 +94,40 @@ export function ProductsPage() {
           <div className="cover-placeholder">无图</div>
         ),
     },
-    { title: "内部标题", dataIndex: "name" },
+    {
+      title: "内部标题",
+      dataIndex: "name",
+      render: (v: string) => v || "—",
+    },
+    {
+      title: "地区",
+      key: "region",
+      width: 140,
+      render: (_, row) => row.region?.name || "—",
+    },
     {
       title: "链接后缀",
       dataIndex: "link_suffix",
-      width: 100,
+      width: 280,
       render: (v) => v || "—",
     },
-    { title: "属性码", dataIndex: "sku_code", width: 120, render: (v) => v || "—" },
+    {
+      title: "属性码",
+      dataIndex: "sku_code",
+      width: 120,
+      render: (v) => v || "—",
+    },
+    {
+      title: "币种",
+      key: "currency",
+      width: 90,
+      render: (_, row) => row.currency?.code || "—",
+    },
     {
       title: "价格",
       dataIndex: "price",
-      width: 100,
-      render: (v: number) => `¥${Number(v).toFixed(2)}`,
+      width: 130,
+      render: (v: number, row) => formatMoney(v, row.currency),
     },
     { title: "库存", dataIndex: "stock", width: 80 },
     {
@@ -99,9 +139,12 @@ export function ProductsPage() {
       ),
     },
     {
-      title: "添加人",
-      width: 110,
-      render: (_, row) => formatActor(row.creator),
+      title: "所属人",
+      width: 160,
+      render: (_, row) =>
+        row.owners?.length
+          ? row.owners.map((o) => formatActor(o)).join("、")
+          : formatActor(row.creator),
     },
     {
       title: "修改人",
@@ -109,9 +152,15 @@ export function ProductsPage() {
       render: (_, row) => formatActor(row.updater),
     },
     {
+      title: "最近更新时间",
+      dataIndex: "updated_at",
+      width: 170,
+      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
+    },
+    {
       title: "操作",
       key: "actions",
-      width: 280,
+      width: 180,
       render: (_, record) => (
         <Space wrap>
           <Button
@@ -120,7 +169,7 @@ export function ProductsPage() {
           >
             编辑
           </Button>
-          {record.status !== "on_sale" ? (
+          {isDeletedTab ? (
             <Button
               size="small"
               type="primary"
@@ -130,52 +179,35 @@ export function ProductsPage() {
                     method: "PATCH",
                     body: JSON.stringify({ status: "on_sale" }),
                   });
-                  message.success("已上架");
+                  message.success("已恢复并上架");
                   void load();
                 } catch (e) {
                   message.error(e instanceof Error ? e.message : "操作失败");
                 }
               }}
             >
-              上架
+              恢复
             </Button>
           ) : (
-            <Button
-              size="small"
-              onClick={async () => {
+            <Popconfirm
+              title="确认删除该商品？"
+              onConfirm={async () => {
                 try {
-                  await apiFetch(`/api/products/${record.id}/status`, {
-                    method: "PATCH",
-                    body: JSON.stringify({ status: "off_sale" }),
+                  await apiFetch(`/api/products/${record.id}`, {
+                    method: "DELETE",
                   });
-                  message.success("已下架");
+                  message.success("已删除");
                   void load();
                 } catch (e) {
-                  message.error(e instanceof Error ? e.message : "操作失败");
+                  message.error(e instanceof Error ? e.message : "删除失败");
                 }
               }}
             >
-              下架
-            </Button>
+              <Button size="small" danger>
+                删除
+              </Button>
+            </Popconfirm>
           )}
-          <Popconfirm
-            title="确认删除该商品？"
-            onConfirm={async () => {
-              try {
-                await apiFetch(`/api/products/${record.id}`, {
-                  method: "DELETE",
-                });
-                message.success("已删除");
-                void load();
-              } catch (e) {
-                message.error(e instanceof Error ? e.message : "删除失败");
-              }
-            }}
-          >
-            <Button size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
         </Space>
       ),
     },
@@ -185,33 +217,51 @@ export function ProductsPage() {
     <div>
       <div className="page-header">
         <h1>商品管理</h1>
-        <Button type="primary" onClick={() => navigate("/products/new")}>
-          新建商品
-        </Button>
+        {!isDeletedTab && (
+          <Button type="primary" onClick={() => navigate("/products/new")}>
+            新建商品
+          </Button>
+        )}
       </div>
+      <Tabs
+        activeKey={tab}
+        onChange={(key) => {
+          setTab(key as ListTab);
+          setPage(1);
+          setStatus(undefined);
+          setQ("");
+        }}
+        items={[
+          { key: "active", label: "商品列表" },
+          { key: "deleted", label: "已删除" },
+        ]}
+        style={{ marginBottom: 8 }}
+      />
       <Space style={{ marginBottom: 16 }} wrap>
         <Input.Search
+          key={tab}
           placeholder="搜索商品名称"
           allowClear
+          maxLength={INPUT_LIMITS.search}
           style={{ width: 240 }}
           onSearch={(value) => {
             setPage(1);
             setQ(value);
           }}
         />
-        <Select
-          allowClear
-          placeholder="状态"
-          style={{ width: 140 }}
-          value={status}
-          onChange={(v) => {
-            setPage(1);
-            setStatus(v);
-          }}
-          options={(
-            Object.entries(PRODUCT_STATUS_LABELS) as [ProductStatus, string][]
-          ).map(([value, label]) => ({ value, label }))}
-        />
+        {!isDeletedTab && (
+          <Select
+            allowClear
+            placeholder="状态"
+            style={{ width: 140 }}
+            value={status}
+            onChange={(v) => {
+              setPage(1);
+              setStatus(v);
+            }}
+            options={ACTIVE_STATUS_OPTIONS}
+          />
+        )}
         <Button onClick={() => void load()}>刷新</Button>
       </Space>
       <Table
@@ -219,6 +269,7 @@ export function ProductsPage() {
         loading={loading}
         columns={columns}
         dataSource={data}
+        scroll={{ x: "max-content" }}
         pagination={{
           current: page,
           pageSize,

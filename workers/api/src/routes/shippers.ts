@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { UpsertLogisticsShipperInput } from "@shopad/shared";
 import { createServiceClient } from "../lib/supabase";
+import { requireSuperAdmin } from "../middleware/auth";
 import type { Env, Variables } from "../types";
 
 function trimOrNull(value: unknown): string | null {
@@ -92,7 +93,7 @@ shippersRoutes.get("/:id", async (c) => {
   return c.json(data);
 });
 
-shippersRoutes.post("/", async (c) => {
+shippersRoutes.post("/", requireSuperAdmin, async (c) => {
   const body = (await c.req.json()) as UpsertLogisticsShipperInput;
   const parsed = parseShipperBody(body, false);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
@@ -118,7 +119,7 @@ shippersRoutes.post("/", async (c) => {
   return c.json(data, 201);
 });
 
-shippersRoutes.patch("/:id", async (c) => {
+shippersRoutes.patch("/:id", requireSuperAdmin, async (c) => {
   const id = c.req.param("id");
   const body = (await c.req.json()) as UpsertLogisticsShipperInput;
   const parsed = parseShipperBody(body, true);
@@ -144,7 +145,7 @@ shippersRoutes.patch("/:id", async (c) => {
   return c.json(data);
 });
 
-shippersRoutes.delete("/:id", async (c) => {
+shippersRoutes.delete("/:id", requireSuperAdmin, async (c) => {
   const id = c.req.param("id");
   const supabase = createServiceClient(c.env);
 

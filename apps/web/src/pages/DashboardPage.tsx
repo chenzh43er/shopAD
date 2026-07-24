@@ -8,7 +8,7 @@ export function DashboardPage() {
         <h1>概览</h1>
       </div>
       <Typography.Paragraph type="secondary">
-        欢迎使用 ShopAD 管理后台。请从侧栏进入商品或订单管理。
+        欢迎使用 ShopAD 管理后台。本系统仅处理货到付款（COD）订单。
       </Typography.Paragraph>
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
@@ -19,8 +19,8 @@ export function DashboardPage() {
         </Col>
         <Col xs={24} md={12}>
           <Card>
-            <Statistic title="订单管理" value="列表 / 状态流转" />
-            <Link to="/orders">进入订单列表 →</Link>
+            <Statistic title="COD订单" value="审核 / 发货 / 签收" />
+            <Link to="/cod/pending_review">进入待审核 →</Link>
           </Card>
         </Col>
       </Row>

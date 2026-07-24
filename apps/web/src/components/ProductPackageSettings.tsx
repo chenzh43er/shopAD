@@ -22,6 +22,7 @@ import type {
   UpsertProductPackageInput,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
+import { INPUT_LIMITS } from "../lib/inputLimits";
 
 type DraftPackage = {
   key: string;
@@ -210,7 +211,7 @@ export function ProductPackageSettings({ productId, currentProduct }: Props) {
         loading={loading}
         pagination={false}
         dataSource={packages}
-        scroll={{ x: 1100 }}
+        scroll={{ x: "max-content" }}
         columns={[
           {
             title: (
@@ -223,6 +224,7 @@ export function ProductPackageSettings({ productId, currentProduct }: Props) {
             render: (_, row) => (
               <Input
                 value={row.name}
+                maxLength={INPUT_LIMITS.name}
                 placeholder="如 6pcs"
                 onChange={(e) =>
                   updatePackage(row.key, { name: e.target.value })
@@ -241,6 +243,7 @@ export function ProductPackageSettings({ productId, currentProduct }: Props) {
             render: (_, row) => (
               <Input
                 value={row.name_external}
+                maxLength={INPUT_LIMITS.name}
                 placeholder="如 6pcs"
                 onChange={(e) =>
                   updatePackage(row.key, { name_external: e.target.value })
@@ -293,6 +296,7 @@ export function ProductPackageSettings({ productId, currentProduct }: Props) {
             render: (_, row) => (
               <Input
                 value={row.summary}
+                maxLength={INPUT_LIMITS.mediumText}
                 onChange={(e) =>
                   updatePackage(row.key, { summary: e.target.value })
                 }
@@ -391,6 +395,7 @@ export function ProductPackageSettings({ productId, currentProduct }: Props) {
               <Table
                 rowKey="key"
                 pagination={false}
+                scroll={{ x: "max-content" }}
                 dataSource={[
                   {
                     key: pkg.key,

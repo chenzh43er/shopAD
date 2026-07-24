@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Button, Form, Input, message } from "antd";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { INPUT_LIMITS } from "../lib/inputLimits";
 
 interface LoginForm {
   email: string;
@@ -9,7 +10,7 @@ interface LoginForm {
 }
 
 export function LoginPage() {
-  const { session, loading, signIn } = useAuth();
+  const { session, profile, loading, authError, signIn } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [submitting, setSubmitting] = useState(false);
@@ -19,7 +20,8 @@ export function LoginPage() {
     (location.state as { from?: { pathname?: string } } | null)?.from
       ?.pathname ?? "/";
 
-  if (!loading && session) {
+  // 必须 session + profile 都就绪才进后台，避免与 RequireAuth 互相跳转闪烁
+  if (!loading && session && profile) {
     return <Navigate to={from} replace />;
   }
 
@@ -27,11 +29,11 @@ export function LoginPage() {
     <div className="login-page">
       <div className="login-card">
         <h1 className="login-brand">ShopAD</h1>
-        <p className="login-sub">商品与订单管理后台</p>
-        {error ? (
+        <p className="login-sub">商品与 COD 订单管理后台</p>
+        {authError || error ? (
           <Alert
             type="error"
-            message={error}
+            message={error || authError}
             showIcon
             style={{ marginBottom: 16 }}
           />
@@ -61,7 +63,12 @@ export function LoginPage() {
               { type: "email", message: "邮箱格式不正确" },
             ]}
           >
-            <Input size="large" placeholder="admin@example.com" autoComplete="username" />
+            <Input
+              size="large"
+              maxLength={INPUT_LIMITS.email}
+              placeholder="admin@example.com"
+              autoComplete="username"
+            />
           </Form.Item>
           <Form.Item
             label="密码"
@@ -70,6 +77,7 @@ export function LoginPage() {
           >
             <Input.Password
               size="large"
+              maxLength={INPUT_LIMITS.password}
               placeholder="密码"
               autoComplete="current-password"
             />

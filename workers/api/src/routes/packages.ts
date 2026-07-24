@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { UpsertProductPackageInput } from "@shopad/shared";
 import { writeAuditLog } from "../lib/audit";
+import { assertProductAccess } from "../lib/access";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -12,6 +13,16 @@ export const packagesRoutes = new Hono<{
 packagesRoutes.get("/:productId/packages", async (c) => {
   const productId = c.req.param("productId");
   const supabase = createServiceClient(c.env);
+
+  try {
+    const access = await assertProductAccess(supabase, productId, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
 
   const { data: packages, error } = await supabase
     .from("product_packages")
@@ -111,6 +122,16 @@ packagesRoutes.put("/:productId/packages", async (c) => {
   }
 
   const supabase = createServiceClient(c.env);
+
+  try {
+    const access = await assertProductAccess(supabase, productId, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
 
   const { data: product, error: productError } = await supabase
     .from("products")

@@ -10,6 +10,7 @@ export const ORDER_STATUSES = [
   "cod_shipped",
   "completed",
   "cod_completed",
+  "cod_refused",
   "cancelled",
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
@@ -28,7 +29,7 @@ export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
 export const PRODUCT_STATUS_LABELS: Record<ProductStatus, string> = {
   draft: "草稿",
   on_sale: "在售",
-  off_sale: "下架",
+  off_sale: "已删除",
 };
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
@@ -37,10 +38,11 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   awaiting_review: "待审核",
   awaiting_shipment: "待发货",
   shipped: "已发货",
-  cod_shipped: "COD已发货",
+  cod_shipped: "已发货",
   completed: "已完成",
-  cod_completed: "COD已完成",
-  cancelled: "已取消",
+  cod_completed: "已签收",
+  cod_refused: "拒绝签收",
+  cancelled: "无效订单",
 };
 
 export const PAYMENT_TYPE_LABELS: Record<PaymentType, string> = {
@@ -52,7 +54,7 @@ export const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
   not_required: "无需审核",
   pending: "待审核",
   approved: "已通过",
-  rejected: "已拒绝",
+  rejected: "无效",
 };
 
 /** Allowed next statuses for admin order transitions */
@@ -62,9 +64,11 @@ export const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   awaiting_review: ["awaiting_shipment", "cancelled"],
   awaiting_shipment: ["shipped", "cod_shipped", "cancelled"],
   shipped: ["completed"],
-  cod_shipped: ["cod_completed"],
+  // 已发货仅可 → 已签收 / 拒绝签收（与「无效订单」无关）
+  cod_shipped: ["cod_completed", "cod_refused"],
   completed: [],
   cod_completed: [],
+  cod_refused: [],
   cancelled: [],
 };
 
@@ -77,7 +81,8 @@ export function canTransitionOrder(
 
 /**
  * 按支付类别过滤可流转状态：
- * - COD：无待支付/已支付；下单为 awaiting_review，审核通过后 awaiting_shipment → cod_shipped → cod_completed
+ * - COD：待审核 → 待发货 → 已发货 → 已签收 / 拒绝签收
+ * - 无效订单（cancelled）仅用于待审核 / 待发货阶段，与拒绝签收（cod_refused）不同
  * - 非 COD：走 pending/paid/shipped/completed，不使用 COD 专用状态
  */
 export function canAdvanceCodOrder(
@@ -100,7 +105,8 @@ export function canAdvanceCodOrder(
     if (
       to === "awaiting_shipment" ||
       to === "cod_shipped" ||
-      to === "cod_completed"
+      to === "cod_completed" ||
+      to === "cod_refused"
     ) {
       return reviewStatus === "approved";
     }
@@ -110,7 +116,8 @@ export function canAdvanceCodOrder(
     to === "awaiting_review" ||
     to === "awaiting_shipment" ||
     to === "cod_shipped" ||
-    to === "cod_completed"
+    to === "cod_completed" ||
+    to === "cod_refused"
   ) {
     return false;
   }
@@ -120,8 +127,8 @@ export function canAdvanceCodOrder(
 /** 结合审核规则后，允许的下一状态 */
 export function getAllowedOrderTransitions(
   from: OrderStatus,
-  paymentType: PaymentType = "non_cod",
-  reviewStatus: ReviewStatus = "not_required",
+  paymentType: PaymentType = "cod",
+  reviewStatus: ReviewStatus = "pending",
 ): OrderStatus[] {
   return (ORDER_TRANSITIONS[from] ?? []).filter(
     (to) =>
@@ -141,6 +148,56 @@ export function isReviewStatus(value: unknown): value is ReviewStatus {
   );
 }
 
+export const USER_ROLES = ["super_admin", "employee"] as const;
+export type UserRole = (typeof USER_ROLES)[number];
+
+export const USER_ROLE_LABELS: Record<UserRole, string> = {
+  super_admin: "超级管理员",
+  employee: "员工",
+};
+
+export function isUserRole(value: unknown): value is UserRole {
+  return (
+    typeof value === "string" &&
+    (USER_ROLES as readonly string[]).includes(value)
+  );
+}
+
+/** 兼容旧库 role='admin'（等同超级管理员） */
+export function normalizeUserRole(value: unknown): UserRole | null {
+  if (value === "admin") return "super_admin";
+  if (isUserRole(value)) return value;
+  return null;
+}
+
+export function isSuperAdmin(role: string | null | undefined): boolean {
+  return normalizeUserRole(role) === "super_admin";
+}
+
+export interface Profile {
+  id: string;
+  email: string | null;
+  role: UserRole;
+  display_name: string | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface CreateEmployeeInput {
+  email: string;
+  password: string;
+  display_name?: string | null;
+  role?: UserRole;
+}
+
+export interface UpdateEmployeeInput {
+  display_name?: string | null;
+  role?: UserRole;
+  is_active?: boolean;
+  password?: string;
+}
+
 export interface ActorRef {
   id: string;
   display_name: string | null;
@@ -153,6 +210,13 @@ export interface Product {
   /** 商品详情（纯文字） */
   description: string | null;
   price: number;
+  /** 关联币种 id */
+  currency_id: string | null;
+  /** 关联币种（查询时附带） */
+  currency?: Pick<
+    Currency,
+    "id" | "code" | "name" | "name_zh" | "symbol" | "symbol_suffix"
+  > | null;
   stock: number;
   /** 商品封面 */
   cover_url: string | null;
@@ -169,8 +233,10 @@ export interface Product {
   facebook_pixel_id: string | null;
   /** Google转化ID */
   google_conversion_id: string | null;
-  /** 附加HTML代码（落地页注入） */
-  extra_html: string | null;
+  /** Google Label */
+  google_label: string | null;
+  /** 附加HTML代码列表（落地页按顺序注入） */
+  extra_html: string[];
   /** 规格值 / 后端SKU（导出拼成「sku * 数量」） */
   sku_code: string | null;
   /** 对应外语 / 前端显示SKU */
@@ -179,12 +245,18 @@ export interface Product {
   packages_enabled: boolean;
   /** 默认重量（物流导出） */
   weight: number;
-  item_category: string | null;
-  item_type: string;
+  /** 关联地区 id */
+  region_id: string | null;
+  /** 关联地区（查询时附带） */
+  region?: { id: string; name: string; remark: string | null } | null;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+  /** 所属人 profile id 列表 */
+  owner_ids?: string[];
+  /** 所属人（查询时附带） */
+  owners?: ActorRef[];
   creator?: ActorRef | null;
   updater?: ActorRef | null;
 }
@@ -266,6 +338,8 @@ export interface Order {
   total_amount: number;
   status: OrderStatus;
   remark: string | null;
+  /** 无效订单拒绝理由 */
+  reject_reason: string | null;
   /** 归属成员（财务导出） */
   owner_member: string | null;
   /** 发货订单号（财务导出「订单号」/ 物流电商订单号） */
@@ -325,6 +399,11 @@ export interface Order {
   creator?: ActorRef | null;
   updater?: ActorRef | null;
   reviewer?: ActorRef | null;
+  /** 关联商品币种（查询时附带，用于金额展示） */
+  currency?: Pick<
+    Currency,
+    "id" | "code" | "name" | "name_zh" | "symbol" | "symbol_suffix"
+  > | null;
 }
 
 export type AuditEntityType = "order" | "product";
@@ -342,6 +421,40 @@ export interface AuditLog {
   changes: Record<string, unknown> | null;
   remark: string | null;
   created_at: string;
+}
+
+/** 币种（ISO 4217） */
+export interface Currency {
+  id: string;
+  /** ISO 4217 字母代码 */
+  code: string;
+  /** 英文名称 */
+  name: string;
+  /** 中文名称 */
+  name_zh: string;
+  /** 常用符号 */
+  symbol: string;
+  /** ISO 4217 数字代码 */
+  numeric_code: number | null;
+  /** 符号是否显示在金额之后 */
+  symbol_suffix: boolean;
+  is_default: boolean;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertCurrencyInput {
+  code: string;
+  name: string;
+  name_zh: string;
+  symbol: string;
+  numeric_code?: number | null;
+  symbol_suffix?: boolean;
+  is_default?: boolean;
+  enabled?: boolean;
+  sort_order?: number;
 }
 
 /** 物流导出寄件人默认配置 */
@@ -376,6 +489,67 @@ export interface UpsertLogisticsShipperInput {
   is_default?: boolean;
 }
 
+/** 命名地址库（地区名称） */
+export interface AddressLibrary {
+  id: string;
+  name: string;
+  /** 备注 */
+  remark: string | null;
+  /** 最大级数（导入或写入后维护） */
+  max_level: number;
+  /** 地域节点总数 */
+  region_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 地址库中的一级地域节点（邻接表，level 从 1 起） */
+export interface AddressRegion {
+  id: string;
+  library_id: string;
+  parent_id: string | null;
+  name: string;
+  level: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 一条完整地址路径（叶子对应 Excel 一行） */
+export interface AddressRegionPath {
+  /** 叶子节点 id */
+  id: string;
+  /** 从一级到当前级的名称列表 */
+  path: string[];
+  level: number;
+}
+
+export interface CreateAddressLibraryInput {
+  name: string;
+  remark?: string | null;
+}
+
+export interface UpdateAddressLibraryInput {
+  name?: string;
+  remark?: string | null;
+}
+
+/**
+ * 导入地址库：按地区名称 upsert 库，并用 paths 全量覆盖地域树。
+ * paths 每一项为 [一级, 二级, 三级, ...]，级数可大于 3。
+ */
+export interface ImportAddressLibraryInput {
+  name: string;
+  paths: string[][];
+}
+
+export interface ImportAddressLibraryResult {
+  library: AddressLibrary;
+  imported_paths: number;
+  region_count: number;
+  max_level: number;
+}
+
 export interface Paginated<T> {
   data: T[];
   total: number;
@@ -387,6 +561,7 @@ export interface CreateProductInput {
   name: string;
   description?: string | null;
   price: number;
+  currency_id?: string | null;
   stock?: number;
   cover_url?: string | null;
   gallery_urls?: string[];
@@ -396,19 +571,22 @@ export interface CreateProductInput {
   title_external?: string | null;
   facebook_pixel_id?: string | null;
   google_conversion_id?: string | null;
-  extra_html?: string | null;
+  google_label?: string | null;
+  extra_html?: string[];
   sku_code?: string | null;
   sku_display?: string | null;
   packages_enabled?: boolean;
   weight?: number;
-  item_category?: string | null;
-  item_type?: string;
+  region_id?: string | null;
+  /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
+  owner_ids?: string[];
 }
 
 export interface UpdateProductInput {
   name?: string;
   description?: string | null;
   price?: number;
+  currency_id?: string | null;
   stock?: number;
   cover_url?: string | null;
   gallery_urls?: string[];
@@ -418,11 +596,13 @@ export interface UpdateProductInput {
   title_external?: string | null;
   facebook_pixel_id?: string | null;
   google_conversion_id?: string | null;
-  extra_html?: string | null;
+  google_label?: string | null;
+  extra_html?: string[];
   sku_code?: string | null;
   sku_display?: string | null;
   packages_enabled?: boolean;
   weight?: number;
-  item_category?: string | null;
-  item_type?: string;
+  region_id?: string | null;
+  /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
+  owner_ids?: string[];
 }

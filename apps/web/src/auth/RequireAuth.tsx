@@ -3,7 +3,7 @@ import { Spin } from "antd";
 import { useAuth } from "./AuthContext";
 
 export function RequireAuth() {
-  const { session, loading } = useAuth();
+  const { session, profile, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -14,7 +14,8 @@ export function RequireAuth() {
     );
   }
 
-  if (!session) {
+  // 与 LoginPage 一致：仅 session+profile 才放行，避免重定向环
+  if (!session || !profile) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 

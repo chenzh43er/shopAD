@@ -16,6 +16,7 @@ alter table public.orders
       'cod_shipped',
       'completed',
       'cod_completed',
+      'cod_refused',
       'cancelled'
     )
   );
@@ -71,13 +72,19 @@ with demo_orders as (
        '护肤精华套装', '正装套餐', 1, 'cod_shipped', 'cod', 'approved',
        '26071622000001', 'ZJL', '货到付款', 238.00::numeric, 'EZ', 18.00::numeric, 2.00::numeric,
        1, 0.80::numeric, 'BASIC', 'Y', 238.00::numeric, '美妆护肤', 'BARANG',
-       'COD 已发货：可测改为已完成'),
+       'COD 已发货：可测签收 / 拒绝签收'),
       ('COD-TEST-008', '赵六', '13600136000', '成都市武侯区天府大道 200 号',
        '四川', '成都市', '武侯区', '天府大道 200 号',
        '运动跑鞋', '限量白', 1, 'cod_completed', 'cod', 'approved',
        '26071622000002', 'ZJL', '货到付款', 329.00::numeric, 'EZ', 22.00::numeric, 0::numeric,
        1, 1.00::numeric, 'BASIC', 'Y', 329.00::numeric, '鞋服', 'BARANG',
-       'COD 已完成'),
+       'COD 已签收'),
+      ('COD-TEST-009', '周七', '13500135000', '南京市鼓楼区中山路 100 号',
+       '江苏', '南京市', '鼓楼区', '中山路 100 号',
+       '示例水杯', '双杯装', 1, 'cod_refused', 'cod', 'approved',
+       '26071622000003', 'ZJL', '货到付款', 89.00::numeric, 'EZ', 12.00::numeric, 0::numeric,
+       1, 0.60::numeric, 'BASIC', 'Y', 89.00::numeric, '日用百货', 'BARANG',
+       'COD 拒绝签收'),
       -- ========== 普通订单（非 COD） ==========
       ('ORD-TEST-001', '张三', '13800138000', '上海市浦东新区示例路 1 号',
        '上海', '上海市', '浦东新区', '示例路 1 号',

@@ -14,10 +14,7 @@ import {
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ORDER_STATUS_LABELS,
-  ORDER_TRANSITIONS,
-  PAYMENT_TYPE_LABELS,
   REVIEW_STATUS_LABELS,
-  getAllowedOrderTransitions,
   type LogisticsShipper,
   type Order,
   type OrderStatus,
@@ -25,12 +22,14 @@ import {
   type ReviewStatus,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
+import { formatMoney } from "../lib/formatMoney";
+import { INPUT_LIMITS } from "../lib/inputLimits";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
 import {
   getOrdersListFrom,
-  isCodListPath,
   setOrdersListFrom,
 } from "../lib/listNav";
+import { useAuth } from "../auth/AuthContext";
 import dayjs from "dayjs";
 
 const statusColor: Record<OrderStatus, string> = {
@@ -42,6 +41,7 @@ const statusColor: Record<OrderStatus, string> = {
   cod_shipped: "cyan",
   completed: "success",
   cod_completed: "green",
+  cod_refused: "magenta",
   cancelled: "error",
 };
 
@@ -76,13 +76,16 @@ function isShipTransition(status: OrderStatus): boolean {
 
 /** 按 COD 订单状态推断应回到的列表路径 */
 function resolveCodListPath(order: Order): string {
-  if (order.review_status === "rejected") return "/cod/rejected";
+  if (order.status === "cancelled" || order.review_status === "rejected") {
+    return "/cod/invalid";
+  }
   if (order.review_status === "pending" || order.status === "awaiting_review") {
     return "/cod/pending_review";
   }
   if (order.status === "awaiting_shipment") return "/cod/awaiting_shipment";
   if (order.status === "cod_shipped") return "/cod/shipped";
   if (order.status === "cod_completed") return "/cod/completed";
+  if (order.status === "cod_refused") return "/cod/refused";
   return "/cod/pending_review";
 }
 
@@ -105,6 +108,12 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const { profile, user } = useAuth();
+  const defaultOwnerMember =
+    profile?.display_name?.trim() ||
+    profile?.email?.trim() ||
+    user?.email?.trim() ||
+    "";
   const fromPath =
     (location.state as { from?: string } | null)?.from ||
     getOrdersListFrom() ||
@@ -121,19 +130,24 @@ export function OrderDetailPage() {
   const [selectedShipperId, setSelectedShipperId] = useState<string>();
   const [shipForm] = Form.useForm<ShipperFormValues>();
   const [shipMetaForm] = Form.useForm<ShipMetaFormValues>();
+  const [invalidModalOpen, setInvalidModalOpen] = useState(false);
+  const [invalidReason, setInvalidReason] = useState("");
+  const [invalidMode, setInvalidMode] = useState<"status" | "review">("status");
 
-  // 详情页按订单状态校正 COD 来源，保证侧栏与返回一致
+  // 详情页侧栏/返回路径跟随订单当前 COD 状态（审核后不再锁在进入时的列表）
   useEffect(() => {
-    if (!order || order.payment_type !== "cod") return;
-    const path =
-      fromPath && isCodListPath(fromPath)
-        ? fromPath
-        : resolveCodListPath(order);
+    if (!order) return;
+    const path = resolveCodListPath(order);
     setOrdersListFrom(path);
     if (fromPath !== path) {
       navigate(location.pathname, { replace: true, state: { from: path } });
     }
   }, [order, fromPath, navigate, location.pathname]);
+
+  const goToCodList = (path: string) => {
+    setOrdersListFrom(path);
+    navigate(path);
+  };
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -143,9 +157,11 @@ export function OrderDetailPage() {
       setOrder(data);
       setRemark(data.remark ?? "");
       setLogKey((k) => k + 1);
+      return data;
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载失败");
-      navigate(fromPath || "/orders");
+      navigate(fromPath || "/cod/pending_review");
+      return null;
     } finally {
       setLoading(false);
     }
@@ -173,6 +189,7 @@ export function OrderDetailPage() {
       shipper?: ShipperFormValues;
       shipping_order_no?: string;
       owner_member?: string;
+      reject_reason?: string;
     },
   ) => {
     if (!order) return;
@@ -182,6 +199,9 @@ export function OrderDetailPage() {
         method: "PATCH",
         body: JSON.stringify({
           status: next,
+          ...(payload?.reject_reason
+            ? { reject_reason: payload.reject_reason }
+            : {}),
           ...(payload?.shipper_id ? { shipper_id: payload.shipper_id } : {}),
           ...(payload?.shipping_order_no
             ? { shipping_order_no: payload.shipping_order_no }
@@ -210,7 +230,10 @@ export function OrderDetailPage() {
       message.success(`已更新为「${ORDER_STATUS_LABELS[next]}」`);
       setShipModalOpen(false);
       setShipTarget(null);
-      await load();
+      setInvalidModalOpen(false);
+      setInvalidReason("");
+      const updated = await load();
+      if (updated) goToCodList(resolveCodListPath(updated));
     } catch (e) {
       message.error(e instanceof Error ? e.message : "更新失败");
     } finally {
@@ -218,7 +241,45 @@ export function OrderDetailPage() {
     }
   };
 
+  const openInvalidModal = (mode: "status" | "review") => {
+    setInvalidMode(mode);
+    setInvalidReason("");
+    setInvalidModalOpen(true);
+  };
+
+  const submitInvalid = async () => {
+    const reason = invalidReason.trim();
+    if (!reason) {
+      message.error("请填写拒绝理由");
+      return;
+    }
+    if (invalidMode === "review") {
+      if (!order) return;
+      setSaving(true);
+      try {
+        await apiFetch(`/api/orders/${order.id}/review`, {
+          method: "PATCH",
+          body: JSON.stringify({ decision: "rejected", reject_reason: reason }),
+        });
+        message.success("已标记为无效订单");
+        setInvalidModalOpen(false);
+        setInvalidReason("");
+        goToCodList("/cod/invalid");
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : "操作失败");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    await changeStatus("cancelled", { reject_reason: reason });
+  };
+
   const onStatusClick = async (next: OrderStatus) => {
+    if (next === "cancelled") {
+      openInvalidModal("status");
+      return;
+    }
     if (!isShipTransition(next)) {
       await changeStatus(next);
       return;
@@ -233,7 +294,7 @@ export function OrderDetailPage() {
     shipForm.setFieldsValue({ consignor_flag: "0" });
     shipMetaForm.setFieldsValue({
       shipping_order_no: order?.shipping_order_no ?? "",
-      owner_member: order?.owner_member ?? "",
+      owner_member: order?.owner_member?.trim() || defaultOwnerMember,
     });
     setShipTarget(next);
     setShipModalOpen(true);
@@ -247,23 +308,19 @@ export function OrderDetailPage() {
     );
   }
 
-  const paymentType = (order.payment_type ?? "non_cod") as PaymentType;
-  const reviewStatus = (order.review_status ?? "not_required") as ReviewStatus;
-  const nextStatuses = ORDER_TRANSITIONS[order.status] ?? [];
-  const allowedStatuses = getAllowedOrderTransitions(
-    order.status,
-    paymentType,
-    reviewStatus,
-  );
+  const paymentType = (order.payment_type ?? "cod") as PaymentType;
+  const reviewStatus = (order.review_status ?? "pending") as ReviewStatus;
   const needsReview = paymentType === "cod" && reviewStatus === "pending";
-  const shipBlocked =
-    paymentType === "cod" &&
-    reviewStatus !== "approved" &&
-    nextStatuses.includes("cod_shipped");
+  const canShip =
+    order.status === "awaiting_shipment" &&
+    reviewStatus === "approved";
+  const canConfirmReceive = order.status === "cod_shipped";
+  // 无效订单仅待审核 / 待发货可标记；已发货只能签收或拒绝签收
+  const canMarkInvalid =
+    order.status === "awaiting_review" ||
+    order.status === "awaiting_shipment";
   const lineTotal = Number(order.unit_price) * Number(order.quantity || 0);
-  const backPath =
-    fromPath ||
-    (paymentType === "cod" ? resolveCodListPath(order) : "/orders");
+  const backPath = fromPath || resolveCodListPath(order);
 
   return (
     <div>
@@ -298,21 +355,23 @@ export function OrderDetailPage() {
         </Descriptions.Item>
         <Descriptions.Item label="购买数量">{order.quantity}</Descriptions.Item>
         <Descriptions.Item label="单价">
-          ¥{Number(order.unit_price).toFixed(2)}
+          {formatMoney(order.unit_price, order.currency)}
         </Descriptions.Item>
         <Descriptions.Item label="小计">
-          ¥{lineTotal.toFixed(2)}
-        </Descriptions.Item>
-        <Descriptions.Item label="支付类别">
-          <Tag color={paymentType === "cod" ? "orange" : "default"}>
-            {PAYMENT_TYPE_LABELS[paymentType]}
-          </Tag>
+          {formatMoney(lineTotal, order.currency)}
         </Descriptions.Item>
         <Descriptions.Item label="审核状态">
           <Tag color={reviewColor[reviewStatus]}>
             {REVIEW_STATUS_LABELS[reviewStatus]}
           </Tag>
         </Descriptions.Item>
+        {(order.status === "cancelled" ||
+          reviewStatus === "rejected" ||
+          order.reject_reason) && (
+          <Descriptions.Item label="拒绝理由" span={2}>
+            {order.reject_reason || "—"}
+          </Descriptions.Item>
+        )}
         <Descriptions.Item label="收件人">{order.customer_name}</Descriptions.Item>
         <Descriptions.Item label="收件人电话">
           {order.customer_phone || "—"}
@@ -334,11 +393,11 @@ export function OrderDetailPage() {
           {order.payment_method || "—"}
         </Descriptions.Item>
         <Descriptions.Item label="订单总金额">
-          ¥{Number(order.total_amount).toFixed(2)}
+          {formatMoney(order.total_amount, order.currency)}
         </Descriptions.Item>
         <Descriptions.Item label="代收货款">
           {order.cod_amount != null
-            ? `¥${Number(order.cod_amount).toFixed(2)}`
+            ? formatMoney(order.cod_amount, order.currency)
             : "—"}
         </Descriptions.Item>
         <Descriptions.Item label="创建人">
@@ -417,7 +476,7 @@ export function OrderDetailPage() {
                       body: JSON.stringify({ decision: "approved" }),
                     });
                     message.success("审核已通过，订单已进入待发货");
-                    await load();
+                    goToCodList("/cod/awaiting_shipment");
                   } catch (e) {
                     message.error(e instanceof Error ? e.message : "审核失败");
                   } finally {
@@ -430,29 +489,17 @@ export function OrderDetailPage() {
               <Button
                 danger
                 loading={saving}
-                onClick={async () => {
-                  setSaving(true);
-                  try {
-                    await apiFetch(`/api/orders/${order.id}/review`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ decision: "rejected" }),
-                    });
-                    message.success("已拒绝该订单");
-                    await load();
-                  } catch (e) {
-                    message.error(e instanceof Error ? e.message : "操作失败");
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
+                onClick={() => openInvalidModal("review")}
               >
-                审核拒绝
+                标记无效订单
               </Button>
             </Space>
-          ) : reviewStatus === "rejected" ? (
+          ) : reviewStatus === "rejected" || order.status === "cancelled" ? (
             <Space direction="vertical" size="middle">
               <p style={{ color: "var(--muted)", margin: 0 }}>
-                已拒绝，订单审核未通过。可改回待审核后重新审核。
+                已标记为无效订单
+                {order.reject_reason ? `：${order.reject_reason}` : "。"}
+                可改回待审核后重新处理。
               </p>
               <Button
                 type="primary"
@@ -465,7 +512,7 @@ export function OrderDetailPage() {
                       body: JSON.stringify({ decision: "reopen" }),
                     });
                     message.success("已改回待审核");
-                    await load();
+                    goToCodList("/cod/pending_review");
                   } catch (e) {
                     message.error(e instanceof Error ? e.message : "操作失败");
                   } finally {
@@ -487,59 +534,71 @@ export function OrderDetailPage() {
         </>
       ) : null}
 
-      <h2 style={{ marginTop: 28, fontSize: 16 }}>状态流转</h2>
-      {order.status === "awaiting_shipment" &&
-      reviewStatus === "approved" &&
-      !shipBlocked ? (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: 16,
-            background: "#fffbe6",
-            border: "1px solid #ffe58f",
-            borderRadius: 8,
-          }}
-        >
-          <p style={{ marginBottom: 12 }}>
-            当前为待发货。请先选择寄件人信息后再确认发货。
-          </p>
-          <Button
-            type="primary"
-            loading={saving}
-            onClick={() => void onStatusClick("cod_shipped")}
+      {canShip ? (
+        <>
+          <h2 style={{ marginTop: 28, fontSize: 16 }}>发货</h2>
+          <div
+            style={{
+              marginBottom: 16,
+              padding: 16,
+              background: "#fffbe6",
+              border: "1px solid #ffe58f",
+              borderRadius: 8,
+            }}
           >
-            选择寄件人发货
-          </Button>
-        </div>
-      ) : null}
-      {shipBlocked ? (
-        <p style={{ color: "#d46b08", marginBottom: 12 }}>
-          货到付款订单须网站管理审核通过后才能发货。请先在上方完成审核。
-        </p>
-      ) : null}
-      {allowedStatuses.length === 0 ? (
-        <p style={{ color: "var(--muted)" }}>
-          {nextStatuses.length === 0
-            ? "当前为终态，不可再变更。"
-            : "当前无可执行的状态变更（货到付款请先审核）。"}
-        </p>
-      ) : (
-        <Space wrap>
-          {allowedStatuses
-            .filter((next) => !isShipTransition(next))
-            .map((next) => (
+            <p style={{ marginBottom: 12 }}>
+              当前为待发货。请先选择寄件人信息后再确认发货。
+            </p>
+            <Space wrap>
               <Button
-                key={next}
-                type={next === "cancelled" ? "default" : "primary"}
-                danger={next === "cancelled"}
+                type="primary"
                 loading={saving}
-                onClick={() => void onStatusClick(next)}
+                onClick={() => void onStatusClick("cod_shipped")}
               >
-                改为{ORDER_STATUS_LABELS[next]}
+                选择寄件人发货
               </Button>
-            ))}
-        </Space>
-      )}
+              {canMarkInvalid ? (
+                <Button
+                  danger
+                  loading={saving}
+                  onClick={() => openInvalidModal("status")}
+                >
+                  标记无效订单
+                </Button>
+              ) : null}
+            </Space>
+          </div>
+        </>
+      ) : null}
+
+      {canConfirmReceive ? (
+        <>
+          <h2 style={{ marginTop: 28, fontSize: 16 }}>签收结果</h2>
+          <Space wrap style={{ marginBottom: 16 }}>
+            <Button
+              type="primary"
+              loading={saving}
+              onClick={() => void onStatusClick("cod_completed")}
+            >
+              确认签收
+            </Button>
+            <Button
+              loading={saving}
+              onClick={() => {
+                Modal.confirm({
+                  title: "拒绝签收",
+                  content: "确认客户拒绝签收该订单？",
+                  okText: "确认拒绝签收",
+                  cancelText: "取消",
+                  onOk: () => onStatusClick("cod_refused"),
+                });
+              }}
+            >
+              拒绝签收
+            </Button>
+          </Space>
+        </>
+      ) : null}
 
       <h2 style={{ marginTop: 28, fontSize: 16 }}>备注</h2>
       <Space align="start" style={{ width: "100%" }} direction="vertical">
@@ -547,7 +606,7 @@ export function OrderDetailPage() {
           rows={3}
           value={remark}
           onChange={(e) => setRemark(e.target.value)}
-          maxLength={500}
+          maxLength={INPUT_LIMITS.remark}
           showCount
           style={{ maxWidth: 560 }}
         />
@@ -575,6 +634,35 @@ export function OrderDetailPage() {
 
       <h2 style={{ marginTop: 28, fontSize: 16 }}>操作日志</h2>
       <AuditLogPanel entityType="order" entityId={order.id} refreshKey={logKey} />
+
+      <Modal
+        title="标记为无效订单"
+        open={invalidModalOpen}
+        onCancel={() => {
+          if (saving) return;
+          setInvalidModalOpen(false);
+          setInvalidReason("");
+        }}
+        confirmLoading={saving}
+        okText="确认无效"
+        okButtonProps={{ danger: true, disabled: !invalidReason.trim() }}
+        onOk={() => void submitInvalid()}
+        destroyOnClose
+      >
+        <p style={{ color: "#666", marginBottom: 12 }}>
+          请填写拒绝理由（必填）。
+        </p>
+        <div style={{ paddingBottom: 24 }}>
+          <Input.TextArea
+            rows={4}
+            value={invalidReason}
+            onChange={(e) => setInvalidReason(e.target.value)}
+            maxLength={INPUT_LIMITS.remark}
+            showCount
+            placeholder="例如：地址无法联系 / 客户拒收 / 信息虚假…"
+          />
+        </div>
+      </Modal>
 
       <Modal
         title="选择寄件人并发货"
@@ -621,15 +709,21 @@ export function OrderDetailPage() {
             rules={[{ required: true, message: "请填写发货订单号" }]}
             extra="对应财务导出「订单号」/ 物流导出「电商订单号」"
           >
-            <Input placeholder="如 26071522000109" />
+            <Input
+              maxLength={INPUT_LIMITS.shippingMeta}
+              placeholder="如 26071522000109"
+            />
           </Form.Item>
           <Form.Item
             name="owner_member"
             label="归属成员"
             rules={[{ required: true, message: "请填写归属成员" }]}
-            extra="对应财务导出「归属成员」"
+            extra="默认当前登录用户，可修改；对应财务导出「归属成员」"
           >
-            <Input placeholder="如 ZJL" />
+            <Input
+              maxLength={INPUT_LIMITS.shippingMeta}
+              placeholder="归属成员"
+            />
           </Form.Item>
         </Form>
 
@@ -669,27 +763,34 @@ export function OrderDetailPage() {
             label="寄件人"
             rules={[{ required: true, message: "请填写寄件人" }]}
           >
-            <Input placeholder="选择寄件人后自动填入" />
+            <Input
+              maxLength={INPUT_LIMITS.name}
+              placeholder="选择寄件人后自动填入"
+            />
           </Form.Item>
           <Form.Item name="phone" label="寄件人电话">
-            <Input />
+            <Input maxLength={INPUT_LIMITS.phone} />
           </Form.Item>
           <Space style={{ display: "flex" }} size="middle" wrap>
             <Form.Item name="province" label="寄件省" style={{ width: 180 }}>
-              <Input />
+              <Input maxLength={INPUT_LIMITS.region} />
             </Form.Item>
             <Form.Item name="city" label="寄件城市" style={{ width: 180 }}>
-              <Input />
+              <Input maxLength={INPUT_LIMITS.region} />
             </Form.Item>
             <Form.Item name="district" label="寄件区域" style={{ width: 180 }}>
-              <Input />
+              <Input maxLength={INPUT_LIMITS.region} />
             </Form.Item>
           </Space>
           <Form.Item name="address" label="寄件地址">
-            <Input.TextArea rows={2} />
+            <Input.TextArea
+              rows={2}
+              maxLength={INPUT_LIMITS.address}
+              showCount
+            />
           </Form.Item>
           <Form.Item name="address_info" label="寄件地址信息">
-            <Input />
+            <Input maxLength={INPUT_LIMITS.addressInfo} />
           </Form.Item>
           <Space style={{ display: "flex" }} size="middle" wrap>
             <Form.Item
@@ -697,21 +798,21 @@ export function OrderDetailPage() {
               label="委托人标识"
               style={{ width: 140 }}
             >
-              <Input placeholder="默认 0" />
+              <Input maxLength={INPUT_LIMITS.flag} placeholder="默认 0" />
             </Form.Item>
             <Form.Item
               name="consignor_name"
               label="委托人姓名"
               style={{ width: 180 }}
             >
-              <Input />
+              <Input maxLength={INPUT_LIMITS.name} />
             </Form.Item>
             <Form.Item
               name="consignor_phone"
               label="委托人电话"
               style={{ width: 180 }}
             >
-              <Input />
+              <Input maxLength={INPUT_LIMITS.phone} />
             </Form.Item>
           </Space>
         </Form>

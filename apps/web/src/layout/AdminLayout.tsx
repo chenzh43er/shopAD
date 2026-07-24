@@ -1,64 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Layout, Menu, Button, Typography, Space, Tag } from "antd";
 import {
   ShoppingOutlined,
-  UnorderedListOutlined,
   DashboardOutlined,
   LogoutOutlined,
   DollarOutlined,
   EnvironmentOutlined,
+  GlobalOutlined,
+  PayCircleOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { USER_ROLE_LABELS } from "@shopad/shared";
 import { useAuth } from "../auth/AuthContext";
 import { COD_MENU_PATHS, getOrdersListFrom, isCodListPath } from "../lib/listNav";
 
 const { Header, Sider, Content } = Layout;
 
-const items = [
-  { key: "/", icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
-  {
-    key: "/products",
-    icon: <ShoppingOutlined />,
-    label: <Link to="/products">商品管理</Link>,
-  },
-  {
-    key: "/orders",
-    icon: <UnorderedListOutlined />,
-    label: <Link to="/orders">订单管理</Link>,
-  },
-  {
-    key: "/cod",
-    icon: <DollarOutlined />,
-    label: "COD订单",
-    children: [
-      {
-        key: "/cod/pending_review",
-        label: <Link to="/cod/pending_review">待审核</Link>,
-      },
-      {
-        key: "/cod/rejected",
-        label: <Link to="/cod/rejected">未通过</Link>,
-      },
-      {
-        key: "/cod/awaiting_shipment",
-        label: <Link to="/cod/awaiting_shipment">待发货</Link>,
-      },
-      {
-        key: "/cod/shipped",
-        label: <Link to="/cod/shipped">已发货</Link>,
-      },
-      {
-        key: "/cod/completed",
-        label: <Link to="/cod/completed">已完成</Link>,
-      },
-    ],
-  },
-  {
-    key: "/shippers",
-    icon: <EnvironmentOutlined />,
-    label: <Link to="/shippers">寄件人管理</Link>,
-  },
-];
+const DEFAULT_COD_PATH = "/cod/pending_review";
 
 function resolveSelectedKey(
   pathname: string,
@@ -66,17 +25,18 @@ function resolveSelectedKey(
 ): string {
   if (COD_MENU_PATHS.has(pathname)) return pathname;
 
-  // 订单详情：保持进入时的列表菜单高亮（COD 子状态 / 订单管理）
   if (/^\/orders\/[^/]+/.test(pathname)) {
     const from = stateFrom || getOrdersListFrom();
     if (isCodListPath(from)) return from!;
-    if (from === "/orders") return "/orders";
-    return "/orders";
+    return DEFAULT_COD_PATH;
   }
 
-  if (pathname.startsWith("/orders")) return "/orders";
+  if (pathname.startsWith("/cod")) return DEFAULT_COD_PATH;
   if (pathname.startsWith("/products")) return "/products";
   if (pathname.startsWith("/shippers")) return "/shippers";
+  if (pathname.startsWith("/address-regions")) return "/address-regions";
+  if (pathname.startsWith("/currencies")) return "/currencies";
+  if (pathname.startsWith("/employees")) return "/employees";
   if (pathname === "/") return "/";
   return "";
 }
@@ -84,7 +44,7 @@ function resolveSelectedKey(
 export function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, profile, isSuperAdmin, signOut } = useAuth();
   const stateFrom = (location.state as { from?: string } | null)?.from ?? null;
   const selected = resolveSelectedKey(location.pathname, stateFrom);
   const [openKeys, setOpenKeys] = useState<string[]>(
@@ -93,11 +53,83 @@ export function AdminLayout() {
       : [],
   );
 
+  const items = useMemo(() => {
+    const base = [
+      { key: "/", icon: <DashboardOutlined />, label: <Link to="/">概览</Link> },
+      {
+        key: "/products",
+        icon: <ShoppingOutlined />,
+        label: <Link to="/products">商品管理</Link>,
+      },
+      {
+        key: "/cod",
+        icon: <DollarOutlined />,
+        label: "COD订单",
+        children: [
+          {
+            key: "/cod/pending_review",
+            label: <Link to="/cod/pending_review">待审核</Link>,
+          },
+          {
+            key: "/cod/awaiting_shipment",
+            label: <Link to="/cod/awaiting_shipment">待发货</Link>,
+          },
+          {
+            key: "/cod/shipped",
+            label: <Link to="/cod/shipped">已发货</Link>,
+          },
+          {
+            key: "/cod/completed",
+            label: <Link to="/cod/completed">已签收</Link>,
+          },
+          {
+            key: "/cod/refused",
+            label: <Link to="/cod/refused">拒绝签收</Link>,
+          },
+          {
+            key: "/cod/invalid",
+            label: <Link to="/cod/invalid">无效订单</Link>,
+          },
+        ],
+      },
+    ];
+
+    if (!isSuperAdmin) return base;
+
+    return [
+      ...base,
+      {
+        key: "/employees",
+        icon: <TeamOutlined />,
+        label: <Link to="/employees">员工管理</Link>,
+      },
+      {
+        key: "/shippers",
+        icon: <EnvironmentOutlined />,
+        label: <Link to="/shippers">寄件人管理</Link>,
+      },
+      {
+        key: "/address-regions",
+        icon: <GlobalOutlined />,
+        label: <Link to="/address-regions">地区管理</Link>,
+      },
+      {
+        key: "/currencies",
+        icon: <PayCircleOutlined />,
+        label: <Link to="/currencies">币种管理</Link>,
+      },
+    ];
+  }, [isSuperAdmin]);
+
   useEffect(() => {
     if (location.pathname.startsWith("/cod") || isCodListPath(selected)) {
       setOpenKeys((prev) => (prev.includes("/cod") ? prev : [...prev, "/cod"]));
     }
   }, [location.pathname, selected]);
+
+  const roleLabel = profile?.role
+    ? USER_ROLE_LABELS[profile.role] ?? profile.role
+    : "管理后台";
 
   return (
     <Layout className="app-shell" style={{ minHeight: "100vh" }}>
@@ -128,13 +160,15 @@ export function AdminLayout() {
           }}
         >
           <Tag
-            color="processing"
+            color={isSuperAdmin ? "gold" : "processing"}
             style={{ margin: 0, borderRadius: 6, fontWeight: 500 }}
           >
-            管理后台
+            {roleLabel}
           </Tag>
           <Space size="middle">
-            <Typography.Text type="secondary">{user?.email}</Typography.Text>
+            <Typography.Text type="secondary">
+              {profile?.display_name || user?.email}
+            </Typography.Text>
             <Button
               icon={<LogoutOutlined />}
               onClick={async () => {
