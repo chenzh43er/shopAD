@@ -489,7 +489,6 @@ productsRoutes.post("/:id/copy", async (c) => {
     name: String(source.name ?? linkSuffix),
     description: source.description ?? null,
     price: Number(source.price ?? 0),
-    stock: Number(source.stock ?? 0),
     cover_url: source.cover_url ?? null,
     gallery_urls: Array.isArray(source.gallery_urls) ? source.gallery_urls : [],
     detail_image_urls: Array.isArray(source.detail_image_urls)
@@ -735,7 +734,6 @@ productsRoutes.post("/", async (c) => {
     name: status === "draft" ? linkSuffix || name : name,
     description: body.description ?? null,
     price: body.price,
-    stock: body.stock ?? 0,
     cover_url: body.cover_url ?? null,
     gallery_urls: galleryUrls,
     detail_image_urls: detailImageUrls,
@@ -839,12 +837,6 @@ productsRoutes.put("/:id", async (c) => {
       return c.json({ error: "价格无效" }, 400);
     }
     patch.price = body.price;
-  }
-  if (body.stock !== undefined) {
-    if (typeof body.stock !== "number" || body.stock < 0) {
-      return c.json({ error: "库存无效" }, 400);
-    }
-    patch.stock = body.stock;
   }
   if (body.cover_url !== undefined) patch.cover_url = body.cover_url;
   if (body.gallery_urls !== undefined) {

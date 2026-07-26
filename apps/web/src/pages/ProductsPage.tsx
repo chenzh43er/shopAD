@@ -129,7 +129,6 @@ export function ProductsPage() {
       width: 130,
       render: (v: number, row) => formatMoney(v, row.currency),
     },
-    { title: "库存", dataIndex: "stock", width: 80 },
     {
       title: "状态",
       dataIndex: "status",

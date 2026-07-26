@@ -10,6 +10,37 @@ type ProfileRow = {
   is_active?: boolean | null;
 };
 
+type CachedAuth = {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  userRole: UserRole;
+  expiresAt: number;
+};
+
+/** Isolate 内短缓存，降低同一用户连续请求的 auth.getUser + profiles 往返 */
+const AUTH_CACHE_TTL_MS = 30_000;
+const AUTH_CACHE_MAX = 200;
+const authCache = new Map<string, CachedAuth>();
+
+function getCachedAuth(token: string): CachedAuth | null {
+  const hit = authCache.get(token);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    authCache.delete(token);
+    return null;
+  }
+  return hit;
+}
+
+function setCachedAuth(token: string, value: Omit<CachedAuth, "expiresAt">) {
+  if (authCache.size >= AUTH_CACHE_MAX) {
+    const oldest = authCache.keys().next().value;
+    if (oldest) authCache.delete(oldest);
+  }
+  authCache.set(token, { ...value, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+}
+
 /** Authenticated staff: super_admin or employee */
 export const requireStaff = createMiddleware<{
   Bindings: Env;
@@ -21,6 +52,16 @@ export const requireStaff = createMiddleware<{
   }
 
   const token = header.slice(7);
+  const cached = getCachedAuth(token);
+  if (cached) {
+    c.set("userId", cached.userId);
+    c.set("userEmail", cached.userEmail);
+    c.set("userName", cached.userName);
+    c.set("userRole", cached.userRole);
+    await next();
+    return;
+  }
+
   const supabase = createServiceClient(c.env);
 
   const {
@@ -83,13 +124,22 @@ export const requireStaff = createMiddleware<{
     return c.json({ error: "账号已停用，请联系超级管理员" }, 403);
   }
 
+  const userName =
+    profile.display_name || user.email?.split("@")[0] || user.id;
+  const userEmail = user.email ?? "";
+  const userRole = role as UserRole;
+
   c.set("userId", user.id);
-  c.set("userEmail", user.email ?? "");
-  c.set(
-    "userName",
-    profile.display_name || user.email?.split("@")[0] || user.id,
-  );
-  c.set("userRole", role as UserRole);
+  c.set("userEmail", userEmail);
+  c.set("userName", userName);
+  c.set("userRole", userRole);
+
+  setCachedAuth(token, {
+    userId: user.id,
+    userEmail,
+    userName,
+    userRole,
+  });
 
   await next();
 });

@@ -217,7 +217,6 @@ export interface Product {
     Currency,
     "id" | "code" | "name" | "name_zh" | "symbol" | "symbol_suffix"
   > | null;
-  stock: number;
   /** 商品封面 */
   cover_url: string | null;
   /** 商品轮播图 */
@@ -562,7 +561,6 @@ export interface CreateProductInput {
   description?: string | null;
   price: number;
   currency_id?: string | null;
-  stock?: number;
   cover_url?: string | null;
   gallery_urls?: string[];
   detail_image_urls?: string[];
@@ -587,7 +585,6 @@ export interface UpdateProductInput {
   description?: string | null;
   price?: number;
   currency_id?: string | null;
-  stock?: number;
   cover_url?: string | null;
   gallery_urls?: string[];
   detail_image_urls?: string[];

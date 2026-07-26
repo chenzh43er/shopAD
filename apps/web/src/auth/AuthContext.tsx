@@ -46,7 +46,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const reqId = ++profileReqId.current;
     try {
-      const me = await apiFetch<Profile>("/api/me");
+      const me = await apiFetch<Profile>("/api/me", {
+        accessToken: activeSession.access_token,
+      });
       if (reqId !== profileReqId.current) return;
       setProfile(me);
       setAuthError(null);

@@ -30,6 +30,11 @@ import type { Env, Variables } from "../types";
 const FINANCE_EXPORT_MAX_ROWS = 5000;
 const FINANCE_EXPORT_SELECT =
   "id, order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity";
+const LOGISTICS_EXPORT_SELECT =
+  "id, order_no, shipping_order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, weight, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, consignor_flag, consignor_name, consignor_phone, payment_method, sku_code, quantity, item_category, item_value, insurance_type, insurance_flag, package_count, item_type, remark, cod_amount, total_amount, express_type, shipping_fee, other_fee, owner_member, created_at, updated_at";
+/** 列表页所需列（避免 select * 拖大 payload / IO） */
+const ORDER_LIST_SELECT =
+  "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, reviewed_by, payment_type, updated_at";
 
 function parseCsvIds(raw: unknown, max = 500): string[] {
   const parts: string[] = [];
@@ -426,7 +431,7 @@ ordersRoutes.get("/", async (c) => {
   const supabase = createServiceClient(c.env);
   let query = supabase
     .from("orders")
-    .select("*", { count: "exact" })
+    .select(ORDER_LIST_SELECT, { count: "estimated" })
     .order("updated_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
@@ -454,7 +459,8 @@ ordersRoutes.get("/", async (c) => {
   if (batchByOrderNo) {
     query = query.in("order_no", orderNos);
   } else if (orderNo) {
-    query = query.ilike("order_no", `%${orderNo}%`);
+    // 前缀匹配可走 order_no btree；中间模糊会全表扫描
+    query = query.ilike("order_no", `${orderNo}%`);
   }
   if (!batchByOrderNo && reviewStatus) {
     if (
@@ -489,11 +495,20 @@ ordersRoutes.get("/", async (c) => {
   const { data, error, count } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
-  const withActors = await attachActors(supabase, data ?? []);
-  const withCurrency = await attachOrderCurrency(supabase, withActors);
+  const rows = data ?? [];
+  // 列表仅需审核人；与币种并行，缩短串行往返
+  const [withActors, withCurrency] = await Promise.all([
+    attachActors(supabase, rows, ["reviewed_by"]),
+    attachOrderCurrency(supabase, rows),
+  ]);
+
+  const dataOut = withActors.map((row, i) => ({
+    ...row,
+    currency: withCurrency[i]?.currency ?? null,
+  }));
 
   return c.json({
-    data: withCurrency,
+    data: dataOut,
     total: count ?? 0,
     page,
     pageSize,
@@ -502,6 +517,12 @@ ordersRoutes.get("/", async (c) => {
 
 /** 财务导出筛选项：有权限的商品 +（管理员）已出现的归属成员 */
 ordersRoutes.get("/finance-export/meta", async (c) => {
+  const statusRaw = c.req.query("status")?.trim();
+  const status =
+    statusRaw === "cod_shipped" || statusRaw === "cod_completed"
+      ? statusRaw
+      : "cod_completed";
+
   const supabase = createServiceClient(c.env);
 
   let productQuery = supabase
@@ -533,7 +554,7 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
       .from("orders")
       .select("owner_member")
       .eq("payment_type", "cod")
-      .eq("status", "cod_completed")
+      .eq("status", status)
       .not("owner_member", "is", null)
       .neq("owner_member", "")
       .limit(5000);
@@ -661,6 +682,166 @@ ordersRoutes.post("/finance-export", async (c) => {
     data: rows,
     total: rows.length,
     truncated: rows.length >= FINANCE_EXPORT_MAX_ROWS,
+  });
+});
+
+const LOGISTICS_EXPORT_MAX = FINANCE_EXPORT_MAX_ROWS;
+
+function asText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+function asNumberOrEmpty(value: unknown): number | "" {
+  if (value == null || value === "") return "";
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : "";
+}
+
+/**
+ * 已发货 / 已签收物流导出（对齐极兔物流导入模板列）。
+ * 电商订单号 = 系统订单号；另附物流订单号（运单号）。
+ */
+ordersRoutes.post("/logistics-export", async (c) => {
+  const body = (await c.req.json()) as {
+    status?: unknown;
+    date_from?: unknown;
+    date_to?: unknown;
+    product_ids?: unknown;
+    owner_members?: unknown;
+  };
+
+  const status =
+    body.status === "cod_shipped" || body.status === "cod_completed"
+      ? body.status
+      : null;
+  if (!status) {
+    return c.json({ error: "仅支持已发货或已签收导出" }, 400);
+  }
+
+  const from = parseDateBound(body.date_from, "开始日期");
+  if (!from.ok) return c.json({ error: from.error }, 400);
+  const to = parseDateBound(body.date_to, "结束日期");
+  if (!to.ok) return c.json({ error: to.error }, 400);
+  if (from.iso > to.iso) {
+    return c.json({ error: "开始日期不能晚于结束日期" }, 400);
+  }
+
+  const productIds = parseCsvIds(body.product_ids);
+  const ownerMembers = parseCsvIds(body.owner_members, 200);
+
+  if (ownerMembers.length > 0 && !isSuperAdmin(c)) {
+    return c.json({ error: "仅管理员可按归属成员筛选导出" }, 403);
+  }
+
+  const supabase = createServiceClient(c.env);
+
+  let allowedProductIds: string[] | "all";
+  try {
+    allowedProductIds = await listOwnedProductIds(supabase, c);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+  if (allowedProductIds !== "all" && allowedProductIds.length === 0) {
+    return c.json({ data: [], total: 0 });
+  }
+
+  let filterProductIds: string[] | null = null;
+  if (productIds.length > 0) {
+    if (allowedProductIds === "all") {
+      filterProductIds = productIds;
+    } else {
+      const owned = new Set(allowedProductIds);
+      filterProductIds = productIds.filter((id) => owned.has(id));
+      if (filterProductIds.length === 0) {
+        return c.json({ data: [], total: 0 });
+      }
+    }
+  } else if (allowedProductIds !== "all") {
+    filterProductIds = allowedProductIds;
+  }
+
+  let query = supabase
+    .from("orders")
+    .select(LOGISTICS_EXPORT_SELECT)
+    .eq("payment_type", "cod")
+    .eq("status", status)
+    .gte("updated_at", from.iso)
+    .lte("updated_at", to.iso)
+    .order("created_at", { ascending: false })
+    .limit(LOGISTICS_EXPORT_MAX);
+
+  if (filterProductIds) {
+    query = query.in("product_id", filterProductIds);
+  }
+  if (ownerMembers.length > 0) {
+    query = query.in("owner_member", ownerMembers);
+  }
+
+  const { data, error } = await query;
+  if (error) return c.json({ error: error.message }, 500);
+
+  const rows = ((data ?? []) as Record<string, unknown>[]).map((row) => {
+    const qty =
+      typeof row.quantity === "number"
+        ? row.quantity
+        : Number(row.quantity) || 0;
+    const sku = asText(row.sku_code);
+    const shippingDetail =
+      asText(row.shipping_detail) || asText(row.shipping_address);
+    const codAmount = asNumberOrEmpty(row.cod_amount);
+    const totalAmount = asNumberOrEmpty(row.total_amount);
+    const weight = asNumberOrEmpty(row.weight);
+
+    return {
+      weight: weight === "" ? 1 : weight,
+      shipper_name: asText(row.shipper_name),
+      shipper_phone: asText(row.shipper_phone),
+      shipper_province: asText(row.shipper_province),
+      shipper_city: asText(row.shipper_city),
+      shipper_district: asText(row.shipper_district),
+      shipper_address: asText(row.shipper_address),
+      shipper_address_info: asText(row.shipper_address_info),
+      consignor_flag: asText(row.consignor_flag) || "0",
+      consignor_name: asText(row.consignor_name),
+      consignor_phone: asText(row.consignor_phone),
+      customer_name: asText(row.customer_name),
+      customer_phone: asText(row.customer_phone),
+      shipping_province: asText(row.shipping_province),
+      shipping_city: asText(row.shipping_city),
+      shipping_district: asText(row.shipping_district),
+      shipping_detail: shippingDetail,
+      shipping_address_info: "",
+      payment_method: asText(row.payment_method) || "月结",
+      sku_quantity: sku ? `${sku} * ${qty}` : "",
+      item_category: asText(row.item_category),
+      item_value: asNumberOrEmpty(row.item_value),
+      insurance_type: asText(row.insurance_type),
+      insurance_flag: asText(row.insurance_flag) || "0",
+      package_count:
+        typeof row.package_count === "number" && row.package_count > 0
+          ? row.package_count
+          : 1,
+      item_type: asText(row.item_type) || "BARANG",
+      remark: asText(row.remark),
+      order_no: asText(row.order_no),
+      logistics_order_no: asText(row.shipping_order_no),
+      cod_amount: codAmount === "" ? totalAmount : codAmount,
+      express_type: asText(row.express_type) || "EZ",
+      shipping_fee: asNumberOrEmpty(row.shipping_fee),
+      other_fee: asNumberOrEmpty(row.other_fee),
+    };
+  });
+
+  return c.json({
+    data: rows,
+    total: rows.length,
+    truncated: rows.length >= LOGISTICS_EXPORT_MAX,
   });
 });
 

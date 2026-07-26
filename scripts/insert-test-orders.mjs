@@ -113,13 +113,32 @@ try {
   }
   const packages = pkgRes.rows
 
+  const shipperRes = await client.query(
+    `
+    select id, name, phone, province, city, district, address, address_info,
+           consignor_flag, consignor_name, consignor_phone, is_default
+    from public.logistics_shipper
+    order by is_default desc, name
+    `,
+  )
+  if (shipperRes.rows.length === 0) {
+    throw new Error('No logistics_shipper found; create shippers before seeding shipped orders')
+  }
+  const shippers = shipperRes.rows
+  console.log(`Using ${shippers.length} shipper(s): ${shippers.map((s) => s.name).join(', ')}`)
+
   const stamp = Date.now().toString(36).toUpperCase()
   const inserted = []
 
-  // 先保证每种状态至少 1 条，再按权重填满
+  // 各场景尽量均分，余数再按权重补齐，保证状态覆盖且数量可测
   const scenarioQueue = []
-  for (const s of SCENARIOS) scenarioQueue.push(s)
-  while (scenarioQueue.length < COUNT) scenarioQueue.push(pickWeighted(SCENARIOS))
+  const base = Math.floor(COUNT / SCENARIOS.length)
+  let remainder = COUNT % SCENARIOS.length
+  for (const s of SCENARIOS) {
+    const extra = remainder > 0 ? 1 : 0
+    if (remainder > 0) remainder -= 1
+    for (let n = 0; n < base + extra; n++) scenarioQueue.push(s)
+  }
   // 打乱顺序，避免状态成块出现
   for (let i = scenarioQueue.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
@@ -145,11 +164,13 @@ try {
       ? `26${stamp.slice(-8)}${String(i + 1).padStart(4, '0')}`
       : null
     const rejectReason = scenario.reject ? pick(REJECT_REASONS) : null
+    const shipper = scenario.shipped ? pick(shippers) : null
     const remark = [
       `批量测试单 #${i + 1}`,
       scenario.payment_type === 'cod' ? 'COD' : '非COD',
       scenario.status,
-    ].join(' / ')
+      shipper ? `寄件人:${shipper.name}` : null,
+    ].filter(Boolean).join(' / ')
 
     const row = await client.query(
       `
@@ -190,6 +211,17 @@ try {
         unit_price,
         quantity,
         sku_code,
+        shipper_id,
+        shipper_name,
+        shipper_phone,
+        shipper_province,
+        shipper_city,
+        shipper_district,
+        shipper_address,
+        shipper_address_info,
+        consignor_flag,
+        consignor_name,
+        consignor_phone,
         created_at
       ) values (
         $1, $2, $3, $4, $5, $6, $7, $8,
@@ -199,9 +231,11 @@ try {
         case when $21 then 'Y' else null end,
         $9, '美妆护肤', 'BARANG',
         $22, $23, $24, $25, $26, $27, $28, $29,
-        now() - ($30 || ' hours')::interval
+        $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+        now() - ($41 || ' hours')::interval
       )
-      returning order_no, customer_name, status, payment_type, review_status, total_amount, package_name
+      returning order_no, customer_name, status, payment_type, review_status,
+                total_amount, package_name, shipper_id, shipper_name, shipping_order_no
       `,
       [
         orderNo,
@@ -233,6 +267,17 @@ try {
         unitPrice,
         quantity,
         product.sku_code,
+        shipper?.id ?? null,
+        shipper?.name ?? null,
+        shipper?.phone ?? null,
+        shipper?.province ?? null,
+        shipper?.city ?? null,
+        shipper?.district ?? null,
+        shipper?.address ?? null,
+        shipper?.address_info ?? null,
+        shipper?.consignor_flag ?? null,
+        shipper?.consignor_name ?? null,
+        shipper?.consignor_phone ?? null,
         String(Math.floor(Math.random() * 72)),
       ],
     )
@@ -247,6 +292,11 @@ try {
     summary[key] = (summary[key] || 0) + 1
   }
 
+  const shipped = inserted.filter((o) =>
+    ['cod_shipped', 'cod_completed', 'cod_refused', 'shipped', 'completed'].includes(o.status),
+  )
+  const shippedWithShipper = shipped.filter((o) => o.shipper_id)
+
   console.log(`Inserted ${inserted.length} test orders for ${product.name}`)
   console.log('=== by status ===')
   console.table(
@@ -257,16 +307,16 @@ try {
         return { payment_type, status, review_status, n }
       }),
   )
-  console.log('=== sample ===')
+  console.log(
+    `=== shipped/completed with shipper: ${shippedWithShipper.length}/${shipped.length} ===`,
+  )
+  console.log('=== sample (shipped) ===')
   console.table(
-    inserted.slice(0, 12).map((o) => ({
+    shipped.slice(0, 10).map((o) => ({
       order_no: o.order_no,
-      customer: o.customer_name,
-      package: o.package_name,
-      total: o.total_amount,
       status: o.status,
-      payment: o.payment_type,
-      review: o.review_status,
+      shipping_no: o.shipping_order_no,
+      shipper: o.shipper_name,
     })),
   )
 } catch (err) {

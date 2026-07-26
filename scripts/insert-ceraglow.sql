@@ -1,119 +1,70 @@
--- Ceraglow Youth Cream（来源：megaamanah.com）
+-- Ceraglow Youth Cream（来源：laryssa.orderonline.id）
 -- 可重复执行：按 link_suffix 更新商品；套餐按名称去重插入/刷新
+-- 落地页：https://laryssa.orderonline.id/ceraglow-youth-cream-bpom-bl62-65
 
 begin;
 
 -- 已存在则刷新，否则插入
 update public.products set
   name = 'Ceraglow Youth Cream BPOM BL62-65',
-  description = E'Rahasia Kulit Putih Glowing Awet Muda Tanpa Biaya Mahal – Bersih Berseri Bebas Kerutan, Flek Dan Penuaan, Yang Terbukti Secara Ilmiah.\n\nCeraglow Youth Cream hadir sebagai solusi perawatan kulit premium yang efektif mengurangi garis halus, mengencangkan kulit, dan mengembalikan elastisitas, sehingga wajah tampak muda dan bercahaya setiap hari.\n\n核心卖点：\n- Mengurangi Garis Halus & Kerutan（Hyaluronic Acid + Active Peptide）\n- Mengembalikan Elastisitas Kulit（tingkatkan produksi kolagen）\n- Melembapkan & Menutrisi Kulit\n- Mencerahkan & Menyamarkan Flek Hitam\n- Formula Ringan Cepat Meresap\n- Aman untuk Semua Jenis Kulit\n- Sudah terdaftar BPOM (NA11242000047)\n\n用法：pagi & malam setiap hari.\n促销：Harga Normal Rp 259.000 → Beli 1 Dapat 2 hanya Rp 120.000；Diskon Ongkir Seluruh Indonesia (COD)。\n\n来源落地页：https://megaamanah.com/ceraglow-youth-cream-bpom-bl62-65/',
+  description = E'Ceraglow Youth Cream BPOM BL62-65\n\nYang Anda Dapatkan:\n- Sudah BPOM Dan Jaminan 100% Barang Original\n- Wajah Glowing tanpa Flek Hitam, Kerutan, dan Jerawat\n- Aman Untuk Semua Jenis Kulit & Tanpa Efek Samping\n- Diskon 50% Dan Diskon Ongkir Seluruh Indonesia\n- Beli 1 Dapat 2 Bisa COD (Bayar Ditempat)\n\nPilihan Produk:\n- Promo Beli 1 Rp. 120.000\n- Lebih Hemat Beli 1 dapat 2 Rp. 165.000\n\nKontak: +62 851 4819 7834\nAlamat: Jl. Pondok Ungu, Harapan Jaya, Kec. Bekasi Utara, Kota Bekasi, Jawa Barat 17124\n\n来源落地页：https://laryssa.orderonline.id/ceraglow-youth-cream-bpom-bl62-65',
   price = 120000.00,
-  stock = 87,
-  cover_url = 'https://megaamanah.com/wp-content/uploads/2025/09/10_10_11zon.webp',
+  cover_url = 'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
   status = 'on_sale',
   sku_code = 'CERAGLOW-YC',
-  sku_display = 'Ceraglow Youth Cream / BPOM NA11242000047',
+  sku_display = 'Ceraglow Youth Cream BPOM BL62-65',
   weight = 0.30,
   title_external = 'Ceraglow Youth Cream BPOM BL62-65',
   packages_enabled = true,
   gallery_urls = array[
-    'https://megaamanah.com/wp-content/uploads/2025/09/10_10_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/11_11_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/12_11zon-2-2.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/13_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/14_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/NO-BPOM-1_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/8_8_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/9_9_11zon.webp'
+    'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
+    'https://cdn.orderonline.id/uploads/images_7569161766594604519.jpeg',
+    'https://cdn.orderonline.id/uploads/images_3586691766594604863.jpeg'
   ]::text[],
   detail_image_urls = array[
-    'https://megaamanah.com/wp-content/uploads/2025/09/1_1_11zon-4-1-2-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/1_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/2_11zon-1-4.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/3_3_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/4_4_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/5_5_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/15_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/16_1_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/18_3_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/19_4_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/20_5_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/21_6_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/22_7_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/23_8_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/24_9_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/26_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/27_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/28_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/29_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/30_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/31_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/Desain-tanpa-judul-71_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/NO-BPOM-1_11zon.webp'
+    'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
+    'https://cdn.orderonline.id/uploads/images_7569161766594604519.jpeg',
+    'https://cdn.orderonline.id/uploads/images_3586691766594604863.jpeg'
   ]::text[],
   extra_html = array[
-    E'<section><h3>Ceraglow Youth Cream BPOM</h3><p>Telah Terjual ⭐⭐⭐⭐⭐ 4,9</p><ul><li>Mengurangi Garis Halus &amp; Kerutan</li><li>Mengembalikan Elastisitas Kulit</li><li>Melembapkan &amp; Menutrisi Kulit</li><li>Mencerahkan &amp; Menyamarkan Flek Hitam</li><li>Formula Ringan Cepat Meresap</li><li>Aman untuk Semua Jenis Kulit — BPOM NA11242000047</li></ul><p><strong>Promo:</strong> Harga Normal <s>Rp 259.000</s> → Beli 1 Dapat 2 hanya <strong>Rp 120.000</strong></p><p>Diskon Ongkir Seluruh Indonesia (COD) · Garansi 100% uang kembali</p></section>'
+    E'<section><h3>Yang Anda Dapatkan</h3><ul><li>Sudah BPOM Dan Jaminan 100% Barang Original</li><li>Wajah Glowing tanpa Flek Hitam, Kerutan, dan Jerawat</li><li>Aman Untuk Semua Jenis Kulit &amp; Tanpa Efek Samping</li><li>Diskon 50% Dan Diskon Ongkir Seluruh Indonesia</li><li>Beli 1 Dapat 2 Bisa COD (Bayar Ditempat)</li></ul></section>',
+    E'<section><h3>Testimoni</h3><blockquote><strong>Atin Rahmawati (PNS)</strong><br/>Aku udah coba berbagai krim anti kerut, tapi Ceraglow Youth Cream BPOM ini beda banget! Kerutan di wajah mulai memudar, kulit jadi lebih kencang, halus, dan lembap banget.</blockquote><blockquote><strong>Dewi Aulia (Mahasiswi)</strong><br/>Setelah pake Ceraglow Youth Cream BPOM, kulitku jadi lebih kencang, halus, dan kenyal. Kerutan memudar, wajah juga kelihatan lebih cerah dan glowing.</blockquote><blockquote><strong>Siska Dewi (Pegawai Swasta)</strong><br/>Setelah pakai Ceraglow Youth Cream BPOM ini, kulit wajah jadi lebih kencang, lembut, dan cerah! Kerutan halus memudar, kulit terasa kenyal banget.</blockquote></section>'
   ]::text[],
   updated_at = now()
 where link_suffix = 'ceraglow-youth-cream-bpom-bl62-65'
    or name = 'Ceraglow Youth Cream BPOM BL62-65';
 
 insert into public.products (
-  name, description, price, stock, cover_url, status,
+  name, description, price, cover_url, status,
   sku_code, sku_display, weight,
   link_suffix, title_external, packages_enabled,
   gallery_urls, detail_image_urls, extra_html
 )
 select
   'Ceraglow Youth Cream BPOM BL62-65',
-  E'Rahasia Kulit Putih Glowing Awet Muda Tanpa Biaya Mahal – Bersih Berseri Bebas Kerutan, Flek Dan Penuaan, Yang Terbukti Secara Ilmiah.\n\nCeraglow Youth Cream hadir sebagai solusi perawatan kulit premium yang efektif mengurangi garis halus, mengencangkan kulit, dan mengembalikan elastisitas, sehingga wajah tampak muda dan bercahaya setiap hari.\n\n核心卖点：\n- Mengurangi Garis Halus & Kerutan（Hyaluronic Acid + Active Peptide）\n- Mengembalikan Elastisitas Kulit（tingkatkan produksi kolagen）\n- Melembapkan & Menutrisi Kulit\n- Mencerahkan & Menyamarkan Flek Hitam\n- Formula Ringan Cepat Meresap\n- Aman untuk Semua Jenis Kulit\n- Sudah terdaftar BPOM (NA11242000047)\n\n用法：pagi & malam setiap hari.\n促销：Harga Normal Rp 259.000 → Beli 1 Dapat 2 hanya Rp 120.000；Diskon Ongkir Seluruh Indonesia (COD)。\n\n来源落地页：https://megaamanah.com/ceraglow-youth-cream-bpom-bl62-65/',
+  E'Ceraglow Youth Cream BPOM BL62-65\n\nYang Anda Dapatkan:\n- Sudah BPOM Dan Jaminan 100% Barang Original\n- Wajah Glowing tanpa Flek Hitam, Kerutan, dan Jerawat\n- Aman Untuk Semua Jenis Kulit & Tanpa Efek Samping\n- Diskon 50% Dan Diskon Ongkir Seluruh Indonesia\n- Beli 1 Dapat 2 Bisa COD (Bayar Ditempat)\n\nPilihan Produk:\n- Promo Beli 1 Rp. 120.000\n- Lebih Hemat Beli 1 dapat 2 Rp. 165.000\n\nKontak: +62 851 4819 7834\nAlamat: Jl. Pondok Ungu, Harapan Jaya, Kec. Bekasi Utara, Kota Bekasi, Jawa Barat 17124\n\n来源落地页：https://laryssa.orderonline.id/ceraglow-youth-cream-bpom-bl62-65',
   120000.00::numeric,
-  87,
-  'https://megaamanah.com/wp-content/uploads/2025/09/10_10_11zon.webp',
+  'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
   'on_sale',
   'CERAGLOW-YC',
-  'Ceraglow Youth Cream / BPOM NA11242000047',
+  'Ceraglow Youth Cream BPOM BL62-65',
   0.30::numeric,
   'ceraglow-youth-cream-bpom-bl62-65',
   'Ceraglow Youth Cream BPOM BL62-65',
   true,
   array[
-    'https://megaamanah.com/wp-content/uploads/2025/09/10_10_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/11_11_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/12_11zon-2-2.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/13_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/14_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/NO-BPOM-1_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/8_8_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/9_9_11zon.webp'
+    'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
+    'https://cdn.orderonline.id/uploads/images_7569161766594604519.jpeg',
+    'https://cdn.orderonline.id/uploads/images_3586691766594604863.jpeg'
   ]::text[],
   array[
-    'https://megaamanah.com/wp-content/uploads/2025/09/1_1_11zon-4-1-2-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/1_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/2_11zon-1-4.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/3_3_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/4_4_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/5_5_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/15_11zon-1-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/16_1_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/18_3_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/19_4_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/20_5_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/21_6_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/22_7_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/23_8_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/24_9_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/26_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/27_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/28_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/29_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/30_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/31_11zon.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/Desain-tanpa-judul-71_11zon-1.webp',
-    'https://megaamanah.com/wp-content/uploads/2025/09/NO-BPOM-1_11zon.webp'
+    'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
+    'https://cdn.orderonline.id/uploads/images_7569161766594604519.jpeg',
+    'https://cdn.orderonline.id/uploads/images_3586691766594604863.jpeg'
   ]::text[],
   array[
-    E'<section><h3>Ceraglow Youth Cream BPOM</h3><p>Telah Terjual ⭐⭐⭐⭐⭐ 4,9</p><ul><li>Mengurangi Garis Halus &amp; Kerutan</li><li>Mengembalikan Elastisitas Kulit</li><li>Melembapkan &amp; Menutrisi Kulit</li><li>Mencerahkan &amp; Menyamarkan Flek Hitam</li><li>Formula Ringan Cepat Meresap</li><li>Aman untuk Semua Jenis Kulit — BPOM NA11242000047</li></ul><p><strong>Promo:</strong> Harga Normal <s>Rp 259.000</s> → Beli 1 Dapat 2 hanya <strong>Rp 120.000</strong></p><p>Diskon Ongkir Seluruh Indonesia (COD) · Garansi 100% uang kembali</p></section>'
+    E'<section><h3>Yang Anda Dapatkan</h3><ul><li>Sudah BPOM Dan Jaminan 100% Barang Original</li><li>Wajah Glowing tanpa Flek Hitam, Kerutan, dan Jerawat</li><li>Aman Untuk Semua Jenis Kulit &amp; Tanpa Efek Samping</li><li>Diskon 50% Dan Diskon Ongkir Seluruh Indonesia</li><li>Beli 1 Dapat 2 Bisa COD (Bayar Ditempat)</li></ul></section>',
+    E'<section><h3>Testimoni</h3><blockquote><strong>Atin Rahmawati (PNS)</strong><br/>Aku udah coba berbagai krim anti kerut, tapi Ceraglow Youth Cream BPOM ini beda banget! Kerutan di wajah mulai memudar, kulit jadi lebih kencang, halus, dan lembap banget.</blockquote><blockquote><strong>Dewi Aulia (Mahasiswi)</strong><br/>Setelah pake Ceraglow Youth Cream BPOM, kulitku jadi lebih kencang, halus, dan kenyal. Kerutan memudar, wajah juga kelihatan lebih cerah dan glowing.</blockquote><blockquote><strong>Siska Dewi (Pegawai Swasta)</strong><br/>Setelah pakai Ceraglow Youth Cream BPOM ini, kulit wajah jadi lebih kencang, lembut, dan cerah! Kerutan halus memudar, kulit terasa kenyal banget.</blockquote></section>'
   ]::text[]
 where not exists (
   select 1 from public.products p
@@ -126,31 +77,31 @@ delete from public.product_packages pp
 using public.products p
 where pp.product_id = p.id
   and p.link_suffix = 'ceraglow-youth-cream-bpom-bl62-65'
-  and pp.name not in ('买1得2 促销', '单件体验装');
+  and pp.name not in ('Promo Beli 1', 'Lebih Hemat Beli 1 dapat 2');
 
 with pkgs(name, name_external, original_price, discount_price, sort_order, summary, is_visible, image_url, qty) as (
   values
     (
-      '买1得2 促销',
-      'Beli 1 Dapat 2',
-      259000.00::numeric,
+      'Promo Beli 1',
+      'Promo Beli 1 Rp. 120.000',
+      240000.00::numeric,
       120000.00::numeric,
       0,
-      '落地页主推：买 1 得 2，仅 Rp 120.000（原价 Rp 259.000）',
+      '落地页：Promo Beli 1 Rp. 120.000（Diskon 50%）',
       true,
-      'https://megaamanah.com/wp-content/uploads/2025/09/10_10_11zon.webp',
-      2
+      'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg',
+      1
     ),
     (
-      '单件体验装',
-      'Beli 1',
-      259000.00::numeric,
-      120000.00::numeric,
+      'Lebih Hemat Beli 1 dapat 2',
+      'Lebih Hemat Beli 1 dapat 2 Rp. 165.000',
+      330000.00::numeric,
+      165000.00::numeric,
       1,
-      '单件同价位对照（落地页主推买1得2）',
+      '落地页：Lebih Hemat Beli 1 dapat 2 Rp. 165.000（Diskon 50%）',
       true,
-      'https://megaamanah.com/wp-content/uploads/2025/09/11_11_11zon.webp',
-      1
+      'https://cdn.orderonline.id/uploads/images_7569161766594604519.jpeg',
+      2
     )
 ),
 ins_pkg as (
@@ -203,15 +154,27 @@ set
   updated_at = now()
 from (
   values
-    ('买1得2 促销', 'Beli 1 Dapat 2', 259000.00::numeric, 120000.00::numeric, 0,
-     '落地页主推：买 1 得 2，仅 Rp 120.000（原价 Rp 259.000）', true,
-     'https://megaamanah.com/wp-content/uploads/2025/09/10_10_11zon.webp'),
-    ('单件体验装', 'Beli 1', 259000.00::numeric, 120000.00::numeric, 1,
-     '单件同价位对照（落地页主推买1得2）', true,
-     'https://megaamanah.com/wp-content/uploads/2025/09/11_11_11zon.webp')
+    ('Promo Beli 1', 'Promo Beli 1 Rp. 120.000', 240000.00::numeric, 120000.00::numeric, 0,
+     '落地页：Promo Beli 1 Rp. 120.000（Diskon 50%）', true,
+     'https://cdn.orderonline.id/uploads/images_3548121766594604918.jpeg'),
+    ('Lebih Hemat Beli 1 dapat 2', 'Lebih Hemat Beli 1 dapat 2 Rp. 165.000', 330000.00::numeric, 165000.00::numeric, 1,
+     '落地页：Lebih Hemat Beli 1 dapat 2 Rp. 165.000（Diskon 50%）', true,
+     'https://cdn.orderonline.id/uploads/images_7569161766594604519.jpeg')
 ) as v(name, name_external, original_price, discount_price, sort_order, summary, is_visible, image_url)
 join public.products p on p.link_suffix = 'ceraglow-youth-cream-bpom-bl62-65'
 where pp.product_id = p.id and pp.name = v.name;
+
+-- 同步套餐明细数量
+update public.product_package_items i
+set quantity = v.qty
+from (
+  values
+    ('Promo Beli 1', 1),
+    ('Lebih Hemat Beli 1 dapat 2', 2)
+) as v(name, qty)
+join public.product_packages pp on pp.name = v.name
+join public.products p on p.id = pp.product_id and p.link_suffix = 'ceraglow-youth-cream-bpom-bl62-65'
+where i.package_id = pp.id;
 
 commit;
 
@@ -220,7 +183,6 @@ select
   p.name,
   p.link_suffix,
   p.price,
-  p.stock,
   p.status,
   p.packages_enabled,
   p.cover_url,

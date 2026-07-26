@@ -65,7 +65,6 @@ interface FormValues {
   name: string;
   description?: string;
   price: number;
-  stock: number;
   cover_url?: string | null;
   link_suffix?: string;
   title_external?: string;
@@ -268,7 +267,6 @@ export function ProductFormPage() {
           name: data.name,
           description: data.description ?? undefined,
           price: Number(data.price),
-          stock: data.stock,
           cover_url: data.cover_url,
           link_suffix: data.link_suffix ?? undefined,
           title_external: data.title_external ?? undefined,
@@ -379,7 +377,6 @@ export function ProductFormPage() {
       name,
       description: values.description?.trim() || null,
       price: values.price ?? 0,
-      stock: values.stock ?? 0,
       status: asDraft ? "draft" : "on_sale",
       cover_url: coverUrl,
       gallery_urls: galleryUrls,
@@ -521,7 +518,6 @@ export function ProductFormPage() {
       layout="vertical"
       style={{ maxWidth: 720 }}
       initialValues={{
-        stock: 0,
         price: 0,
         weight: 1,
         packages_enabled: false,
@@ -802,13 +798,6 @@ export function ProductFormPage() {
           extra="开启套餐后，实际售价以套餐折扣价为准"
         >
           <InputNumber min={0} precision={2} style={{ width: 160 }} />
-        </Form.Item>
-        <Form.Item
-          label="库存"
-          name="stock"
-          rules={[{ required: true, message: "请输入库存" }]}
-        >
-          <InputNumber min={0} precision={0} style={{ width: 160 }} />
         </Form.Item>
         <Form.Item label="默认重量" name="weight">
           <InputNumber min={0} precision={2} style={{ width: 160 }} />

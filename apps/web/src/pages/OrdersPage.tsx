@@ -28,19 +28,12 @@ import {
   type ReviewStatus,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
-import {
-  buildFinanceExcel,
-  downloadBlob,
-  financeExportFilename,
-  type FinanceExportRow,
-} from "../lib/buildFinanceExcel";
+import type { FinanceExportRow } from "../lib/buildFinanceExcel";
+import type { LogisticsExportRow } from "../lib/buildLogisticsExcel";
+import type { ShipExcelRow } from "../lib/parseShipText";
+import { parseShipText } from "../lib/parseShipText";
 import { formatMoney } from "../lib/formatMoney";
 import { INPUT_LIMITS } from "../lib/inputLimits";
-import {
-  parseShipExcel,
-  parseShipText,
-  type ShipExcelRow,
-} from "../lib/parseShipExcel";
 import { formatActor } from "../components/AuditLogPanel";
 import { setOrdersListFrom } from "../lib/listNav";
 import { useAuth } from "../auth/AuthContext";
@@ -201,6 +194,9 @@ export function OrdersPage() {
   const shipTextTruncWarned = useRef(false);
 
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportKind, setExportKind] = useState<"finance" | "logistics">(
+    "finance",
+  );
   const [exporting, setExporting] = useState(false);
   const [exportMetaLoading, setExportMetaLoading] = useState(false);
   const [exportProducts, setExportProducts] = useState<
@@ -220,6 +216,8 @@ export function OrdersPage() {
   const isInvalidTab = activeCodTab === "invalid";
   const isBatchQuery = batchOrderNos.length > 0;
   const enableRowSelection = isPendingReview || isShippedTab;
+  const exportOrderStatus: "cod_shipped" | "cod_completed" | null =
+    isShippedTab ? "cod_shipped" : isCompletedTab ? "cod_completed" : null;
 
   const filters = useMemo(() => {
     const current = COD_TABS.find((t) => t.key === activeCodTab)!;
@@ -484,7 +482,11 @@ export function OrdersPage() {
     setExportDateRange(null);
   };
 
-  const openExportModal = async () => {
+  const openExportModal = async (kind: "finance" | "logistics") => {
+    if (kind === "finance" && !isCompletedTab) return;
+    if (kind === "logistics" && !exportOrderStatus) return;
+
+    setExportKind(kind);
     setExportOpen(true);
     setExportProductIds([]);
     setExportOwners([]);
@@ -495,10 +497,11 @@ export function OrdersPage() {
     );
     setExportMetaLoading(true);
     try {
+      const status = exportOrderStatus ?? "cod_completed";
       const res = await apiFetch<{
         products: Array<{ id: string; name: string }>;
         owner_members: string[];
-      }>("/api/orders/finance-export/meta");
+      }>(`/api/orders/finance-export/meta?status=${status}`);
       setExportProducts(res.products ?? []);
       setExportOwnerMembers(res.owner_members ?? []);
     } catch (e) {
@@ -508,41 +511,91 @@ export function OrdersPage() {
     }
   };
 
-  const submitFinanceExport = async () => {
+  const submitExport = async () => {
     if (!exportDateRange?.[0] || !exportDateRange?.[1]) {
       message.warning("请选择导出时间范围");
       return;
     }
+    if (exportKind === "logistics" && !exportOrderStatus) {
+      message.warning("当前列表不支持物流导出");
+      return;
+    }
+
     setExporting(true);
     try {
-      const res = await apiFetch<{
-        data: FinanceExportRow[];
-        total: number;
-        truncated?: boolean;
-      }>("/api/orders/finance-export", {
-        method: "POST",
-        body: JSON.stringify({
-          date_from: exportDateRange[0].startOf("day").toISOString(),
-          date_to: exportDateRange[1].endOf("day").toISOString(),
-          product_ids: exportProductIds,
-          owner_members: isSuperAdmin ? exportOwners : [],
-        }),
-      });
-      if (!res.data.length) {
-        message.warning("没有符合条件的已签收订单");
-        return;
-      }
-      const blob = buildFinanceExcel(res.data);
-      downloadBlob(
-        blob,
-        financeExportFilename(exportDateRange[0], exportDateRange[1]),
-      );
-      if (res.truncated) {
-        message.warning(
-          `已导出前 ${res.total} 笔（达到上限），请缩小时间或筛选条件后重试`,
+      const payload = {
+        date_from: exportDateRange[0].startOf("day").toISOString(),
+        date_to: exportDateRange[1].endOf("day").toISOString(),
+        product_ids: exportProductIds,
+        owner_members: isSuperAdmin ? exportOwners : [],
+      };
+
+      if (exportKind === "finance") {
+        const res = await apiFetch<{
+          data: FinanceExportRow[];
+          total: number;
+          truncated?: boolean;
+        }>("/api/orders/finance-export", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!res.data.length) {
+          message.warning("没有符合条件的已签收订单");
+          return;
+        }
+        const { buildFinanceExcel, financeExportFilename } = await import(
+          "../lib/buildFinanceExcel"
         );
+        const { downloadBlob } = await import("../lib/downloadBlob");
+        downloadBlob(
+          buildFinanceExcel(res.data),
+          financeExportFilename(exportDateRange[0], exportDateRange[1]),
+        );
+        if (res.truncated) {
+          message.warning(
+            `已导出前 ${res.total} 笔（达到上限），请缩小时间或筛选条件后重试`,
+          );
+        } else {
+          message.success(`已导出 ${res.total} 笔订单`);
+        }
       } else {
-        message.success(`已导出 ${res.total} 笔订单`);
+        const res = await apiFetch<{
+          data: LogisticsExportRow[];
+          total: number;
+          truncated?: boolean;
+        }>("/api/orders/logistics-export", {
+          method: "POST",
+          body: JSON.stringify({
+            ...payload,
+            status: exportOrderStatus,
+          }),
+        });
+        if (!res.data.length) {
+          message.warning("没有符合条件的订单");
+          return;
+        }
+        const statusLabel =
+          exportOrderStatus === "cod_shipped" ? "已发货" : "已签收";
+        const [{ buildLogisticsExcel, logisticsExportFilename }, { downloadBlob }] =
+          await Promise.all([
+            import("../lib/buildLogisticsExcel"),
+            import("../lib/downloadBlob"),
+          ]);
+        downloadBlob(
+          buildLogisticsExcel(res.data),
+          logisticsExportFilename(
+            exportDateRange[0],
+            exportDateRange[1],
+            statusLabel,
+          ),
+        );
+        if (res.truncated) {
+          message.warning(
+            `已导出前 ${res.total} 笔（达到上限），请缩小时间或筛选条件后重试`,
+          );
+        } else {
+          message.success(`已导出 ${res.total} 笔订单`);
+        }
       }
       resetExportModal();
     } catch (e) {
@@ -605,6 +658,7 @@ export function OrdersPage() {
   const onShipExcelSelected = async (file: File) => {
     try {
       const buffer = await file.arrayBuffer();
+      const { parseShipExcel } = await import("../lib/parseShipExcel");
       const parsed = parseShipExcel(buffer);
       const rows =
         parsed.rows.length > 200
@@ -918,16 +972,30 @@ export function OrdersPage() {
               批量拒绝签收
               {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
             </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => void openExportModal("logistics")}
+            >
+              导出物流 Excel
+            </Button>
           </>
         ) : null}
         {isCompletedTab ? (
-          <Button
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={() => void openExportModal()}
-          >
-            导出财务 Excel
-          </Button>
+          <>
+            <Button
+              type="primary"
+              icon={<DownloadOutlined />}
+              onClick={() => void openExportModal("finance")}
+            >
+              导出财务 Excel
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => void openExportModal("logistics")}
+            >
+              导出物流 Excel
+            </Button>
+          </>
         ) : null}
       </Space>
       <Modal
@@ -1067,10 +1135,10 @@ export function OrdersPage() {
         </Space>
       </Modal>
       <Modal
-        title="导出财务 Excel"
+        title={exportKind === "finance" ? "导出财务 Excel" : "导出物流 Excel"}
         open={exportOpen}
         onCancel={resetExportModal}
-        onOk={() => void submitFinanceExport()}
+        onOk={() => void submitExport()}
         okText="导出"
         cancelText="取消"
         confirmLoading={exporting}
@@ -1078,8 +1146,9 @@ export function OrdersPage() {
         width={560}
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
-          导出已签收订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 /
-          归属成员 / 中文属性*数量 / 购买数量）。按订单最近更新时间筛选。
+          {exportKind === "finance"
+            ? "导出已签收订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。按订单最近更新时间筛选。"
+            : "导出对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。按订单最近更新时间筛选。"}
         </p>
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
           <div>

@@ -137,6 +137,63 @@ a {
   letter-spacing: 0.01em;
 }
 
+.overview-hero {
+  padding: 18px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, rgba(232, 243, 255, 0.9) 0%, rgba(255, 255, 255, 0.95) 55%),
+    var(--panel);
+}
+
+.overview-module-card {
+  height: 100%;
+  border-radius: 10px !important;
+}
+
+.overview-module-card .ant-card-body {
+  height: 100%;
+}
+
+.overview-module-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.overview-flow-card {
+  border-radius: 10px !important;
+}
+
+.overview-guide .ant-collapse-header {
+  font-weight: 600 !important;
+}
+
+.overview-ol,
+.overview-ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.overview-ol li + li,
+.overview-ul li + li {
+  margin-top: 8px;
+}
+
+.overview-ol a,
+.overview-ul a,
+.overview-guide a {
+  color: var(--accent);
+}
+
 .cover-thumb {
   width: 48px;
   height: 48px;

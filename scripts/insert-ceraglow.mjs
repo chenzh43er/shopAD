@@ -21,7 +21,7 @@ await client.connect()
 try {
   await client.query(sql)
   const product = await client.query(`
-    select id, name, link_suffix, price, stock, status, packages_enabled, cover_url,
+    select id, name, link_suffix, price, status, packages_enabled, cover_url,
            cardinality(gallery_urls) as gallery_count,
            cardinality(detail_image_urls) as detail_count
     from public.products
