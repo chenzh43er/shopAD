@@ -16,8 +16,16 @@ export default defineConfig({
           if (!id.includes("node_modules")) return;
           if (id.includes("xlsx")) return "xlsx";
           if (id.includes("@supabase")) return "supabase";
-          if (id.includes("antd") || id.includes("@ant-design")) return "antd";
-          if (id.includes("react-dom") || id.includes("/react/")) return "react";
+          // Keep react + antd in one chunk to avoid circular chunk
+          // (antd -> react -> antd) that breaks React.createContext at runtime.
+          if (
+            id.includes("react-dom") ||
+            id.includes("/react/") ||
+            id.includes("antd") ||
+            id.includes("@ant-design")
+          ) {
+            return "vendor";
+          }
         },
       },
     },
