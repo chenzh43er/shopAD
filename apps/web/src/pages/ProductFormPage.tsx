@@ -34,6 +34,7 @@ import { INPUT_LIMITS } from "../lib/inputLimits";
 import { useAuth } from "../auth/AuthContext";
 import { ProductPackageSettings } from "../components/ProductPackageSettings";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
+import { SortableImageList } from "../components/SortableImageList";
 import dayjs from "dayjs";
 
 const MAX_GALLERY = 20;
@@ -885,60 +886,17 @@ export function ProductFormPage() {
 
       <Form.Item
         label="商品详情图片"
-        extra={`详情页长图/说明图，最多 ${MAX_DETAIL_IMAGES} 张，单张不超过 5MB`}
+        extra={`详情页按此顺序展示；可拖拽图片或点左右箭头调整顺序。最多 ${MAX_DETAIL_IMAGES} 张，单张不超过 5MB`}
       >
-        <Space wrap size={12} align="start">
-          {detailImageUrls.map((url, index) => (
-            <div
-              key={`${url}-${index}`}
-              style={{
-                position: "relative",
-                width: 96,
-                height: 96,
-                border: "1px solid #f0f0f0",
-                borderRadius: 6,
-                overflow: "hidden",
-              }}
-            >
-              <Image
-                src={url}
-                width={96}
-                height={96}
-                style={{ objectFit: "cover" }}
-              />
-              <Button
-                size="small"
-                danger
-                type="primary"
-                icon={<DeleteOutlined />}
-                style={{ position: "absolute", top: 4, right: 4 }}
-                onClick={() =>
-                  setDetailImageUrls((prev) =>
-                    prev.filter((_, i) => i !== index),
-                  )
-                }
-              />
-            </div>
-          ))}
-          {detailImageUrls.length < MAX_DETAIL_IMAGES ? (
-            <Upload
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              showUploadList={false}
-              beforeUpload={(file) => {
-                void uploadDetailImage(file);
-                return false;
-              }}
-            >
-              <Button
-                style={{ width: 96, height: 96 }}
-                icon={<PlusOutlined />}
-                loading={detailUploading}
-              >
-                上传
-              </Button>
-            </Upload>
-          ) : null}
-        </Space>
+        <SortableImageList
+          urls={detailImageUrls}
+          onChange={setDetailImageUrls}
+          max={MAX_DETAIL_IMAGES}
+          uploading={detailUploading}
+          onUpload={(file) => {
+            void uploadDetailImage(file);
+          }}
+        />
       </Form.Item>
 
       <Space wrap>
