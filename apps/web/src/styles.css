@@ -56,18 +56,30 @@ a {
   box-shadow: var(--shadow-md);
 }
 
+.login-logo {
+  display: block;
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  margin: 0 auto 16px;
+  object-fit: cover;
+  box-shadow: var(--shadow-sm);
+}
+
 .login-brand {
   font-size: 28px;
   font-weight: 700;
   letter-spacing: 0.02em;
   margin: 0 0 6px;
   color: var(--accent);
+  text-align: center;
 }
 
 .login-sub {
   margin: 0 0 28px;
   color: var(--muted);
   font-size: 14px;
+  text-align: center;
 }
 
 .app-shell .ant-layout-sider {
@@ -98,8 +110,8 @@ a {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #5eb3ff 0%, #3b9cff 100%);
-  box-shadow: 0 4px 12px rgba(59, 156, 255, 0.35);
+  object-fit: cover;
+  box-shadow: 0 4px 12px rgba(10, 42, 74, 0.35);
   flex-shrink: 0;
 }
 

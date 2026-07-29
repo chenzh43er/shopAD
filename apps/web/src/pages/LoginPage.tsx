@@ -28,6 +28,13 @@ export function LoginPage() {
   return (
     <div className="login-page">
       <div className="login-card">
+        <img
+          className="login-logo"
+          src="/logo.png"
+          alt="ShopAD"
+          width={72}
+          height={72}
+        />
         <h1 className="login-brand">ShopAD</h1>
         <p className="login-sub">商品与 COD 订单管理后台</p>
         {authError || error ? (

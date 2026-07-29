@@ -135,7 +135,13 @@ export function AdminLayout() {
     <Layout className="app-shell" style={{ minHeight: "100vh" }}>
       <Sider breakpoint="lg" collapsedWidth={64} width={220}>
         <div className="brand">
-          <span className="brand-mark" aria-hidden />
+          <img
+            className="brand-mark"
+            src="/logo.png"
+            alt=""
+            width={28}
+            height={28}
+          />
           <span>ShopAD</span>
         </div>
         <Menu
