@@ -96,6 +96,7 @@ const statusColor: Record<OrderStatus, string> = {
   pending: "default",
   paid: "processing",
   awaiting_review: "orange",
+  awaiting_confirm: "geekblue",
   awaiting_shipment: "gold",
   shipped: "blue",
   cod_shipped: "cyan",
@@ -113,6 +114,13 @@ export const COD_TABS = [
     paymentType: "cod" as const,
     reviewStatus: "pending" as const,
     status: "awaiting_review" as OrderStatus,
+  },
+  {
+    key: "awaiting_confirm",
+    label: "待确认",
+    paymentType: "cod" as const,
+    reviewStatus: "approved" as const,
+    status: "awaiting_confirm" as OrderStatus,
   },
   {
     key: "awaiting_shipment",
@@ -183,6 +191,9 @@ export function OrdersPage() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
   const pendingBatchNotify = useRef(false);
 
+  const [remarkModalOpen, setRemarkModalOpen] = useState(false);
+  const [remarkDraft, setRemarkDraft] = useState("");
+
   const [shipModalOpen, setShipModalOpen] = useState(false);
   const [shipRows, setShipRows] = useState<ShipExcelRow[]>([]);
   const [shipFileName, setShipFileName] = useState("");
@@ -210,14 +221,25 @@ export function OrdersPage() {
   const [exportOwners, setExportOwners] = useState<string[]>([]);
 
   const isPendingReview = activeCodTab === "pending_review";
+  const isAwaitingConfirmTab = activeCodTab === "awaiting_confirm";
   const isAwaitingShipmentTab = activeCodTab === "awaiting_shipment";
   const isShippedTab = activeCodTab === "shipped";
   const isCompletedTab = activeCodTab === "completed";
   const isInvalidTab = activeCodTab === "invalid";
   const isBatchQuery = batchOrderNos.length > 0;
-  const enableRowSelection = isPendingReview || isShippedTab;
-  const exportOrderStatus: "cod_shipped" | "cod_completed" | null =
-    isShippedTab ? "cod_shipped" : isCompletedTab ? "cod_completed" : null;
+  const enableRowSelection =
+    isPendingReview || isAwaitingConfirmTab || isShippedTab;
+  const exportOrderStatus:
+    | "awaiting_confirm"
+    | "cod_shipped"
+    | "cod_completed"
+    | null = isAwaitingConfirmTab
+    ? "awaiting_confirm"
+    : isShippedTab
+      ? "cod_shipped"
+      : isCompletedTab
+        ? "cod_completed"
+        : null;
 
   const filters = useMemo(() => {
     const current = COD_TABS.find((t) => t.key === activeCodTab)!;
@@ -354,7 +376,7 @@ export function OrdersPage() {
     }
     Modal.confirm({
       title: "批量通过审核",
-      content: `确认通过选中的 ${selectedRowKeys.length} 笔订单？通过后将进入待发货。`,
+      content: `确认通过选中的 ${selectedRowKeys.length} 笔订单？通过后将进入待确认。`,
       okText: "确认通过",
       cancelText: "取消",
       onOk: async () => {
@@ -375,7 +397,10 @@ export function OrdersPage() {
           if (fail === 0) {
             message.success(`已通过 ${ok} 笔订单`);
           } else {
-            message.warning(`通过 ${ok} 笔，失败 ${fail} 笔`);
+            const reason = res.failed[0]?.error
+              ? `：${res.failed[0].error}`
+              : "";
+            message.warning(`通过 ${ok} 笔，失败 ${fail} 笔${reason}`);
           }
           setSelectedRowKeys([]);
           await load();
@@ -386,6 +411,88 @@ export function OrdersPage() {
         }
       },
     });
+  };
+
+  const batchConfirm = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要确认的订单");
+      return;
+    }
+    Modal.confirm({
+      title: "批量确认",
+      content: `确认选中的 ${selectedRowKeys.length} 笔订单？确认后将进入待发货。`,
+      okText: "确认",
+      cancelText: "取消",
+      onOk: async () => {
+        setBatching(true);
+        try {
+          const res = await apiFetch<{
+            succeeded: string[];
+            failed: Array<{ id: string; error: string }>;
+          }>("/api/orders/batch-confirm", {
+            method: "POST",
+            body: JSON.stringify({ ids: selectedRowKeys }),
+          });
+          const ok = res.succeeded.length;
+          const fail = res.failed.length;
+          if (fail === 0) {
+            message.success(`已确认 ${ok} 笔订单`);
+          } else {
+            message.warning(`确认 ${ok} 笔，失败 ${fail} 笔`);
+          }
+          setSelectedRowKeys([]);
+          await load();
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "批量确认失败");
+        } finally {
+          setBatching(false);
+        }
+      },
+    });
+  };
+
+  const openRemarkModal = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要填写备注的订单");
+      return;
+    }
+    setRemarkDraft("");
+    setRemarkModalOpen(true);
+  };
+
+  const submitBatchRemark = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要填写备注的订单");
+      return;
+    }
+    setBatching(true);
+    try {
+      const res = await apiFetch<{
+        succeeded: string[];
+        failed: Array<{ id: string; error: string }>;
+      }>("/api/orders/batch-remark", {
+        method: "POST",
+        body: JSON.stringify({
+          ids: selectedRowKeys,
+          remark: remarkDraft.trim() || null,
+        }),
+      });
+      const ok = res.succeeded.length;
+      const fail = res.failed.length;
+      if (fail === 0) {
+        message.success(`已填写 ${ok} 笔订单备注`);
+      } else {
+        message.warning(`填写 ${ok} 笔，失败 ${fail} 笔`);
+      }
+      setRemarkModalOpen(false);
+      setRemarkDraft("");
+      setSelectedRowKeys([]);
+      await load();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "批量填写备注失败");
+    } finally {
+      setBatching(false);
+    }
   };
 
   const batchComplete = () => {
@@ -483,7 +590,7 @@ export function OrdersPage() {
   };
 
   const openExportModal = async (kind: "finance" | "logistics") => {
-    if (kind === "finance" && !isCompletedTab) return;
+    if (kind === "finance" && !isShippedTab) return;
     if (kind === "logistics" && !exportOrderStatus) return;
 
     setExportKind(kind);
@@ -497,7 +604,10 @@ export function OrdersPage() {
     );
     setExportMetaLoading(true);
     try {
-      const status = exportOrderStatus ?? "cod_completed";
+      const status =
+        kind === "finance"
+          ? "cod_shipped"
+          : (exportOrderStatus ?? "cod_shipped");
       const res = await apiFetch<{
         products: Array<{ id: string; name: string }>;
         owner_members: string[];
@@ -527,7 +637,8 @@ export function OrdersPage() {
         date_from: exportDateRange[0].startOf("day").toISOString(),
         date_to: exportDateRange[1].endOf("day").toISOString(),
         product_ids: exportProductIds,
-        owner_members: isSuperAdmin ? exportOwners : [],
+        owner_members:
+          isSuperAdmin && !isAwaitingConfirmTab ? exportOwners : [],
       };
 
       if (exportKind === "finance") {
@@ -540,7 +651,7 @@ export function OrdersPage() {
           body: JSON.stringify(payload),
         });
         if (!res.data.length) {
-          message.warning("没有符合条件的已签收订单");
+          message.warning("没有符合条件的已发货订单");
           return;
         }
         const { buildFinanceExcel, financeExportFilename } = await import(
@@ -575,7 +686,11 @@ export function OrdersPage() {
           return;
         }
         const statusLabel =
-          exportOrderStatus === "cod_shipped" ? "已发货" : "已签收";
+          exportOrderStatus === "awaiting_confirm"
+            ? "待确认"
+            : exportOrderStatus === "cod_shipped"
+              ? "已发货"
+              : "已签收";
         const [{ buildLogisticsExcel, logisticsExportFilename }, { downloadBlob }] =
           await Promise.all([
             import("../lib/buildLogisticsExcel"),
@@ -838,11 +953,13 @@ export function OrdersPage() {
         const actionLabel =
           record.review_status === "pending"
             ? "去审核"
-            : record.status === "awaiting_shipment"
-              ? "去发货"
-              : record.status === "cod_shipped"
-                ? "去签收"
-                : "详情";
+            : record.status === "awaiting_confirm"
+              ? "去确认"
+              : record.status === "awaiting_shipment"
+                ? "去发货"
+                : record.status === "cod_shipped"
+                  ? "去签收"
+                  : "详情";
         return (
           <Button
             size="small"
@@ -940,14 +1057,44 @@ export function OrdersPage() {
         ) : null}
         <Button onClick={() => void load()}>刷新</Button>
         {isPendingReview ? (
-          <Button
-            type="primary"
-            disabled={selectedRowKeys.length === 0}
-            loading={batching}
-            onClick={batchApprove}
-          >
-            批量通过{selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
-          </Button>
+          <>
+            <Button
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={openRemarkModal}
+            >
+              批量填写备注
+              {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+            </Button>
+            <Button
+              type="primary"
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={batchApprove}
+            >
+              批量通过
+              {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+            </Button>
+          </>
+        ) : null}
+        {isAwaitingConfirmTab ? (
+          <>
+            <Button
+              type="primary"
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={batchConfirm}
+            >
+              批量确认
+              {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => void openExportModal("logistics")}
+            >
+              导出物流 Excel
+            </Button>
+          </>
         ) : null}
         {isAwaitingShipmentTab ? (
           <Button type="primary" onClick={() => void openShipModal()}>
@@ -974,17 +1121,6 @@ export function OrdersPage() {
             </Button>
             <Button
               icon={<DownloadOutlined />}
-              onClick={() => void openExportModal("logistics")}
-            >
-              导出物流 Excel
-            </Button>
-          </>
-        ) : null}
-        {isCompletedTab ? (
-          <>
-            <Button
-              type="primary"
-              icon={<DownloadOutlined />}
               onClick={() => void openExportModal("finance")}
             >
               导出财务 Excel
@@ -997,7 +1133,49 @@ export function OrdersPage() {
             </Button>
           </>
         ) : null}
+        {isCompletedTab ? (
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => void openExportModal("logistics")}
+          >
+            导出物流 Excel
+          </Button>
+        ) : null}
       </Space>
+      <Modal
+        title="批量填写备注"
+        open={remarkModalOpen}
+        onCancel={() => {
+          setRemarkModalOpen(false);
+          setRemarkDraft("");
+        }}
+        onOk={() => void submitBatchRemark()}
+        okText={
+          selectedRowKeys.length > 0
+            ? `确认填写（${selectedRowKeys.length}）`
+            : "确认填写"
+        }
+        cancelText="取消"
+        confirmLoading={batching}
+        destroyOnClose
+      >
+        <p style={{ color: "#666", marginBottom: 8 }}>
+          将为选中的 {selectedRowKeys.length}{" "}
+          笔订单写入相同备注；留空则清空原有备注。
+        </p>
+        {/* showCount 绝对定位在输入框下方，需预留高度避免与 Modal 页脚重叠 */}
+        <div style={{ marginBottom: 24 }}>
+          <Input.TextArea
+            value={remarkDraft}
+            onChange={(e) => setRemarkDraft(e.target.value)}
+            placeholder="请输入备注内容"
+            rows={4}
+            maxLength={INPUT_LIMITS.remark}
+            showCount
+            allowClear
+          />
+        </div>
+      </Modal>
       <Modal
         title="批量查询订单号"
         open={batchModalOpen}
@@ -1147,7 +1325,7 @@ export function OrdersPage() {
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
           {exportKind === "finance"
-            ? "导出已签收订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。按订单最近更新时间筛选。"
+            ? "导出已发货订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。按订单最近更新时间筛选。"
             : "导出对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。按订单最近更新时间筛选。"}
         </p>
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
@@ -1167,7 +1345,7 @@ export function OrdersPage() {
               style={{ width: "100%" }}
             />
           </div>
-          {isSuperAdmin ? (
+          {isSuperAdmin && !isAwaitingConfirmTab ? (
             <div>
               <div style={{ marginBottom: 6 }}>归属成员（可多选）</div>
               <Select

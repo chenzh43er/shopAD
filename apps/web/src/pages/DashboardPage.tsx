@@ -47,11 +47,19 @@ const MODULES: ModuleCard[] = [
   },
   {
     title: "COD 待审核",
-    desc: "审核货到付款订单；通过后进入待发货，也可标记为无效订单。",
+    desc: "审核货到付款订单；通过后进入待确认，也可标记为无效订单。",
     to: "/cod/pending_review",
     linkLabel: "进入待审核",
     icon: <DollarOutlined />,
     tags: ["审核", "批量通过"],
+  },
+  {
+    title: "COD 待确认",
+    desc: "核对已通过审核的订单；批量确认后进入待发货，并支持导出物流 Excel。",
+    to: "/cod/awaiting_confirm",
+    linkLabel: "进入待确认",
+    icon: <CheckCircleOutlined />,
+    tags: ["批量确认", "物流导出"],
   },
   {
     title: "COD 待发货",
@@ -185,6 +193,10 @@ export function DashboardPage() {
               description: "核对地址与信息",
             },
             {
+              title: "待确认",
+              description: "确认后进入待发货",
+            },
+            {
               title: "待发货",
               description: "选寄件人并填运单",
             },
@@ -203,7 +215,7 @@ export function DashboardPage() {
           type="info"
           showIcon
           message="无效订单 vs 拒绝签收"
-          description="「无效订单」用于待审核/待发货阶段作废；「拒绝签收」仅在已发货后使用，二者不可互换。"
+          description="「无效订单」用于待审核/待确认/待发货阶段作废；「拒绝签收」仅在已发货后使用，二者不可互换。"
         />
       </Card>
 
@@ -227,7 +239,7 @@ export function DashboardPage() {
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           打开{" "}
                           <Link to="/cod/pending_review">待审核</Link>
-                          ，进入订单详情核对收件信息。通过后进入待发货；异常可标为无效订单。列表支持勾选后「批量通过」。
+                          ，进入订单详情核对收件信息。通过后进入待确认；异常可标为无效订单。列表支持勾选后「批量通过」。
                         </Paragraph>
                       </>
                     ),
@@ -235,7 +247,20 @@ export function DashboardPage() {
                   {
                     children: (
                       <>
-                        <Text strong>2. 发货</Text>
+                        <Text strong>2. 确认</Text>
+                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                          在{" "}
+                          <Link to="/cod/awaiting_confirm">待确认</Link>{" "}
+                          核对订单后批量确认，进入待发货；也可导出物流
+                          Excel 用于后续发货准备。
+                        </Paragraph>
+                      </>
+                    ),
+                  },
+                  {
+                    children: (
+                      <>
+                        <Text strong>3. 发货</Text>
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           在{" "}
                           <Link to="/cod/awaiting_shipment">待发货</Link>{" "}
@@ -248,11 +273,11 @@ export function DashboardPage() {
                   {
                     children: (
                       <>
-                        <Text strong>3. 签收结果</Text>
+                        <Text strong>4. 签收结果</Text>
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           在{" "}
                           <Link to="/cod/shipped">已发货</Link>{" "}
-                          确认客户结果：批量签收进入「已签收」，或标记「拒绝签收」。可按时间范围导出物流/财务
+                          确认客户结果：批量签收进入「已签收」，或标记「拒绝签收」。同页可按时间范围导出物流/财务
                           Excel。
                         </Paragraph>
                       </>
@@ -261,7 +286,7 @@ export function DashboardPage() {
                   {
                     children: (
                       <>
-                        <Text strong>4. 批量查询</Text>
+                        <Text strong>5. 批量查询</Text>
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           任意 COD 列表可用「批量查询订单号」跨状态定位订单（换行、逗号或分号分隔均可）。
                         </Paragraph>
@@ -299,7 +324,7 @@ export function DashboardPage() {
                 </li>
                 <li>
                   <Text strong>财务 Excel</Text>
-                  ：在「已签收」使用「导出财务 Excel」，按最近更新时间筛选，可按归属成员与商品过滤。
+                  ：在「已发货」使用「导出财务 Excel」，按最近更新时间筛选，可按归属成员与商品过滤。
                 </li>
                 <li>若提示达到导出上限，请缩小时间范围或筛选条件后重试。</li>
               </ol>

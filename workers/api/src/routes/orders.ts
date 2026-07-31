@@ -118,7 +118,7 @@ function actorFrom(c: { get: (k: keyof Variables) => string }) {
 type Actor = ReturnType<typeof actorFrom>;
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
-/** COD 待审核订单：通过 → 待发货；拒绝 → 已取消 */
+/** COD 待审核订单：通过 → 待确认；拒绝 → 已取消 */
 async function applyCodPendingReview(
   supabase: ServiceClient,
   order: {
@@ -146,7 +146,7 @@ async function applyCodPendingReview(
 
   const nextReview = decision as ReviewStatus;
   const nextFulfillment =
-    nextReview === "approved" ? "awaiting_shipment" : "cancelled";
+    nextReview === "approved" ? "awaiting_confirm" : "cancelled";
   const patch: Record<string, unknown> = {
     review_status: nextReview,
     status: nextFulfillment,
@@ -185,10 +185,69 @@ async function applyCodPendingReview(
       toValue: nextFulfillment,
       remark:
         nextReview === "approved"
-          ? "COD 审核通过，自动进入待发货"
+          ? "COD 审核通过，自动进入待确认"
           : reason || "标记为无效订单",
     });
   }
+
+  return { ok: true };
+}
+
+/** COD 待确认 → 待发货 */
+async function applyCodConfirm(
+  supabase: ServiceClient,
+  order: {
+    id: string;
+    status: string;
+    payment_type: string;
+    review_status: string;
+  },
+  actor: Actor,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (order.payment_type !== "cod") {
+    return { ok: false, error: "非货到付款订单不可确认" };
+  }
+  if (order.status !== "awaiting_confirm") {
+    return { ok: false, error: "仅待确认订单可确认" };
+  }
+  if (order.review_status !== "approved") {
+    return { ok: false, error: "订单审核未通过，无法确认" };
+  }
+
+  const from = order.status as OrderStatus;
+  const to: OrderStatus = "awaiting_shipment";
+  if (!canTransitionOrder(from, to)) {
+    return { ok: false, error: `不允许从「${from}」变更为「${to}」` };
+  }
+  if (
+    !canAdvanceCodOrder(
+      order.payment_type as PaymentType,
+      order.review_status as ReviewStatus,
+      to,
+    )
+  ) {
+    return { ok: false, error: "状态变更不符合支付类别或审核规则" };
+  }
+
+  const { error: updateError } = await supabase
+    .from("orders")
+    .update({
+      status: to,
+      updated_by: actor.id,
+    })
+    .eq("id", order.id);
+
+  if (updateError) return { ok: false, error: updateError.message };
+
+  await writeAuditLog(supabase, {
+    entityType: "order",
+    entityId: order.id,
+    action: "status_change",
+    actor,
+    fromValue: from,
+    toValue: to,
+    remark: "确认订单，进入待发货",
+  });
 
   return { ok: true };
 }
@@ -519,9 +578,11 @@ ordersRoutes.get("/", async (c) => {
 ordersRoutes.get("/finance-export/meta", async (c) => {
   const statusRaw = c.req.query("status")?.trim();
   const status =
-    statusRaw === "cod_shipped" || statusRaw === "cod_completed"
+    statusRaw === "cod_shipped" ||
+    statusRaw === "cod_completed" ||
+    statusRaw === "awaiting_confirm"
       ? statusRaw
-      : "cod_completed";
+      : "cod_shipped";
 
   const supabase = createServiceClient(c.env);
 
@@ -580,7 +641,7 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
 });
 
 /**
- * 已签收订单财务导出数据（对齐财务系统导出模板列）。
+ * 已发货订单财务导出数据（对齐财务系统导出模板列）。
  * 管理员可按归属成员多选；所有人可按有权限的商品多选。
  */
 ordersRoutes.post("/finance-export", async (c) => {
@@ -640,7 +701,7 @@ ordersRoutes.post("/finance-export", async (c) => {
     .from("orders")
     .select(FINANCE_EXPORT_SELECT)
     .eq("payment_type", "cod")
-    .eq("status", "cod_completed")
+    .eq("status", "cod_shipped")
     .gte("updated_at", from.iso)
     .lte("updated_at", to.iso)
     .order("created_at", { ascending: false })
@@ -701,7 +762,7 @@ function asNumberOrEmpty(value: unknown): number | "" {
 }
 
 /**
- * 已发货 / 已签收物流导出（对齐极兔物流导入模板列）。
+ * 待确认 / 已发货 / 已签收物流导出（对齐极兔物流导入模板列）。
  * 电商订单号 = 系统订单号；另附物流订单号（运单号）。
  */
 ordersRoutes.post("/logistics-export", async (c) => {
@@ -714,11 +775,13 @@ ordersRoutes.post("/logistics-export", async (c) => {
   };
 
   const status =
-    body.status === "cod_shipped" || body.status === "cod_completed"
+    body.status === "cod_shipped" ||
+    body.status === "cod_completed" ||
+    body.status === "awaiting_confirm"
       ? body.status
       : null;
   if (!status) {
-    return c.json({ error: "仅支持已发货或已签收导出" }, 400);
+    return c.json({ error: "仅支持待确认、已发货或已签收导出" }, 400);
   }
 
   const from = parseDateBound(body.date_from, "开始日期");
@@ -1161,6 +1224,142 @@ ordersRoutes.post("/batch-review", async (c) => {
       actor,
       body.remark,
     );
+    if (result.ok) succeeded.push(id);
+    else failed.push({ id, error: result.error });
+  }
+
+  return c.json({ succeeded, failed });
+});
+
+/** 批量填写订单备注 */
+ordersRoutes.post("/batch-remark", async (c) => {
+  const body = (await c.req.json()) as { ids?: unknown; remark?: unknown };
+  const actor = actorFrom(c);
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要填写备注的订单" }, 400);
+  }
+  if (body.ids.length > 100) {
+    return c.json({ error: "单次最多填写 100 笔订单备注" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  if (body.remark !== undefined && body.remark !== null && typeof body.remark !== "string") {
+    return c.json({ error: "备注格式无效" }, 400);
+  }
+  const remark =
+    typeof body.remark === "string" ? body.remark.trim() || null : null;
+  if (remark && remark.length > 500) {
+    return c.json({ error: "备注过长" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("id, remark, product_id")
+    .in("id", ids);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const succeeded: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  for (const id of ids) {
+    const order = byId.get(id);
+    if (!order) {
+      failed.push({ id, error: "订单不存在" });
+      continue;
+    }
+    try {
+      const access = await assertOrderAccess(supabase, order, c);
+      if (!access.ok) {
+        failed.push({ id, error: access.error });
+        continue;
+      }
+    } catch (e) {
+      failed.push({
+        id,
+        error: e instanceof Error ? e.message : "权限校验失败",
+      });
+      continue;
+    }
+
+    const { error: updateError } = await supabase
+      .from("orders")
+      .update({ remark, updated_by: actor.id })
+      .eq("id", id);
+
+    if (updateError) {
+      failed.push({ id, error: updateError.message });
+      continue;
+    }
+
+    await writeAuditLog(supabase, {
+      entityType: "order",
+      entityId: id,
+      action: "remark_update",
+      actor,
+      fromValue: order.remark ?? null,
+      toValue: remark,
+    });
+    succeeded.push(id);
+  }
+
+  return c.json({ succeeded, failed });
+});
+
+/** COD 待确认批量确认 → 待发货 */
+ordersRoutes.post("/batch-confirm", async (c) => {
+  const body = (await c.req.json()) as { ids?: unknown };
+  const actor = actorFrom(c);
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要确认的订单" }, 400);
+  }
+  if (body.ids.length > 100) {
+    return c.json({ error: "单次最多确认 100 笔订单" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("id, status, payment_type, review_status, product_id")
+    .in("id", ids);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const succeeded: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  for (const id of ids) {
+    const order = byId.get(id);
+    if (!order) {
+      failed.push({ id, error: "订单不存在" });
+      continue;
+    }
+    try {
+      const access = await assertOrderAccess(supabase, order, c);
+      if (!access.ok) {
+        failed.push({ id, error: access.error });
+        continue;
+      }
+    } catch (e) {
+      failed.push({
+        id,
+        error: e instanceof Error ? e.message : "权限校验失败",
+      });
+      continue;
+    }
+    const result = await applyCodConfirm(supabase, order, actor);
     if (result.ok) succeeded.push(id);
     else failed.push({ id, error: result.error });
   }

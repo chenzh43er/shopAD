@@ -71,6 +71,10 @@ export function AdminLayout() {
             label: <Link to="/cod/pending_review">待审核</Link>,
           },
           {
+            key: "/cod/awaiting_confirm",
+            label: <Link to="/cod/awaiting_confirm">待确认</Link>,
+          },
+          {
             key: "/cod/awaiting_shipment",
             label: <Link to="/cod/awaiting_shipment">待发货</Link>,
           },

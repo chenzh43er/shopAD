@@ -5,6 +5,7 @@ export const ORDER_STATUSES = [
   "pending",
   "paid",
   "awaiting_review",
+  "awaiting_confirm",
   "awaiting_shipment",
   "shipped",
   "cod_shipped",
@@ -36,6 +37,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   pending: "待支付",
   paid: "已支付",
   awaiting_review: "待审核",
+  awaiting_confirm: "待确认",
   awaiting_shipment: "待发货",
   shipped: "已发货",
   cod_shipped: "已发货",
@@ -61,7 +63,8 @@ export const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
 export const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   pending: ["paid", "cancelled"],
   paid: ["shipped", "cancelled"],
-  awaiting_review: ["awaiting_shipment", "cancelled"],
+  awaiting_review: ["awaiting_confirm", "cancelled"],
+  awaiting_confirm: ["awaiting_shipment", "cancelled"],
   awaiting_shipment: ["shipped", "cod_shipped", "cancelled"],
   shipped: ["completed"],
   // 已发货仅可 → 已签收 / 拒绝签收（与「无效订单」无关）
@@ -81,8 +84,8 @@ export function canTransitionOrder(
 
 /**
  * 按支付类别过滤可流转状态：
- * - COD：待审核 → 待发货 → 已发货 → 已签收 / 拒绝签收
- * - 无效订单（cancelled）仅用于待审核 / 待发货阶段，与拒绝签收（cod_refused）不同
+ * - COD：待审核 → 待确认 → 待发货 → 已发货 → 已签收 / 拒绝签收
+ * - 无效订单（cancelled）仅用于待审核 / 待确认 / 待发货阶段，与拒绝签收（cod_refused）不同
  * - 非 COD：走 pending/paid/shipped/completed，不使用 COD 专用状态
  */
 export function canAdvanceCodOrder(
@@ -103,6 +106,7 @@ export function canAdvanceCodOrder(
     if (to === "cancelled") return true;
     if (to === "awaiting_review") return true;
     if (
+      to === "awaiting_confirm" ||
       to === "awaiting_shipment" ||
       to === "cod_shipped" ||
       to === "cod_completed" ||
@@ -114,6 +118,7 @@ export function canAdvanceCodOrder(
   }
   if (
     to === "awaiting_review" ||
+    to === "awaiting_confirm" ||
     to === "awaiting_shipment" ||
     to === "cod_shipped" ||
     to === "cod_completed" ||

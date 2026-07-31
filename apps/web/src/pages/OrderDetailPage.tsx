@@ -36,6 +36,7 @@ const statusColor: Record<OrderStatus, string> = {
   pending: "default",
   paid: "processing",
   awaiting_review: "orange",
+  awaiting_confirm: "geekblue",
   awaiting_shipment: "gold",
   shipped: "blue",
   cod_shipped: "cyan",
@@ -82,6 +83,7 @@ function resolveCodListPath(order: Order): string {
   if (order.review_status === "pending" || order.status === "awaiting_review") {
     return "/cod/pending_review";
   }
+  if (order.status === "awaiting_confirm") return "/cod/awaiting_confirm";
   if (order.status === "awaiting_shipment") return "/cod/awaiting_shipment";
   if (order.status === "cod_shipped") return "/cod/shipped";
   if (order.status === "cod_completed") return "/cod/completed";
@@ -311,13 +313,16 @@ export function OrderDetailPage() {
   const paymentType = (order.payment_type ?? "cod") as PaymentType;
   const reviewStatus = (order.review_status ?? "pending") as ReviewStatus;
   const needsReview = paymentType === "cod" && reviewStatus === "pending";
+  const canConfirm =
+    order.status === "awaiting_confirm" && reviewStatus === "approved";
   const canShip =
     order.status === "awaiting_shipment" &&
     reviewStatus === "approved";
   const canConfirmReceive = order.status === "cod_shipped";
-  // 无效订单仅待审核 / 待发货可标记；已发货只能签收或拒绝签收
+  // 无效订单仅待审核 / 待确认 / 待发货可标记；已发货只能签收或拒绝签收
   const canMarkInvalid =
     order.status === "awaiting_review" ||
+    order.status === "awaiting_confirm" ||
     order.status === "awaiting_shipment";
   const lineTotal = Number(order.unit_price) * Number(order.quantity || 0);
   const backPath = fromPath || resolveCodListPath(order);
@@ -475,8 +480,8 @@ export function OrderDetailPage() {
                       method: "PATCH",
                       body: JSON.stringify({ decision: "approved" }),
                     });
-                    message.success("审核已通过，订单已进入待发货");
-                    goToCodList("/cod/awaiting_shipment");
+                    message.success("审核已通过，订单已进入待确认");
+                    goToCodList("/cod/awaiting_confirm");
                   } catch (e) {
                     message.error(e instanceof Error ? e.message : "审核失败");
                   } finally {
@@ -527,10 +532,61 @@ export function OrderDetailPage() {
             <p style={{ color: "var(--muted)" }}>
               {REVIEW_STATUS_LABELS[reviewStatus]}
               {reviewStatus === "approved"
-                ? "，订单已进入待发货，可继续发货流转"
+                ? "，订单已通过审核，可继续后续流转"
                 : ""}
             </p>
           )}
+        </>
+      ) : null}
+
+      {canConfirm ? (
+        <>
+          <h2 style={{ marginTop: 28, fontSize: 16 }}>确认</h2>
+          <div
+            style={{
+              marginBottom: 16,
+              padding: 16,
+              background: "#f0f5ff",
+              border: "1px solid #adc6ff",
+              borderRadius: 8,
+            }}
+          >
+            <p style={{ marginBottom: 12 }}>
+              当前为待确认。确认后订单将进入待发货。
+            </p>
+            <Space wrap>
+              <Button
+                type="primary"
+                loading={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await apiFetch(`/api/orders/${order.id}/status`, {
+                      method: "PATCH",
+                      body: JSON.stringify({ status: "awaiting_shipment" }),
+                    });
+                    message.success("已确认，订单进入待发货");
+                    goToCodList("/cod/awaiting_shipment");
+                  } catch (e) {
+                    message.error(e instanceof Error ? e.message : "确认失败");
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                确认订单
+              </Button>
+              {canMarkInvalid ? (
+                <Button
+                  danger
+                  loading={saving}
+                  onClick={() => openInvalidModal("status")}
+                >
+                  标记无效订单
+                </Button>
+              ) : null}
+            </Space>
+          </div>
         </>
       ) : null}
 
