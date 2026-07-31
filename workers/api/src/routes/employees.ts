@@ -334,3 +334,38 @@ employeesRoutes.patch("/:id", async (c) => {
   };
   return c.json(profile);
 });
+
+employeesRoutes.delete("/:id", async (c) => {
+  const id = c.req.param("id");
+  if (id === c.get("userId")) {
+    return c.json({ error: "不能删除自己的账号" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+
+  let existing: ProfileRow | null;
+  try {
+    existing = await fetchProfileRow(supabase, id);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "加载员工失败" },
+      500,
+    );
+  }
+  if (!existing) return c.json({ error: "员工不存在" }, 404);
+
+  if (normalizeUserRole(existing.role) === "super_admin") {
+    const { count, error: countError } = await supabase
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .eq("role", "super_admin");
+    if (countError) return c.json({ error: countError.message }, 500);
+    if ((count ?? 0) <= 1) {
+      return c.json({ error: "不能删除最后一个超级管理员" }, 400);
+    }
+  }
+
+  const { error } = await supabase.auth.admin.deleteUser(id);
+  if (error) return c.json({ error: error.message }, 400);
+  return c.json({ ok: true });
+});

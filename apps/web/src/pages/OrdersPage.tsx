@@ -193,6 +193,8 @@ export function OrdersPage() {
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
+  const [invalidModalOpen, setInvalidModalOpen] = useState(false);
+  const [invalidReason, setInvalidReason] = useState("");
 
   const [shipModalOpen, setShipModalOpen] = useState(false);
   const [shipRows, setShipRows] = useState<ShipExcelRow[]>([]);
@@ -228,7 +230,11 @@ export function OrdersPage() {
   const isInvalidTab = activeCodTab === "invalid";
   const isBatchQuery = batchOrderNos.length > 0;
   const enableRowSelection =
-    isPendingReview || isAwaitingConfirmTab || isShippedTab;
+    isPendingReview ||
+    isAwaitingConfirmTab ||
+    isAwaitingShipmentTab ||
+    isShippedTab ||
+    isInvalidTab;
   const exportOrderStatus:
     | "awaiting_confirm"
     | "cod_shipped"
@@ -460,6 +466,58 @@ export function OrdersPage() {
     setRemarkModalOpen(true);
   };
 
+  const openInvalidModal = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要转无效的订单");
+      return;
+    }
+    setInvalidReason("");
+    setInvalidModalOpen(true);
+  };
+
+  const submitBatchInvalidate = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要转无效的订单");
+      return;
+    }
+    const reason = invalidReason.trim();
+    if (!reason) {
+      message.warning("请填写拒绝理由");
+      return;
+    }
+    setBatching(true);
+    try {
+      const res = await apiFetch<{
+        succeeded: string[];
+        failed: Array<{ id: string; error: string }>;
+      }>("/api/orders/batch-invalidate", {
+        method: "POST",
+        body: JSON.stringify({
+          ids: selectedRowKeys,
+          reject_reason: reason,
+        }),
+      });
+      const ok = res.succeeded.length;
+      const fail = res.failed.length;
+      if (fail === 0) {
+        message.success(`已转无效 ${ok} 笔订单`);
+      } else {
+        const detail = res.failed[0]?.error
+          ? `：${res.failed[0].error}`
+          : "";
+        message.warning(`转无效 ${ok} 笔，失败 ${fail} 笔${detail}`);
+      }
+      setInvalidModalOpen(false);
+      setInvalidReason("");
+      setSelectedRowKeys([]);
+      await load();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "批量转无效失败");
+    } finally {
+      setBatching(false);
+    }
+  };
+
   const submitBatchRemark = async () => {
     if (selectedRowKeys.length === 0) {
       message.warning("请先勾选要填写备注的订单");
@@ -564,6 +622,47 @@ export function OrdersPage() {
           await load();
         } catch (e) {
           message.error(e instanceof Error ? e.message : "批量拒绝签收失败");
+        } finally {
+          setBatching(false);
+        }
+      },
+    });
+  };
+
+  const batchReopen = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要恢复的订单");
+      return;
+    }
+    Modal.confirm({
+      title: "批量恢复原先状态",
+      content: `确认将选中的 ${selectedRowKeys.length} 笔无效订单恢复为作废前的状态？`,
+      okText: "确认恢复",
+      cancelText: "取消",
+      onOk: async () => {
+        setBatching(true);
+        try {
+          const res = await apiFetch<{
+            succeeded: Array<{ id: string; restored_status: OrderStatus }>;
+            failed: Array<{ id: string; error: string }>;
+          }>("/api/orders/batch-reopen", {
+            method: "POST",
+            body: JSON.stringify({ ids: selectedRowKeys }),
+          });
+          const ok = res.succeeded.length;
+          const fail = res.failed.length;
+          if (fail === 0) {
+            message.success(`已恢复 ${ok} 笔订单`);
+          } else {
+            const detail = res.failed[0]?.error
+              ? `：${res.failed[0].error}`
+              : "";
+            message.warning(`恢复 ${ok} 笔，失败 ${fail} 笔${detail}`);
+          }
+          setSelectedRowKeys([]);
+          await load();
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "批量恢复失败");
         } finally {
           setBatching(false);
         }
@@ -1075,6 +1174,15 @@ export function OrdersPage() {
               批量通过
               {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
             </Button>
+            <Button
+              danger
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={openInvalidModal}
+            >
+              批量转无效订单
+              {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+            </Button>
           </>
         ) : null}
         {isAwaitingConfirmTab ? (
@@ -1089,6 +1197,15 @@ export function OrdersPage() {
               {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
             </Button>
             <Button
+              danger
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={openInvalidModal}
+            >
+              批量转无效订单
+              {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+            </Button>
+            <Button
               icon={<DownloadOutlined />}
               onClick={() => void openExportModal("logistics")}
             >
@@ -1097,9 +1214,20 @@ export function OrdersPage() {
           </>
         ) : null}
         {isAwaitingShipmentTab ? (
-          <Button type="primary" onClick={() => void openShipModal()}>
-            批量发货
-          </Button>
+          <>
+            <Button type="primary" onClick={() => void openShipModal()}>
+              批量发货
+            </Button>
+            <Button
+              danger
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={openInvalidModal}
+            >
+              批量转无效订单
+              {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+            </Button>
+          </>
         ) : null}
         {isShippedTab ? (
           <>
@@ -1141,6 +1269,17 @@ export function OrdersPage() {
             导出物流 Excel
           </Button>
         ) : null}
+        {isInvalidTab ? (
+          <Button
+            type="primary"
+            disabled={selectedRowKeys.length === 0}
+            loading={batching}
+            onClick={batchReopen}
+          >
+            批量恢复原先状态
+            {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+          </Button>
+        ) : null}
       </Space>
       <Modal
         title="批量填写备注"
@@ -1173,6 +1312,40 @@ export function OrdersPage() {
             maxLength={INPUT_LIMITS.remark}
             showCount
             allowClear
+          />
+        </div>
+      </Modal>
+      <Modal
+        title="批量转无效订单"
+        open={invalidModalOpen}
+        onCancel={() => {
+          if (batching) return;
+          setInvalidModalOpen(false);
+          setInvalidReason("");
+        }}
+        onOk={() => void submitBatchInvalidate()}
+        okText={
+          selectedRowKeys.length > 0
+            ? `确认无效（${selectedRowKeys.length}）`
+            : "确认无效"
+        }
+        okButtonProps={{ danger: true, disabled: !invalidReason.trim() }}
+        cancelText="取消"
+        confirmLoading={batching}
+        destroyOnClose
+      >
+        <p style={{ color: "#666", marginBottom: 8 }}>
+          将选中的 {selectedRowKeys.length}{" "}
+          笔订单标记为无效，请填写拒绝理由（必填）。
+        </p>
+        <div style={{ marginBottom: 24 }}>
+          <Input.TextArea
+            value={invalidReason}
+            onChange={(e) => setInvalidReason(e.target.value)}
+            placeholder="例如：地址无法联系 / 客户拒收 / 信息虚假…"
+            rows={4}
+            maxLength={INPUT_LIMITS.remark}
+            showCount
           />
         </div>
       </Modal>

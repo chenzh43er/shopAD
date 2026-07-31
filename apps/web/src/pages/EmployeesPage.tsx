@@ -4,6 +4,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Select,
   Space,
   Switch,
@@ -105,12 +106,36 @@ export function EmployeesPage() {
     {
       title: "操作",
       key: "actions",
-      width: 100,
-      render: (_, row) => (
-        <Button type="link" onClick={() => openEdit(row)}>
-          编辑
-        </Button>
-      ),
+      width: 160,
+      render: (_, row) => {
+        const isSelf = row.id === user?.id;
+        return (
+          <Space>
+            <Button type="link" onClick={() => openEdit(row)}>
+              编辑
+            </Button>
+            <Popconfirm
+              title="确认删除该员工？删除后无法恢复。"
+              disabled={isSelf}
+              onConfirm={async () => {
+                try {
+                  await apiFetch(`/api/employees/${row.id}`, {
+                    method: "DELETE",
+                  });
+                  message.success("已删除");
+                  await load();
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : "删除失败");
+                }
+              }}
+            >
+              <Button type="link" danger disabled={isSelf}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 

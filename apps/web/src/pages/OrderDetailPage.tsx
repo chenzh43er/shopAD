@@ -504,7 +504,7 @@ export function OrderDetailPage() {
               <p style={{ color: "var(--muted)", margin: 0 }}>
                 已标记为无效订单
                 {order.reject_reason ? `：${order.reject_reason}` : "。"}
-                可改回待审核后重新处理。
+                可恢复为作废前的状态后重新处理。
               </p>
               <Button
                 type="primary"
@@ -512,12 +512,17 @@ export function OrderDetailPage() {
                 onClick={async () => {
                   setSaving(true);
                   try {
-                    await apiFetch(`/api/orders/${order.id}/review`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ decision: "reopen" }),
-                    });
-                    message.success("已改回待审核");
-                    goToCodList("/cod/pending_review");
+                    const restored = await apiFetch<Order>(
+                      `/api/orders/${order.id}/review`,
+                      {
+                        method: "PATCH",
+                        body: JSON.stringify({ decision: "reopen" }),
+                      },
+                    );
+                    message.success(
+                      `已恢复为「${ORDER_STATUS_LABELS[restored.status]}」`,
+                    );
+                    goToCodList(resolveCodListPath(restored));
                   } catch (e) {
                     message.error(e instanceof Error ? e.message : "操作失败");
                   } finally {
@@ -525,7 +530,7 @@ export function OrderDetailPage() {
                   }
                 }}
               >
-                改回待审核
+                恢复原先状态
               </Button>
             </Space>
           ) : (

@@ -60,13 +60,27 @@ export async function apiFetch<T>(
     headers,
   });
 
+  const contentType = res.headers.get("content-type") ?? "";
   const text = await res.text();
+  const looksLikeHtml =
+    /^\s*<!doctype html/i.test(text) || /^\s*<html[\s>]/i.test(text);
+
+  // Pages 未配置 VITE_API_BASE_URL 时，/api/* 会回落成 SPA HTML（仍可能是 200）
+  if (looksLikeHtml || (text && !contentType.includes("application/json"))) {
+    throw new ApiError(
+      API_BASE
+        ? `API 返回了非 JSON 响应（${res.status}）。请检查 Worker 是否正常。`
+        : "API 地址未配置：生产环境请设置 VITE_API_BASE_URL 为 Worker 地址后重新构建部署。",
+      res.status === 200 ? 502 : res.status,
+    );
+  }
+
   let payload: unknown = null;
   if (text) {
     try {
       payload = JSON.parse(text);
     } catch {
-      payload = { error: text };
+      throw new ApiError(`API 响应无法解析为 JSON（${res.status}）`, res.status);
     }
   }
 

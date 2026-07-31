@@ -35,6 +35,14 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
         run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY secret" >&2
+            exit 1
+          fi
+          if [ -z "$VITE_API_BASE_URL" ]; then
+            echo "Missing VITE_API_BASE_URL secret (e.g. https://shopad-api.ubeator.workers.dev)" >&2
+            exit 1
+          fi
           pnpm --filter @shopad/shared build
           pnpm --filter @shopad/web build
 

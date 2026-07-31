@@ -193,6 +193,184 @@ async function applyCodPendingReview(
   return { ok: true };
 }
 
+/** COD 订单标记为无效：仅待审核 / 待确认 / 待发货 */
+async function applyCodInvalidate(
+  supabase: ServiceClient,
+  order: {
+    id: string;
+    status: string;
+    payment_type: string;
+    review_status: string;
+  },
+  actor: Actor,
+  rejectReason: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (order.payment_type !== "cod") {
+    return { ok: false, error: "非货到付款订单不可标记无效" };
+  }
+
+  const reason = rejectReason.trim();
+  if (!reason) {
+    return { ok: false, error: "标记无效订单前请填写拒绝理由" };
+  }
+
+  const from = order.status as OrderStatus;
+  if (
+    from !== "awaiting_review" &&
+    from !== "awaiting_confirm" &&
+    from !== "awaiting_shipment"
+  ) {
+    return {
+      ok: false,
+      error: "仅待审核、待确认、待发货订单可标记为无效",
+    };
+  }
+
+  if (from === "awaiting_review" || order.review_status === "pending") {
+    return applyCodPendingReview(supabase, order, "rejected", actor, reason);
+  }
+
+  const to: OrderStatus = "cancelled";
+  if (!canTransitionOrder(from, to)) {
+    return { ok: false, error: `不允许从「${from}」变更为无效订单` };
+  }
+  if (
+    !canAdvanceCodOrder(
+      order.payment_type as PaymentType,
+      order.review_status as ReviewStatus,
+      to,
+    )
+  ) {
+    return { ok: false, error: "当前审核状态不允许标记为无效订单" };
+  }
+
+  const { error: updateError } = await supabase
+    .from("orders")
+    .update({
+      status: to,
+      review_status: "rejected",
+      reject_reason: reason,
+      reviewed_by: actor.id,
+      reviewed_at: new Date().toISOString(),
+      updated_by: actor.id,
+    })
+    .eq("id", order.id);
+
+  if (updateError) return { ok: false, error: updateError.message };
+
+  await writeAuditLog(supabase, {
+    entityType: "order",
+    entityId: order.id,
+    action: "status_change",
+    actor,
+    fromValue: from,
+    toValue: to,
+    remark: reason,
+  });
+
+  return { ok: true };
+}
+
+const REOPENABLE_STATUSES = new Set<OrderStatus>([
+  "awaiting_review",
+  "awaiting_confirm",
+  "awaiting_shipment",
+]);
+
+/** 从审计日志推断无效前的履约状态；找不到则回退待审核 */
+async function resolveStatusBeforeInvalid(
+  supabase: ServiceClient,
+  orderId: string,
+): Promise<OrderStatus> {
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("from_value")
+    .eq("entity_type", "order")
+    .eq("entity_id", orderId)
+    .eq("action", "status_change")
+    .eq("to_value", "cancelled")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("resolveStatusBeforeInvalid failed:", error.message);
+    return "awaiting_review";
+  }
+
+  const from = data?.from_value;
+  if (
+    typeof from === "string" &&
+    REOPENABLE_STATUSES.has(from as OrderStatus)
+  ) {
+    return from as OrderStatus;
+  }
+  return "awaiting_review";
+}
+
+/** COD 无效订单 → 恢复作废前状态 */
+async function applyCodReopen(
+  supabase: ServiceClient,
+  order: {
+    id: string;
+    status: string;
+    payment_type: string;
+    review_status: string;
+  },
+  actor: Actor,
+  remark?: string | null,
+): Promise<{ ok: true; restoredStatus: OrderStatus } | { ok: false; error: string }> {
+  if (order.payment_type !== "cod") {
+    return { ok: false, error: "非货到付款订单无需恢复" };
+  }
+  if (order.review_status !== "rejected" && order.status !== "cancelled") {
+    return { ok: false, error: "仅无效订单可恢复" };
+  }
+
+  const restoredStatus = await resolveStatusBeforeInvalid(supabase, order.id);
+  const nextReview: ReviewStatus =
+    restoredStatus === "awaiting_review" ? "pending" : "approved";
+  const now = new Date().toISOString();
+
+  const { error: updateError } = await supabase
+    .from("orders")
+    .update({
+      status: restoredStatus,
+      review_status: nextReview,
+      reject_reason: null,
+      reviewed_by: nextReview === "approved" ? actor.id : null,
+      reviewed_at: nextReview === "approved" ? now : null,
+      updated_by: actor.id,
+    })
+    .eq("id", order.id);
+
+  if (updateError) return { ok: false, error: updateError.message };
+
+  await writeAuditLog(supabase, {
+    entityType: "order",
+    entityId: order.id,
+    action: "review",
+    actor,
+    fromValue: order.review_status,
+    toValue: nextReview,
+    remark: remark ?? "无效订单恢复原先状态",
+  });
+
+  if (order.status !== restoredStatus) {
+    await writeAuditLog(supabase, {
+      entityType: "order",
+      entityId: order.id,
+      action: "status_change",
+      actor,
+      fromValue: order.status,
+      toValue: restoredStatus,
+      remark: "COD 无效订单恢复原先状态",
+    });
+  }
+
+  return { ok: true, restoredStatus };
+}
+
 /** COD 待确认 → 待发货 */
 async function applyCodConfirm(
   supabase: ServiceClient,
@@ -1367,6 +1545,78 @@ ordersRoutes.post("/batch-confirm", async (c) => {
   return c.json({ succeeded, failed });
 });
 
+/** COD 批量转无效订单（待审核 / 待确认 / 待发货） */
+ordersRoutes.post("/batch-invalidate", async (c) => {
+  const body = (await c.req.json()) as {
+    ids?: unknown;
+    reject_reason?: unknown;
+  };
+  const actor = actorFrom(c);
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要标记无效的订单" }, 400);
+  }
+  if (body.ids.length > 100) {
+    return c.json({ error: "单次最多标记 100 笔订单" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  const rejectReason =
+    typeof body.reject_reason === "string" ? body.reject_reason.trim() : "";
+  if (!rejectReason) {
+    return c.json({ error: "标记无效订单前请填写拒绝理由" }, 400);
+  }
+  if (rejectReason.length > 500) {
+    return c.json({ error: "拒绝理由过长" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("id, status, payment_type, review_status, product_id")
+    .in("id", ids);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const succeeded: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  for (const id of ids) {
+    const order = byId.get(id);
+    if (!order) {
+      failed.push({ id, error: "订单不存在" });
+      continue;
+    }
+    try {
+      const access = await assertOrderAccess(supabase, order, c);
+      if (!access.ok) {
+        failed.push({ id, error: access.error });
+        continue;
+      }
+    } catch (e) {
+      failed.push({
+        id,
+        error: e instanceof Error ? e.message : "权限校验失败",
+      });
+      continue;
+    }
+    const result = await applyCodInvalidate(
+      supabase,
+      order,
+      actor,
+      rejectReason,
+    );
+    if (result.ok) succeeded.push(id);
+    else failed.push({ id, error: result.error });
+  }
+
+  return c.json({ succeeded, failed });
+});
+
 /** COD 已发货批量签收 → 已签收 */
 ordersRoutes.post("/batch-complete", async (c) => {
   const body = (await c.req.json()) as { ids?: unknown };
@@ -1595,6 +1845,64 @@ ordersRoutes.post("/batch-ship", async (c) => {
   return c.json({ succeeded, failed });
 });
 
+/** COD 无效订单批量恢复原先状态 */
+ordersRoutes.post("/batch-reopen", async (c) => {
+  const body = (await c.req.json()) as { ids?: unknown };
+  const actor = actorFrom(c);
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要恢复的订单" }, 400);
+  }
+  if (body.ids.length > 100) {
+    return c.json({ error: "单次最多恢复 100 笔订单" }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("id, status, payment_type, review_status, product_id")
+    .in("id", ids);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const succeeded: Array<{ id: string; restored_status: OrderStatus }> = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  for (const id of ids) {
+    const order = byId.get(id);
+    if (!order) {
+      failed.push({ id, error: "订单不存在" });
+      continue;
+    }
+    try {
+      const access = await assertOrderAccess(supabase, order, c);
+      if (!access.ok) {
+        failed.push({ id, error: access.error });
+        continue;
+      }
+    } catch (e) {
+      failed.push({
+        id,
+        error: e instanceof Error ? e.message : "权限校验失败",
+      });
+      continue;
+    }
+    const result = await applyCodReopen(supabase, order, actor);
+    if (result.ok) {
+      succeeded.push({ id, restored_status: result.restoredStatus });
+    } else {
+      failed.push({ id, error: result.error });
+    }
+  }
+
+  return c.json({ succeeded, failed });
+});
+
 ordersRoutes.patch("/:id/review", async (c) => {
   const id = c.req.param("id");
   const body = (await c.req.json()) as {
@@ -1643,48 +1951,18 @@ ordersRoutes.patch("/:id/review", async (c) => {
         ? body.remark
         : null;
 
-  // 无效订单 → 改回待审核
+  // 无效订单 → 恢复作废前状态
   if (body.decision === "reopen") {
-    if (order.review_status !== "rejected" && order.status !== "cancelled") {
-      return c.json({ error: "仅无效订单可改回待审核" }, 400);
-    }
+    const result = await applyCodReopen(supabase, order, actor, body.remark);
+    if (!result.ok) return c.json({ error: result.error }, 400);
 
-    const { data, error: updateError } = await supabase
+    const { data, error: reloadError } = await supabase
       .from("orders")
-      .update({
-        review_status: "pending",
-        status: "awaiting_review",
-        reviewed_by: null,
-        reviewed_at: null,
-        updated_by: actor.id,
-      })
-      .eq("id", id)
       .select("*")
+      .eq("id", id)
       .single();
 
-    if (updateError) return c.json({ error: updateError.message }, 500);
-
-    await writeAuditLog(supabase, {
-      entityType: "order",
-      entityId: id,
-      action: "review",
-      actor,
-      fromValue: order.review_status,
-      toValue: "pending",
-      remark: body.remark ?? "无效订单改回待审核",
-    });
-
-    if (order.status !== "awaiting_review") {
-      await writeAuditLog(supabase, {
-        entityType: "order",
-        entityId: id,
-        action: "status_change",
-        actor,
-        fromValue: order.status,
-        toValue: "awaiting_review",
-        remark: "COD 无效订单改回待审核",
-      });
-    }
+    if (reloadError) return c.json({ error: reloadError.message }, 500);
 
     return c.json(
       await attachOrderCurrencyOne(
