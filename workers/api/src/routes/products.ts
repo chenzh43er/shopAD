@@ -42,6 +42,7 @@ function isProductStatus(value: unknown): value is ProductStatus {
 const MAX_GALLERY = 20;
 const MAX_DETAIL_IMAGES = 30;
 const MAX_EXTRA_HTML = 20;
+const MAX_DESCRIPTION_ENTRIES = 30;
 
 function normalizeUrlList(
   value: unknown,
@@ -57,7 +58,10 @@ function normalizeUrlList(
   return urls;
 }
 
-function normalizeExtraHtml(value: unknown): string[] | null {
+function normalizeStringList(
+  value: unknown,
+  max: number,
+): string[] | null {
   if (value === undefined) return null;
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -70,7 +74,7 @@ function normalizeExtraHtml(value: unknown): string[] | null {
             .filter((u): u is string => typeof u === "string")
             .map((u) => u.trim())
             .filter(Boolean);
-          if (items.length > MAX_EXTRA_HTML) return null;
+          if (items.length > max) return null;
           return items;
         }
       } catch {
@@ -84,14 +88,26 @@ function normalizeExtraHtml(value: unknown): string[] | null {
     .filter((u): u is string => typeof u === "string")
     .map((u) => u.trim())
     .filter(Boolean);
-  if (items.length > MAX_EXTRA_HTML) return null;
+  if (items.length > max) return null;
   return items;
 }
 
+function normalizeExtraHtml(value: unknown): string[] | null {
+  return normalizeStringList(value, MAX_EXTRA_HTML);
+}
+
+function normalizeDescriptionEntries(value: unknown): string[] | null {
+  return normalizeStringList(value, MAX_DESCRIPTION_ENTRIES);
+}
+
 /** 读库时统一成 string[]（兼容 text 列里的 JSON 字符串） */
-function coerceExtraHtmlField<T extends Record<string, unknown>>(row: T): T {
-  const normalized = normalizeExtraHtml(row.extra_html) ?? [];
-  return { ...row, extra_html: normalized };
+function coerceProductListFields<T extends Record<string, unknown>>(row: T): T {
+  return {
+    ...row,
+    extra_html: normalizeExtraHtml(row.extra_html) ?? [],
+    description_entries:
+      normalizeDescriptionEntries(row.description_entries) ?? [],
+  };
 }
 
 function isExtraHtmlTypeError(message: string): boolean {
@@ -302,7 +318,7 @@ async function withProductExtras(
     (withActors ?? row) as Record<string, unknown> & { id: string },
   );
   return withOwners
-    ? coerceExtraHtmlField(withOwners as Record<string, unknown>)
+    ? coerceProductListFields(withOwners as Record<string, unknown>)
     : withOwners;
 }
 
@@ -320,7 +336,7 @@ async function withProductExtrasList(
     withActors as Array<Record<string, unknown> & { id: string }>,
   );
   return withOwners.map((row) =>
-    coerceExtraHtmlField(row as Record<string, unknown>),
+    coerceProductListFields(row as Record<string, unknown>),
   );
 }
 
@@ -501,6 +517,8 @@ productsRoutes.post("/:id/copy", async (c) => {
     google_conversion_id: source.google_conversion_id ?? null,
     google_label: source.google_label ?? null,
     extra_html: source.extra_html ?? [],
+    description_entries:
+      normalizeDescriptionEntries(source.description_entries) ?? [],
     sku_code: source.sku_code ?? null,
     sku_display: source.sku_display ?? null,
     packages_enabled: Boolean(source.packages_enabled),
@@ -710,6 +728,18 @@ productsRoutes.post("/", async (c) => {
     extraHtml = normalized;
   }
 
+  let descriptionEntries: string[] = [];
+  if (body.description_entries !== undefined) {
+    const normalized = normalizeDescriptionEntries(body.description_entries);
+    if (normalized === null) {
+      return c.json(
+        { error: `描述条目最多 ${MAX_DESCRIPTION_ENTRIES} 条` },
+        400,
+      );
+    }
+    descriptionEntries = normalized;
+  }
+
   const supabase = createServiceClient(c.env);
   const regionResolved = await resolveRegionId(
     supabase,
@@ -754,6 +784,7 @@ productsRoutes.post("/", async (c) => {
     google_conversion_id: body.google_conversion_id?.trim() || null,
     google_label: body.google_label?.trim() || null,
     extra_html: extraHtml as string[] | string,
+    description_entries: descriptionEntries,
     sku_code: body.sku_code?.trim() || null,
     sku_display: body.sku_display?.trim() || null,
     packages_enabled: body.packages_enabled ?? false,
@@ -894,6 +925,16 @@ productsRoutes.put("/:id", async (c) => {
       return c.json({ error: `附加HTML最多 ${MAX_EXTRA_HTML} 条` }, 400);
     }
     patch.extra_html = normalized;
+  }
+  if (body.description_entries !== undefined) {
+    const normalized = normalizeDescriptionEntries(body.description_entries);
+    if (normalized === null) {
+      return c.json(
+        { error: `描述条目最多 ${MAX_DESCRIPTION_ENTRIES} 条` },
+        400,
+      );
+    }
+    patch.description_entries = normalized;
   }
   if (body.sku_code !== undefined) {
     patch.sku_code = body.sku_code?.trim() || null;

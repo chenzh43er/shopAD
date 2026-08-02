@@ -40,8 +40,9 @@ import dayjs from "dayjs";
 const MAX_GALLERY = 20;
 const MAX_DETAIL_IMAGES = 30;
 const MAX_EXTRA_HTML = 20;
+const MAX_DESCRIPTION_ENTRIES = 30;
 
-function normalizeExtraHtmlList(value: unknown): string[] {
+function normalizeStringList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.filter((item): item is string => typeof item === "string");
   }
@@ -62,9 +63,18 @@ function normalizeExtraHtmlList(value: unknown): string[] {
   return [trimmed];
 }
 
+function normalizeExtraHtmlList(value: unknown): string[] {
+  return normalizeStringList(value);
+}
+
+function normalizeDescriptionEntriesList(value: unknown): string[] {
+  return normalizeStringList(value);
+}
+
 interface FormValues {
   name: string;
   description?: string;
+  description_entries?: string[];
   price: number;
   cover_url?: string | null;
   link_suffix?: string;
@@ -268,6 +278,9 @@ export function ProductFormPage() {
         form.setFieldsValue({
           name: data.name,
           description: data.description ?? undefined,
+          description_entries: normalizeDescriptionEntriesList(
+            data.description_entries,
+          ),
           price: Number(data.price),
           cover_url: data.cover_url,
           link_suffix: data.link_suffix ?? undefined,
@@ -379,6 +392,10 @@ export function ProductFormPage() {
     return {
       name,
       description: values.description?.trim() || null,
+      description_entries: (values.description_entries ?? [])
+        .map((item) => item?.trim() || "")
+        .filter(Boolean)
+        .slice(0, MAX_DESCRIPTION_ENTRIES),
       price: values.price ?? 0,
       status: asDraft ? "draft" : "on_sale",
       cover_url: coverUrl,
@@ -428,6 +445,9 @@ export function ProductFormPage() {
       form.setFieldsValue({
         name: updated.name,
         link_suffix: updated.link_suffix ?? undefined,
+        description_entries: normalizeDescriptionEntriesList(
+          updated.description_entries,
+        ),
         extra_html: normalizeExtraHtmlList(updated.extra_html),
         owner_ids: updated.owner_ids ?? updated.owners?.map((o) => o.id) ?? [],
       });
@@ -526,6 +546,7 @@ export function ProductFormPage() {
         sales_count: 0,
         weight: 1,
         packages_enabled: false,
+        description_entries: [],
         extra_html: [],
         ...(!isSuperAdmin && profile?.id
           ? { owner_ids: [profile.id] }
@@ -791,9 +812,73 @@ export function ProductFormPage() {
         <Switch />
       </Form.Item>
       <Form.Item
+        label="商品描述条目"
+        extra={`落地页「Yang Anda Dapatkan」卖点列表，最多 ${MAX_DESCRIPTION_ENTRIES} 条`}
+      >
+        <Form.List name="description_entries">
+          {(fields, { add, remove }) => (
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              {fields.map((field, index) => (
+                <div
+                  key={field.key}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                    width: "100%",
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Form.Item
+                      {...field}
+                      noStyle
+                      rules={[
+                        {
+                          validator: async (_, value) => {
+                            if (
+                              typeof value === "string" &&
+                              value.length > INPUT_LIMITS.mediumText
+                            ) {
+                              throw new Error("单条描述过长");
+                            }
+                          },
+                        },
+                      ]}
+                    >
+                      <Input
+                        maxLength={INPUT_LIMITS.mediumText}
+                        showCount
+                        placeholder={`描述条目 #${index + 1}`}
+                      />
+                    </Form.Item>
+                  </div>
+                  <Button
+                    danger
+                    type="text"
+                    icon={<DeleteOutlined />}
+                    onClick={() => remove(field.name)}
+                    aria-label={`删除第 ${index + 1} 条描述`}
+                  />
+                </div>
+              ))}
+              {fields.length < MAX_DESCRIPTION_ENTRIES ? (
+                <Button
+                  type="dashed"
+                  onClick={() => add("")}
+                  icon={<PlusOutlined />}
+                  block
+                >
+                  添加描述条目
+                </Button>
+              ) : null}
+            </Space>
+          )}
+        </Form.List>
+      </Form.Item>
+      <Form.Item
         label="商品详情"
         name="description"
-        extra="纯文字商品详情描述"
+        extra="纯文字商品详情描述（无描述条目时，落地页可从此解析卖点）"
       >
         <Input.TextArea
           rows={6}

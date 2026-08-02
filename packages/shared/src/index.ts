@@ -214,6 +214,8 @@ export interface Product {
   name: string;
   /** 商品详情（纯文字） */
   description: string | null;
+  /** 商品描述条目（落地页卖点列表） */
+  description_entries: string[];
   price: number;
   /** 关联币种 id */
   currency_id: string | null;
@@ -571,6 +573,7 @@ export interface Paginated<T> {
 export interface CreateProductInput {
   name: string;
   description?: string | null;
+  description_entries?: string[];
   price: number;
   currency_id?: string | null;
   cover_url?: string | null;
@@ -597,6 +600,7 @@ export interface CreateProductInput {
 export interface UpdateProductInput {
   name?: string;
   description?: string | null;
+  description_entries?: string[];
   price?: number;
   currency_id?: string | null;
   cover_url?: string | null;
