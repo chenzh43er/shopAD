@@ -3,6 +3,7 @@ import { requireStaff } from "./middleware/auth";
 import { productsRoutes } from "./routes/products";
 import { packagesRoutes } from "./routes/packages";
 import { ordersRoutes } from "./routes/orders";
+import { registerPublicOrderRoutes } from "./routes/publicOrders";
 import { uploadsRoutes } from "./routes/uploads";
 import { shippersRoutes } from "./routes/shippers";
 import { addressLibrariesRoutes } from "./routes/addressLibraries";
@@ -35,6 +36,9 @@ app.use("*", async (c, next) => {
 app.get("/api/health", (c) =>
   c.json({ ok: true, service: "shopad-api", ts: new Date().toISOString() }),
 );
+
+// 公开查单：无需员工 Token（须挂在鉴权 /api 之前）
+registerPublicOrderRoutes(app);
 
 const api = new Hono<{ Bindings: Env; Variables: Variables }>();
 api.use("*", requireStaff);
