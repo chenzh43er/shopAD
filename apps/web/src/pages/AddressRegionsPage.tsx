@@ -32,6 +32,7 @@ type RegionsRes = Paginated<AddressRegionPath> & {
 
 type CreateForm = {
   name: string;
+  dial_code: string;
   remark?: string;
 };
 
@@ -134,6 +135,7 @@ export function AddressRegionsPage() {
     setEditing(row);
     editForm.setFieldsValue({
       name: row.name,
+      dial_code: row.dial_code ?? "",
       remark: row.remark ?? "",
     });
   };
@@ -200,6 +202,12 @@ export function AddressRegionsPage() {
       title: "地区名称",
       dataIndex: "name",
       width: 160,
+    },
+    {
+      title: "区号",
+      dataIndex: "dial_code",
+      width: 88,
+      render: (v: string | null) => (v ? `+${v}` : "—"),
     },
     {
       title: "备注",
@@ -318,10 +326,11 @@ export function AddressRegionsPage() {
           try {
             const values = await form.validateFields();
             const name = values.name.trim();
+            const dial_code = values.dial_code.trim().replace(/^\+/, "");
             const remark = values.remark?.trim() || null;
             setSaving(true);
 
-            const payload = { name, remark };
+            const payload = { name, dial_code, remark };
 
             if (createFile) {
               const created = await apiFetch<AddressLibrary>(
@@ -375,6 +384,25 @@ export function AddressRegionsPage() {
             <Input
               maxLength={INPUT_LIMITS.name}
               placeholder="如：极兔、印尼"
+              allowClear
+            />
+          </Form.Item>
+          <Form.Item
+            name="dial_code"
+            label="区号"
+            rules={[
+              { required: true, message: "请输入区号" },
+              {
+                pattern: /^[+]?[1-9][0-9]{0,3}$/,
+                message: "区号须为 1–4 位数字，不以 0 开头（如 62）",
+              },
+            ]}
+            extra="国际电话区号，不含国家名；印尼填 62"
+          >
+            <Input
+              maxLength={5}
+              placeholder="如：62"
+              addonBefore="+"
               allowClear
             />
           </Form.Item>
@@ -435,6 +463,7 @@ export function AddressRegionsPage() {
               method: "PATCH",
               body: JSON.stringify({
                 name: values.name.trim(),
+                dial_code: values.dial_code.trim().replace(/^\+/, ""),
                 remark: values.remark?.trim() || null,
               }),
             });
@@ -460,6 +489,20 @@ export function AddressRegionsPage() {
           >
             <Input maxLength={INPUT_LIMITS.name} allowClear />
           </Form.Item>
+          <Form.Item
+            name="dial_code"
+            label="区号"
+            rules={[
+              { required: true, message: "请输入区号" },
+              {
+                pattern: /^[+]?[1-9][0-9]{0,3}$/,
+                message: "区号须为 1–4 位数字，不以 0 开头（如 62）",
+              },
+            ]}
+            extra="国际电话区号；印尼填 62"
+          >
+            <Input maxLength={5} placeholder="如：62" addonBefore="+" allowClear />
+          </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea
               rows={3}
@@ -483,6 +526,7 @@ export function AddressRegionsPage() {
           <>
             <Space wrap style={{ marginBottom: 16 }} size="middle">
               <span>
+                {detail.dial_code ? `+${detail.dial_code} · ` : ""}
                 {detail.max_level > 0 ? `${detail.max_level} 级` : "未导入"}
                 {" · "}
                 {detail.region_count} 个节点

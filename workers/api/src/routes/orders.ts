@@ -84,6 +84,7 @@ function parsePageSize(raw: string | undefined, fallback = 20): number {
 }
 
 const MAX_BATCH_ORDER_NOS = 200;
+const MAX_BATCH_PHONES = 200;
 
 /** 解析批量订单号：支持逗号 / 空白 / 换行分隔 */
 function parseOrderNos(raw: string | undefined): string[] {
@@ -96,6 +97,36 @@ function parseOrderNos(raw: string | undefined): string[] {
     if (result.length >= MAX_BATCH_ORDER_NOS) break;
     seen.add(no);
     result.push(no);
+  }
+  return result;
+}
+
+/** 去掉空格、分隔符与 +，便于匹配入库手机号 */
+function normalizePhoneQuery(raw: string): string {
+  return raw.replace(/[\s\-().+]/g, "").trim();
+}
+
+/**
+ * 搜索用有效数字：去掉前导 0，兼容本地号 08… 与国际号 628… / 861…
+ *（入库一般为国际号不含 +）
+ */
+function phoneSearchDigits(raw: string): string {
+  const n = normalizePhoneQuery(raw);
+  if (!n) return "";
+  return n.replace(/^0+/, "");
+}
+
+/** 解析批量手机号：支持逗号 / 空白 / 换行分隔 */
+function parsePhones(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of raw.split(/[\s,，;；]+/)) {
+    const digits = phoneSearchDigits(part);
+    if (!digits || seen.has(digits)) continue;
+    if (result.length >= MAX_BATCH_PHONES) break;
+    seen.add(digits);
+    result.push(digits);
   }
   return result;
 }
@@ -660,6 +691,8 @@ ordersRoutes.get("/", async (c) => {
   const status = c.req.query("status");
   const orderNo = c.req.query("order_no")?.trim();
   const orderNos = parseOrderNos(c.req.query("order_nos"));
+  const customerPhone = phoneSearchDigits(c.req.query("customer_phone") ?? "");
+  const customerPhones = parsePhones(c.req.query("customer_phones"));
   const reviewStatus = c.req.query("review_status")?.trim();
   const paymentType = c.req.query("payment_type")?.trim();
   const dateFrom = c.req.query("date_from")?.trim();
@@ -685,9 +718,11 @@ ordersRoutes.get("/", async (c) => {
     );
   }
 
-  // 批量订单号精确匹配时，不按子状态收窄，便于跨 Tab 查出结果
+  // 批量订单号 / 手机号匹配时，不按子状态收窄，便于跨 Tab 查出结果
   const batchByOrderNo = orderNos.length > 0;
-  if (!batchByOrderNo && status) {
+  const batchByPhone = !batchByOrderNo && customerPhones.length > 0;
+  const isBatchLookup = batchByOrderNo || batchByPhone;
+  if (!isBatchLookup && status) {
     if (!isOrderStatus(status)) {
       return c.json({ error: `无效的订单状态：${status}` }, 400);
     }
@@ -695,11 +730,20 @@ ordersRoutes.get("/", async (c) => {
   }
   if (batchByOrderNo) {
     query = query.in("order_no", orderNos);
+  } else if (batchByPhone) {
+    // 包含匹配：兼容本地号与国际区号前缀差异
+    query = query.or(
+      customerPhones
+        .map((p) => `customer_phone.ilike.%${p}%`)
+        .join(","),
+    );
   } else if (orderNo) {
     // 前缀匹配可走 order_no btree；中间模糊会全表扫描
     query = query.ilike("order_no", `${orderNo}%`);
+  } else if (customerPhone) {
+    query = query.ilike("customer_phone", `%${customerPhone}%`);
   }
-  if (!batchByOrderNo && reviewStatus) {
+  if (!isBatchLookup && reviewStatus) {
     if (
       reviewStatus !== "not_required" &&
       reviewStatus !== "pending" &&

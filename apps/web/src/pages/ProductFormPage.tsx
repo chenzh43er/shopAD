@@ -76,6 +76,7 @@ interface FormValues {
   sku_code?: string;
   sku_display?: string;
   packages_enabled?: boolean;
+  sales_count?: number;
   weight?: number;
   region_id?: string | null;
   currency_id?: string | null;
@@ -278,6 +279,7 @@ export function ProductFormPage() {
           sku_code: data.sku_code ?? undefined,
           sku_display: data.sku_display ?? undefined,
           packages_enabled: data.packages_enabled ?? false,
+          sales_count: Number(data.sales_count ?? 0),
           weight: Number(data.weight ?? 1),
           region_id: data.region_id ?? undefined,
           currency_id: data.currency_id ?? undefined,
@@ -394,6 +396,7 @@ export function ProductFormPage() {
       sku_code: values.sku_code?.trim() || null,
       sku_display: values.sku_display?.trim() || null,
       packages_enabled: Boolean(values.packages_enabled),
+      sales_count: Math.max(0, Math.floor(Number(values.sales_count ?? 0))),
       weight: values.weight ?? 1,
       region_id: values.region_id || null,
       currency_id: values.currency_id || null,
@@ -520,6 +523,7 @@ export function ProductFormPage() {
       style={{ maxWidth: 720 }}
       initialValues={{
         price: 0,
+        sales_count: 0,
         weight: 1,
         packages_enabled: false,
         extra_html: [],
@@ -613,10 +617,20 @@ export function ProductFormPage() {
           optionFilterProp="label"
           loading={regionsLoading}
           placeholder="请选择地区"
-          options={regions.map((r) => ({
-            value: r.id,
-            label: r.remark ? `${r.name}（${r.remark}）` : r.name,
-          }))}
+          options={regions.map((r) => {
+            const parts = [
+              r.name,
+              r.dial_code ? `+${r.dial_code}` : null,
+              r.remark || null,
+            ].filter(Boolean);
+            return {
+              value: r.id,
+              label:
+                parts.length > 1
+                  ? `${parts[0]}（${parts.slice(1).join(" · ")}）`
+                  : parts[0],
+            };
+          })}
         />
       </Form.Item>
       <Form.Item
@@ -799,6 +813,13 @@ export function ProductFormPage() {
           extra="开启套餐后，实际售价以套餐折扣价为准"
         >
           <InputNumber min={0} precision={2} style={{ width: 160 }} />
+        </Form.Item>
+        <Form.Item
+          label="虚拟销量"
+          name="sales_count"
+          extra="落地页展示用，不会随真实订单增减"
+        >
+          <InputNumber min={0} precision={0} step={1} style={{ width: 160 }} />
         </Form.Item>
         <Form.Item label="默认重量" name="weight">
           <InputNumber min={0} precision={2} style={{ width: 160 }} />

@@ -247,6 +247,8 @@ export interface Product {
   sku_display: string | null;
   /** 是否开启套餐 */
   packages_enabled: boolean;
+  /** 虚拟销量（落地页展示，后台手填） */
+  sales_count: number;
   /** 默认重量（物流导出） */
   weight: number;
   /** 关联地区 id */
@@ -497,6 +499,8 @@ export interface UpsertLogisticsShipperInput {
 export interface AddressLibrary {
   id: string;
   name: string;
+  /** 国际电话区号（不含 +），如印尼 62 */
+  dial_code: string | null;
   /** 备注 */
   remark: string | null;
   /** 最大级数（导入或写入后维护） */
@@ -530,11 +534,14 @@ export interface AddressRegionPath {
 
 export interface CreateAddressLibraryInput {
   name: string;
+  /** 国际电话区号（不含 +），如 62 */
+  dial_code: string;
   remark?: string | null;
 }
 
 export interface UpdateAddressLibraryInput {
   name?: string;
+  dial_code?: string | null;
   remark?: string | null;
 }
 
@@ -579,6 +586,8 @@ export interface CreateProductInput {
   sku_code?: string | null;
   sku_display?: string | null;
   packages_enabled?: boolean;
+  /** 虚拟销量 */
+  sales_count?: number;
   weight?: number;
   region_id?: string | null;
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
@@ -603,6 +612,8 @@ export interface UpdateProductInput {
   sku_code?: string | null;
   sku_display?: string | null;
   packages_enabled?: boolean;
+  /** 虚拟销量 */
+  sales_count?: number;
   weight?: number;
   region_id?: string | null;
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */

@@ -504,6 +504,7 @@ productsRoutes.post("/:id/copy", async (c) => {
     sku_code: source.sku_code ?? null,
     sku_display: source.sku_display ?? null,
     packages_enabled: Boolean(source.packages_enabled),
+    sales_count: Math.max(0, Math.floor(Number(source.sales_count ?? 0))),
     weight: Number(source.weight ?? 1),
     region_id: source.region_id ?? null,
     currency_id: source.currency_id ?? null,
@@ -669,6 +670,15 @@ productsRoutes.post("/", async (c) => {
   if (body.weight !== undefined && (typeof body.weight !== "number" || body.weight < 0)) {
     return c.json({ error: "重量无效" }, 400);
   }
+  if (
+    body.sales_count !== undefined &&
+    (typeof body.sales_count !== "number" ||
+      !Number.isFinite(body.sales_count) ||
+      body.sales_count < 0 ||
+      !Number.isInteger(body.sales_count))
+  ) {
+    return c.json({ error: "销量无效" }, 400);
+  }
 
   let galleryUrls: string[] = [];
   if (body.gallery_urls !== undefined) {
@@ -747,6 +757,7 @@ productsRoutes.post("/", async (c) => {
     sku_code: body.sku_code?.trim() || null,
     sku_display: body.sku_display?.trim() || null,
     packages_enabled: body.packages_enabled ?? false,
+    sales_count: body.sales_count ?? 0,
     weight: body.weight ?? 1,
     region_id: regionResolved.regionId,
     currency_id: currencyResolved.currencyId,
@@ -892,6 +903,17 @@ productsRoutes.put("/:id", async (c) => {
   }
   if (body.packages_enabled !== undefined) {
     patch.packages_enabled = Boolean(body.packages_enabled);
+  }
+  if (body.sales_count !== undefined) {
+    if (
+      typeof body.sales_count !== "number" ||
+      !Number.isFinite(body.sales_count) ||
+      body.sales_count < 0 ||
+      !Number.isInteger(body.sales_count)
+    ) {
+      return c.json({ error: "销量无效" }, 400);
+    }
+    patch.sales_count = body.sales_count;
   }
   if (body.weight !== undefined) {
     if (typeof body.weight !== "number" || body.weight < 0) {

@@ -14,6 +14,7 @@ const MAX_REGION_NAME = 120;
 const MAX_LEVELS = 12;
 const MAX_PATHS = 50000;
 const INSERT_CHUNK = 400;
+const DIAL_CODE_RE = /^[1-9][0-9]{0,3}$/;
 
 type RegionRow = {
   id: string;
@@ -29,6 +30,7 @@ type RegionRow = {
 type LibraryRow = {
   id: string;
   name: string;
+  dial_code: string | null;
   remark: string | null;
   created_at: string;
   updated_at: string;
@@ -40,6 +42,29 @@ function trimName(value: unknown, field: string, max: number): string | null {
   if (!t) return null;
   if (t.length > max) {
     throw new Error(`${field}不能超过 ${max} 个字符`);
+  }
+  return t;
+}
+
+/** 解析国际电话区号（不含 +），如 62 */
+function parseDialCode(
+  value: unknown,
+  opts?: { allowNull?: boolean },
+): string | null {
+  if (value === null || value === undefined || value === "") {
+    if (opts?.allowNull) return null;
+    throw new Error("区号不能为空");
+  }
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error("区号格式无效");
+  }
+  const t = String(value).trim().replace(/^\+/, "");
+  if (!t) {
+    if (opts?.allowNull) return null;
+    throw new Error("区号不能为空");
+  }
+  if (!DIAL_CODE_RE.test(t)) {
+    throw new Error("区号须为 1–4 位数字，且不以 0 开头（如 62）");
   }
   return t;
 }
@@ -127,6 +152,7 @@ async function summarizeLibrary(
   return {
     id: library.id,
     name: library.name,
+    dial_code: library.dial_code ?? null,
     remark: library.remark ?? null,
     max_level: levelRows?.[0]?.level ?? 0,
     region_count: count ?? 0,
@@ -280,12 +306,14 @@ addressLibrariesRoutes.get("/", async (c) => {
 
 addressLibrariesRoutes.post("/", requireSuperAdmin, async (c) => {
   let name: string;
+  let dialCode: string;
   let remark: string | null = null;
   try {
     const body = (await c.req.json()) as CreateAddressLibraryInput;
     const parsed = trimName(body.name, "地区名称", MAX_LIBRARY_NAME);
     if (!parsed) return c.json({ error: "地区名称不能为空" }, 400);
     name = parsed;
+    dialCode = parseDialCode(body.dial_code)!;
     if (body.remark !== undefined && body.remark !== null) {
       if (typeof body.remark !== "string") {
         return c.json({ error: "备注格式无效" }, 400);
@@ -304,7 +332,7 @@ addressLibrariesRoutes.post("/", requireSuperAdmin, async (c) => {
   const supabase = createServiceClient(c.env);
   const { data, error } = await supabase
     .from("address_libraries")
-    .insert({ name, remark })
+    .insert({ name, dial_code: dialCode, remark })
     .select("*")
     .single();
 
@@ -491,6 +519,9 @@ addressLibrariesRoutes.patch("/:id", requireSuperAdmin, async (c) => {
       const parsed = trimName(body.name, "地区名称", MAX_LIBRARY_NAME);
       if (!parsed) return c.json({ error: "地区名称不能为空" }, 400);
       patch.name = parsed;
+    }
+    if (body.dial_code !== undefined) {
+      patch.dial_code = parseDialCode(body.dial_code, { allowNull: true });
     }
     if (body.remark !== undefined) {
       if (body.remark === null) {

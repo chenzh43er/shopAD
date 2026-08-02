@@ -43,6 +43,7 @@ import isoWeek from "dayjs/plugin/isoWeek";
 dayjs.extend(isoWeek);
 
 const MAX_BATCH_ORDER_NOS = 200;
+const MAX_BATCH_PHONES = 200;
 
 /** 解析粘贴的订单号：换行 / 逗号 / 空白 / 分号均可 */
 function parseBatchOrderNos(raw: string): string[] {
@@ -54,6 +55,27 @@ function parseBatchOrderNos(raw: string): string[] {
     if (result.length >= MAX_BATCH_ORDER_NOS) break;
     seen.add(no);
     result.push(no);
+  }
+  return result;
+}
+
+/** 去掉空格、分隔符与 +，并去除前导 0，便于匹配入库手机号 */
+function phoneSearchDigits(raw: string): string {
+  const n = raw.replace(/[\s\-().+]/g, "").trim();
+  if (!n) return "";
+  return n.replace(/^0+/, "");
+}
+
+/** 解析粘贴的手机号：换行 / 逗号 / 空白 / 分号均可 */
+function parseBatchPhones(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of raw.split(/[\s,，;；]+/)) {
+    const digits = phoneSearchDigits(part);
+    if (!digits || seen.has(digits)) continue;
+    if (result.length >= MAX_BATCH_PHONES) break;
+    seen.add(digits);
+    result.push(digits);
   }
   return result;
 }
@@ -180,16 +202,20 @@ export function OrdersPage() {
   const [loading, setLoading] = useState(false);
   const [batching, setBatching] = useState(false);
   const [orderNo, setOrderNo] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const [batchOrderNos, setBatchOrderNos] = useState<string[]>([]);
+  const [batchPhones, setBatchPhones] = useState<string[]>([]);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchPhoneModalOpen, setBatchPhoneModalOpen] = useState(false);
   const [batchDraft, setBatchDraft] = useState("");
+  const [batchPhoneDraft, setBatchPhoneDraft] = useState("");
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [data, setData] = useState<Order[]>([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
-  const pendingBatchNotify = useRef(false);
+  const pendingBatchNotify = useRef<"order_no" | "phone" | null>(null);
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
@@ -228,7 +254,9 @@ export function OrdersPage() {
   const isShippedTab = activeCodTab === "shipped";
   const isCompletedTab = activeCodTab === "completed";
   const isInvalidTab = activeCodTab === "invalid";
-  const isBatchQuery = batchOrderNos.length > 0;
+  const isBatchOrderQuery = batchOrderNos.length > 0;
+  const isBatchPhoneQuery = batchPhones.length > 0;
+  const isBatchQuery = isBatchOrderQuery || isBatchPhoneQuery;
   const enableRowSelection =
     isPendingReview ||
     isAwaitingConfirmTab ||
@@ -278,8 +306,12 @@ export function OrdersPage() {
           params.set("status", filters.status);
         }
         if (orderNo.trim()) params.set("order_no", orderNo.trim());
-      } else {
+        const phone = phoneSearchDigits(customerPhone);
+        if (phone) params.set("customer_phone", phone);
+      } else if (isBatchOrderQuery) {
         params.set("order_nos", batchOrderNos.join(","));
+      } else {
+        params.set("customer_phones", batchPhones.join(","));
       }
       if (dateRange?.[0] && dateRange?.[1]) {
         params.set("date_from", dateRange[0].startOf("day").toISOString());
@@ -292,11 +324,15 @@ export function OrdersPage() {
       setData(res.data);
       setTotal(res.total);
 
-      if (pendingBatchNotify.current) {
-        pendingBatchNotify.current = false;
+      const notifyKind = pendingBatchNotify.current;
+      if (notifyKind) {
+        pendingBatchNotify.current = null;
+        const queryItems =
+          notifyKind === "order_no" ? batchOrderNos : batchPhones;
         if (res.total === 0) {
           message.warning("未找到匹配的订单");
         } else if (
+          notifyKind === "order_no" &&
           res.total < batchOrderNos.length &&
           res.data.length === res.total
         ) {
@@ -308,14 +344,37 @@ export function OrdersPage() {
           message.info(
             `已找到 ${res.total} 笔；未匹配：${preview}${more}`,
           );
+        } else if (
+          notifyKind === "phone" &&
+          res.data.length === res.total
+        ) {
+          const missing = batchPhones.filter(
+            (p) =>
+              !res.data.some((o) =>
+                phoneSearchDigits(o.customer_phone ?? "").includes(p) ||
+                (o.customer_phone ?? "").includes(p),
+              ),
+          );
+          if (missing.length > 0) {
+            const preview = missing.slice(0, 5).join("、");
+            const more =
+              missing.length > 5 ? ` 等 ${missing.length} 个` : "";
+            message.info(
+              `已找到 ${res.total} 笔；未匹配电话：${preview}${more}`,
+            );
+          } else {
+            message.success(
+              `已找到 ${res.total} 笔订单（查询 ${queryItems.length} 个电话）`,
+            );
+          }
         } else {
           message.success(
-            `已找到 ${res.total} 笔订单（查询 ${batchOrderNos.length} 个）`,
+            `已找到 ${res.total} 笔订单（查询 ${queryItems.length} 个）`,
           );
         }
       }
     } catch (e) {
-      pendingBatchNotify.current = false;
+      pendingBatchNotify.current = null;
       message.error(e instanceof Error ? e.message : "加载失败");
     } finally {
       setLoading(false);
@@ -325,8 +384,11 @@ export function OrdersPage() {
     pageSize,
     filters,
     orderNo,
+    customerPhone,
     batchOrderNos,
+    batchPhones,
     isBatchQuery,
+    isBatchOrderQuery,
     dateRange,
   ]);
 
@@ -343,7 +405,16 @@ export function OrdersPage() {
 
   useEffect(() => {
     setSelectedRowKeys([]);
-  }, [activeCodTab, page, pageSize, orderNo, batchOrderNos, dateRange]);
+  }, [
+    activeCodTab,
+    page,
+    pageSize,
+    orderNo,
+    customerPhone,
+    batchOrderNos,
+    batchPhones,
+    dateRange,
+  ]);
 
   const applyBatchQuery = () => {
     const nos = parseBatchOrderNos(batchDraft);
@@ -360,8 +431,11 @@ export function OrdersPage() {
         `单次最多查询 ${MAX_BATCH_ORDER_NOS} 个订单号，已截取前 ${MAX_BATCH_ORDER_NOS} 个`,
       );
     }
-    pendingBatchNotify.current = true;
+    pendingBatchNotify.current = "order_no";
     setOrderNo("");
+    setCustomerPhone("");
+    setBatchPhones([]);
+    setBatchPhoneDraft("");
     setBatchOrderNos(nos);
     setPage(1);
     setPageSize(Math.min(100, Math.max(nos.length, 20)));
@@ -371,6 +445,39 @@ export function OrdersPage() {
   const clearBatchQuery = () => {
     setBatchOrderNos([]);
     setBatchDraft("");
+    setPage(1);
+    setPageSize(20);
+  };
+
+  const applyBatchPhoneQuery = () => {
+    const phones = parseBatchPhones(batchPhoneDraft);
+    if (phones.length === 0) {
+      message.warning("请粘贴至少一个手机号");
+      return;
+    }
+    const rawCount = batchPhoneDraft
+      .split(/[\s,，;；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean).length;
+    if (rawCount > MAX_BATCH_PHONES) {
+      message.warning(
+        `单次最多查询 ${MAX_BATCH_PHONES} 个手机号，已截取前 ${MAX_BATCH_PHONES} 个`,
+      );
+    }
+    pendingBatchNotify.current = "phone";
+    setOrderNo("");
+    setCustomerPhone("");
+    setBatchOrderNos([]);
+    setBatchDraft("");
+    setBatchPhones(phones);
+    setPage(1);
+    setPageSize(Math.min(100, Math.max(phones.length, 20)));
+    setBatchPhoneModalOpen(false);
+  };
+
+  const clearBatchPhoneQuery = () => {
+    setBatchPhones([]);
+    setBatchPhoneDraft("");
     setPage(1);
     setPageSize(20);
   };
@@ -1131,6 +1238,9 @@ export function OrdersPage() {
           style={{ width: 240 }}
           onSearch={(value) => {
             setPage(1);
+            setCustomerPhone("");
+            setBatchPhones([]);
+            setBatchPhoneDraft("");
             setOrderNo(value);
           }}
         />
@@ -1142,7 +1252,29 @@ export function OrdersPage() {
         >
           批量查询订单号
         </Button>
-        {isBatchQuery ? (
+        <Input.Search
+          placeholder="搜索手机号"
+          allowClear
+          disabled={isBatchQuery}
+          maxLength={INPUT_LIMITS.phone}
+          style={{ width: 200 }}
+          onSearch={(value) => {
+            setPage(1);
+            setOrderNo("");
+            setBatchOrderNos([]);
+            setBatchDraft("");
+            setCustomerPhone(value);
+          }}
+        />
+        <Button
+          onClick={() => {
+            setBatchPhoneDraft(batchPhones.join("\n"));
+            setBatchPhoneModalOpen(true);
+          }}
+        >
+          批量查询手机号
+        </Button>
+        {isBatchOrderQuery ? (
           <Tag
             color="blue"
             closable
@@ -1151,7 +1283,19 @@ export function OrdersPage() {
               clearBatchQuery();
             }}
           >
-            批量查询中（{batchOrderNos.length}）
+            批量订单号（{batchOrderNos.length}）
+          </Tag>
+        ) : null}
+        {isBatchPhoneQuery ? (
+          <Tag
+            color="blue"
+            closable
+            onClose={(e) => {
+              e.preventDefault();
+              clearBatchPhoneQuery();
+            }}
+          >
+            批量手机号（{batchPhones.length}）
           </Tag>
         ) : null}
         <Button onClick={() => void load()}>刷新</Button>
@@ -1367,6 +1511,29 @@ export function OrdersPage() {
           value={batchDraft}
           onChange={(e) => setBatchDraft(e.target.value)}
           placeholder={"例如：\nCOD-001\nCOD-002\nCOD-003"}
+          rows={10}
+          allowClear
+        />
+      </Modal>
+      <Modal
+        title="批量查询手机号"
+        open={batchPhoneModalOpen}
+        onCancel={() => setBatchPhoneModalOpen(false)}
+        onOk={applyBatchPhoneQuery}
+        okText="查询"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <p style={{ color: "#666", marginBottom: 8 }}>
+          粘贴手机号，支持换行、逗号或空格分隔；单次最多{" "}
+          {MAX_BATCH_PHONES}{" "}
+          个。可带或不带国际区号、前导 0；批量查询会跨 COD
+          子状态展示匹配结果。
+        </p>
+        <Input.TextArea
+          value={batchPhoneDraft}
+          onChange={(e) => setBatchPhoneDraft(e.target.value)}
+          placeholder={"例如：\n081234567890\n6281234567890\n13200132000"}
           rows={10}
           allowClear
         />

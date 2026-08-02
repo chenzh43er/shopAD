@@ -13,11 +13,13 @@ import {
 } from "antd";
 import {
   CheckCircleOutlined,
+  CloseCircleOutlined,
   DollarOutlined,
   EnvironmentOutlined,
   GlobalOutlined,
   PayCircleOutlined,
   ShoppingOutlined,
+  StopOutlined,
   TeamOutlined,
   TruckOutlined,
 } from "@ant-design/icons";
@@ -47,27 +49,27 @@ const MODULES: ModuleCard[] = [
   },
   {
     title: "COD 待审核",
-    desc: "审核货到付款订单；通过后进入待确认，也可标记为无效订单。",
+    desc: "核对收件信息；可批量通过、批量填备注，或批量转无效订单。",
     to: "/cod/pending_review",
     linkLabel: "进入待审核",
     icon: <DollarOutlined />,
-    tags: ["审核", "批量通过"],
+    tags: ["批量通过", "批量备注", "转无效"],
   },
   {
     title: "COD 待确认",
-    desc: "核对已通过审核的订单；批量确认后进入待发货，并支持导出物流 Excel。",
+    desc: "确认后进入待发货；支持批量确认、转无效，以及导出物流 Excel。",
     to: "/cod/awaiting_confirm",
     linkLabel: "进入待确认",
     icon: <CheckCircleOutlined />,
-    tags: ["批量确认", "物流导出"],
+    tags: ["批量确认", "转无效", "物流导出"],
   },
   {
     title: "COD 待发货",
-    desc: "选择寄件人、填写发货单号与归属成员；支持文本/Excel 批量发货。",
+    desc: "选择寄件人、填写发货单号与归属成员；支持文本/Excel 批量发货或转无效。",
     to: "/cod/awaiting_shipment",
     linkLabel: "进入待发货",
     icon: <TruckOutlined />,
-    tags: ["发货", "批量发货"],
+    tags: ["批量发货", "转无效"],
   },
   {
     title: "已发货 / 签收",
@@ -75,15 +77,23 @@ const MODULES: ModuleCard[] = [
     to: "/cod/shipped",
     linkLabel: "进入已发货",
     icon: <CheckCircleOutlined />,
-    tags: ["签收", "导出"],
+    tags: ["签收", "拒收", "导出"],
+  },
+  {
+    title: "无效订单",
+    desc: "查看已作废订单；可批量恢复为作废前的状态（待审核 / 待确认 / 待发货）。",
+    to: "/cod/invalid",
+    linkLabel: "进入无效订单",
+    icon: <StopOutlined />,
+    tags: ["批量恢复"],
   },
   {
     title: "员工管理",
-    desc: "创建员工账号、调整角色与启用状态（仅超级管理员）。",
+    desc: "创建员工账号、调整角色与启用状态，支持删除账号（仅超级管理员）。",
     to: "/employees",
     linkLabel: "进入员工管理",
     icon: <TeamOutlined />,
-    tags: ["账号", "角色"],
+    tags: ["账号", "角色", "删除"],
     superAdminOnly: true,
   },
   {
@@ -129,8 +139,8 @@ export function DashboardPage() {
             欢迎，{displayName}
           </Title>
           <Paragraph type="secondary" style={{ marginBottom: 12, maxWidth: 720 }}>
-            ShopAD 是面向货到付款（COD）业务的商品与订单管理后台。日常流程为：
-            配置商品 → 审核订单 → 发货 → 签收/拒收，并支持物流与财务导出。
+            ShopAD 是面向货到付款（COD）业务的商品与订单管理后台。主流程为：配置商品
+            → 审核 → 确认 → 发货 → 签收/拒收。待审核至待发货阶段可转无效，无效订单可恢复原先状态；并支持物流与财务导出。
           </Paragraph>
           <Space wrap size={[8, 8]}>
             <Tag color="processing">仅处理 COD 订单</Tag>
@@ -190,7 +200,7 @@ export function DashboardPage() {
           items={[
             {
               title: "待审核",
-              description: "核对地址与信息",
+              description: "核对信息 / 可转无效",
             },
             {
               title: "待确认",
@@ -214,8 +224,16 @@ export function DashboardPage() {
           style={{ marginTop: 16 }}
           type="info"
           showIcon
+          icon={<CloseCircleOutlined />}
           message="无效订单 vs 拒绝签收"
-          description="「无效订单」用于待审核/待确认/待发货阶段作废；「拒绝签收」仅在已发货后使用，二者不可互换。"
+          description={
+            <>
+              「无效订单」仅用于待审核 / 待确认 / 待发货阶段作废，可在{" "}
+              <Link to="/cod/invalid">无效订单</Link>{" "}
+              批量恢复为作废前状态。
+              「拒绝签收」仅在已发货后使用，二者不可互换。
+            </>
+          }
         />
       </Card>
 
@@ -239,7 +257,7 @@ export function DashboardPage() {
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           打开{" "}
                           <Link to="/cod/pending_review">待审核</Link>
-                          ，进入订单详情核对收件信息。通过后进入待确认；异常可标为无效订单。列表支持勾选后「批量通过」。
+                          ，进入订单详情核对收件信息。可通过审核进入待确认；也可「批量通过」「批量填写备注」或「批量转无效订单」（需填写拒绝理由）。
                         </Paragraph>
                       </>
                     ),
@@ -251,8 +269,8 @@ export function DashboardPage() {
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           在{" "}
                           <Link to="/cod/awaiting_confirm">待确认</Link>{" "}
-                          核对订单后批量确认，进入待发货；也可导出物流
-                          Excel 用于后续发货准备。
+                          核对后「批量确认」进入待发货；异常可「批量转无效」。同页可导出物流
+                          Excel，便于发货准备。
                         </Paragraph>
                       </>
                     ),
@@ -264,8 +282,8 @@ export function DashboardPage() {
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           在{" "}
                           <Link to="/cod/awaiting_shipment">待发货</Link>{" "}
-                          或详情页选择寄件人，填写发货订单号与归属成员。也可使用「批量发货」：粘贴文本或上传
-                          Excel（单次最多 200 笔）。
+                          或详情页选择寄件人，填写发货订单号与归属成员。也可「批量发货」：粘贴文本或上传
+                          Excel（单次最多 200 笔）；仍可转无效。
                         </Paragraph>
                       </>
                     ),
@@ -278,7 +296,7 @@ export function DashboardPage() {
                           在{" "}
                           <Link to="/cod/shipped">已发货</Link>{" "}
                           确认客户结果：批量签收进入「已签收」，或标记「拒绝签收」。同页可按时间范围导出物流/财务
-                          Excel。
+                          Excel；「已签收」列表也可导出物流 Excel。
                         </Paragraph>
                       </>
                     ),
@@ -286,7 +304,20 @@ export function DashboardPage() {
                   {
                     children: (
                       <>
-                        <Text strong>5. 批量查询</Text>
+                        <Text strong>5. 无效订单与恢复</Text>
+                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                          在{" "}
+                          <Link to="/cod/invalid">无效订单</Link>{" "}
+                          勾选后「批量恢复原先状态」：系统按审计日志还原作废前状态（待审核
+                          / 待确认 / 待发货）；无记录时回退到待审核。详情页单笔操作同理。
+                        </Paragraph>
+                      </>
+                    ),
+                  },
+                  {
+                    children: (
+                      <>
+                        <Text strong>6. 批量查询</Text>
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           任意 COD 列表可用「批量查询订单号」跨状态定位订单（换行、逗号或分号分隔均可）。
                         </Paragraph>
@@ -303,9 +334,13 @@ export function DashboardPage() {
             children: (
               <ol className="overview-ol">
                 <li>
-                  在 <Link to="/products">商品管理</Link> 点击「新建商品」，填写名称、价格、库存、币种与地区。
+                  在 <Link to="/products">商品管理</Link>{" "}
+                  点击「新建商品」，填写名称、价格、库存、币种与地区。
                 </li>
-                <li>上传封面、图集与详情图；可配置套餐、SKU、外链后缀及广告像素（Facebook / Google）。</li>
+                <li>
+                  上传封面、图集与详情图；可配置套餐、SKU、外链后缀及广告像素（Facebook /
+                  Google）。
+                </li>
                 <li>
                   保存后将状态设为「在售」对外展示；下架或删除请在列表中操作。编辑页可查看操作审计日志。
                 </li>
@@ -319,8 +354,8 @@ export function DashboardPage() {
               <ol className="overview-ol">
                 <li>
                   <Text strong>物流 Excel</Text>
-                  ：在「已发货」或「已签收」使用「导出物流 Excel」，对齐极兔模板；第 1 列为系统订单号，第 2
-                  列为物流运单号。
+                  ：在「待确认」「已发货」或「已签收」使用「导出物流 Excel」，对齐极兔模板；第
+                  1 列为系统订单号，第 2 列为物流运单号。
                 </li>
                 <li>
                   <Text strong>财务 Excel</Text>
@@ -351,7 +386,8 @@ export function DashboardPage() {
                       </li>
                       <li>
                         <Link to="/employees">员工管理</Link>
-                        ：创建员工账号、分配角色（超级管理员 / 员工）并启用或停用。
+                        ：创建员工账号、分配角色（超级管理员 /
+                        员工）、启用/停用，或删除账号。
                       </li>
                     </ol>
                   ),
@@ -365,7 +401,8 @@ export function DashboardPage() {
               <ul className="overview-ul">
                 <li>
                   <Text strong>员工</Text>
-                  ：可管理商品与 COD 订单全流程（审核、发货、签收、导出）。
+                  ：可管理商品与 COD
+                  订单全流程（审核、确认、发货、签收、转无效/恢复、导出）。
                 </li>
                 <li>
                   <Text strong>超级管理员</Text>
