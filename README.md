@@ -127,6 +127,8 @@ Pages 环境变量：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 探活（无需登录） |
+| GET | `/api/orders/by-order-no` | 公开：按订单号查单（无需登录） |
+| GET | `/api/orders/by-phone` | 公开：按手机号查最近一单（无需登录） |
 | GET/POST | `/api/products` | 列表 / 创建 |
 | GET/PUT/DELETE | `/api/products/:id` | 详情 / 更新 / 删除 |
 | PATCH | `/api/products/:id/status` | 上下架 |
@@ -136,7 +138,9 @@ Pages 环境变量：
 | PATCH | `/api/orders/:id/status` | 状态流转 |
 | PATCH | `/api/orders/:id/remark` | 备注 |
 
-除 health 外均需 `Authorization: Bearer <supabase_access_token>`，且用户须在 `profiles` 中为 `admin`。
+公开查单接口文档见 [`workers/api/docs/public-order-lookup.md`](workers/api/docs/public-order-lookup.md)（Word：`workers/api/docs/ShopAD-Order-Lookup-API.docx`）。
+
+除 health 与上述公开查单外，均需 `Authorization: Bearer <supabase_access_token>`，且用户须在 `profiles` 中为员工角色。
 
 ## 安全说明
 
