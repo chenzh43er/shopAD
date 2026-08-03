@@ -67,6 +67,10 @@ export function AdminLayout() {
         label: "COD订单",
         children: [
           {
+            key: "/cod/all",
+            label: <Link to="/cod/all">全部订单</Link>,
+          },
+          {
             key: "/cod/pending_review",
             label: <Link to="/cod/pending_review">待审核</Link>,
           },

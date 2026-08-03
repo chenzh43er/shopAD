@@ -131,6 +131,11 @@ const statusColor: Record<OrderStatus, string> = {
 /** COD 订单子类 */
 export const COD_TABS = [
   {
+    key: "all",
+    label: "全部订单",
+    paymentType: "cod" as const,
+  },
+  {
     key: "pending_review",
     label: "待审核",
     paymentType: "cod" as const,
@@ -216,6 +221,7 @@ export function OrdersPage() {
   const [data, setData] = useState<Order[]>([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
   const pendingBatchNotify = useRef<"order_no" | "phone" | null>(null);
+  const prevCodTabRef = useRef<CodTabKey>(activeCodTab);
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
@@ -248,6 +254,7 @@ export function OrdersPage() {
   const [exportProductIds, setExportProductIds] = useState<string[]>([]);
   const [exportOwners, setExportOwners] = useState<string[]>([]);
 
+  const isAllTab = activeCodTab === "all";
   const isPendingReview = activeCodTab === "pending_review";
   const isAwaitingConfirmTab = activeCodTab === "awaiting_confirm";
   const isAwaitingShipmentTab = activeCodTab === "awaiting_shipment";
@@ -403,6 +410,19 @@ export function OrdersPage() {
     }
   }, [routeTab, navigate]);
 
+  // 从「全部订单」切到子状态（含侧栏）时，清掉跨状态批量条件
+  useEffect(() => {
+    const prev = prevCodTabRef.current;
+    prevCodTabRef.current = activeCodTab;
+    if (prev !== "all" || activeCodTab === "all") return;
+    if (batchOrderNos.length === 0 && batchPhones.length === 0) return;
+    setBatchOrderNos([]);
+    setBatchDraft("");
+    setBatchPhones([]);
+    setBatchPhoneDraft("");
+    setPageSize(20);
+  }, [activeCodTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     setSelectedRowKeys([]);
   }, [
@@ -440,6 +460,10 @@ export function OrdersPage() {
     setPage(1);
     setPageSize(Math.min(100, Math.max(nos.length, 20)));
     setBatchModalOpen(false);
+    // 批量结果跨状态，统一在「全部订单」展示
+    if (activeCodTab !== "all") {
+      navigate("/cod/all");
+    }
   };
 
   const clearBatchQuery = () => {
@@ -473,6 +497,10 @@ export function OrdersPage() {
     setPage(1);
     setPageSize(Math.min(100, Math.max(phones.length, 20)));
     setBatchPhoneModalOpen(false);
+    // 批量结果跨状态，统一在「全部订单」展示
+    if (activeCodTab !== "all") {
+      navigate("/cod/all");
+    }
   };
 
   const clearBatchPhoneQuery = () => {
@@ -1188,7 +1216,9 @@ export function OrdersPage() {
         <h1>COD订单</h1>
       </div>
       <p style={{ color: "#666", marginTop: -8, marginBottom: 12 }}>
-        货到付款订单须网站管理审核通过后，方可发货。可在左侧切换 COD 子状态。
+        {isAllTab
+          ? "展示全部 COD 订单。支持按订单号、手机号搜索，或批量粘贴查询。"
+          : "货到付款订单须网站管理审核通过后，方可发货。可在左侧切换 COD 子状态。"}
       </p>
       <Tabs
         activeKey={activeCodTab}

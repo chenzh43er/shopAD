@@ -17,6 +17,7 @@ export function getOrdersListFrom(): string | null {
 }
 
 export const COD_MENU_PATHS = new Set([
+  "/cod/all",
   "/cod/pending_review",
   "/cod/awaiting_confirm",
   "/cod/awaiting_shipment",
