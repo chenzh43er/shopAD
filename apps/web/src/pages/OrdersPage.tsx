@@ -192,7 +192,7 @@ const DEFAULT_COD_TAB: CodTabKey = "pending_review";
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { profile, user, isSuperAdmin } = useAuth();
+  const { profile, user } = useAuth();
   const { tab: routeTab } = useParams<{ tab?: string }>();
   const defaultOwnerMember =
     profile?.display_name?.trim() ||
@@ -247,12 +247,7 @@ export function OrdersPage() {
   const [exportProducts, setExportProducts] = useState<
     Array<{ id: string; name: string }>
   >([]);
-  const [exportOwnerMembers, setExportOwnerMembers] = useState<string[]>([]);
-  const [exportDateRange, setExportDateRange] = useState<[Dayjs, Dayjs] | null>(
-    null,
-  );
   const [exportProductIds, setExportProductIds] = useState<string[]>([]);
-  const [exportOwners, setExportOwners] = useState<string[]>([]);
 
   const isAllTab = activeCodTab === "all";
   const isPendingReview = activeCodTab === "pending_review";
@@ -819,8 +814,6 @@ export function OrdersPage() {
   const resetExportModal = () => {
     setExportOpen(false);
     setExportProductIds([]);
-    setExportOwners([]);
-    setExportDateRange(null);
   };
 
   const openExportModal = async (kind: "finance" | "logistics") => {
@@ -830,12 +823,6 @@ export function OrdersPage() {
     setExportKind(kind);
     setExportOpen(true);
     setExportProductIds([]);
-    setExportOwners([]);
-    setExportDateRange(
-      dateRange?.[0] && dateRange?.[1]
-        ? [dateRange[0], dateRange[1]]
-        : [dayjs().startOf("month"), dayjs().endOf("month")],
-    );
     setExportMetaLoading(true);
     try {
       const status =
@@ -847,7 +834,6 @@ export function OrdersPage() {
         owner_members: string[];
       }>(`/api/orders/finance-export/meta?status=${status}`);
       setExportProducts(res.products ?? []);
-      setExportOwnerMembers(res.owner_members ?? []);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载导出选项失败");
     } finally {
@@ -856,10 +842,6 @@ export function OrdersPage() {
   };
 
   const submitExport = async () => {
-    if (!exportDateRange?.[0] || !exportDateRange?.[1]) {
-      message.warning("请选择导出时间范围");
-      return;
-    }
     if (exportKind === "logistics" && !exportOrderStatus) {
       message.warning("当前列表不支持物流导出");
       return;
@@ -867,13 +849,24 @@ export function OrdersPage() {
 
     setExporting(true);
     try {
-      const payload = {
-        date_from: exportDateRange[0].startOf("day").toISOString(),
-        date_to: exportDateRange[1].endOf("day").toISOString(),
+      const payload: Record<string, unknown> = {
         product_ids: exportProductIds,
-        owner_members:
-          isSuperAdmin && !isAwaitingConfirmTab ? exportOwners : [],
       };
+
+      // 沿用列表页当前筛选条件（日期 / 单号 / 电话 / 批量查询）
+      if (dateRange?.[0] && dateRange?.[1]) {
+        payload.date_from = dateRange[0].startOf("day").toISOString();
+        payload.date_to = dateRange[1].endOf("day").toISOString();
+      }
+      if (isBatchOrderQuery) {
+        payload.order_nos = batchOrderNos;
+      } else if (isBatchPhoneQuery) {
+        payload.customer_phones = batchPhones;
+      } else {
+        if (orderNo.trim()) payload.order_no = orderNo.trim();
+        const phone = phoneSearchDigits(customerPhone);
+        if (phone) payload.customer_phone = phone;
+      }
 
       if (exportKind === "finance") {
         const res = await apiFetch<{
@@ -892,13 +885,10 @@ export function OrdersPage() {
           "../lib/buildFinanceExcel"
         );
         const { downloadBlob } = await import("../lib/downloadBlob");
-        downloadBlob(
-          buildFinanceExcel(res.data),
-          financeExportFilename(exportDateRange[0], exportDateRange[1]),
-        );
+        downloadBlob(buildFinanceExcel(res.data), financeExportFilename());
         if (res.truncated) {
           message.warning(
-            `已导出前 ${res.total} 笔（达到上限），请缩小时间或筛选条件后重试`,
+            `已导出前 ${res.total} 笔（达到上限），请缩小筛选条件后重试`,
           );
         } else {
           message.success(`已导出 ${res.total} 笔订单`);
@@ -931,16 +921,12 @@ export function OrdersPage() {
             import("../lib/downloadBlob"),
           ]);
         downloadBlob(
-          buildLogisticsExcel(res.data),
-          logisticsExportFilename(
-            exportDateRange[0],
-            exportDateRange[1],
-            statusLabel,
-          ),
+          await buildLogisticsExcel(res.data),
+          logisticsExportFilename(statusLabel),
         );
         if (res.truncated) {
           message.warning(
-            `已导出前 ${res.total} 笔（达到上限），请缩小时间或筛选条件后重试`,
+            `已导出前 ${res.total} 笔（达到上限），请缩小筛选条件后重试`,
           );
         } else {
           message.success(`已导出 ${res.total} 笔订单`);
@@ -1695,65 +1681,27 @@ export function OrdersPage() {
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
           {exportKind === "finance"
-            ? "导出已发货订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。按订单最近更新时间筛选。"
-            : "导出对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。按订单最近更新时间筛选。"}
+            ? "按当前列表筛选条件导出已发货订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
+            : "按当前列表筛选条件导出，对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。可再按商品收窄。"}
         </p>
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
-          <div>
-            <div style={{ marginBottom: 6 }}>
-              时间范围 <span style={{ color: "#ff4d4f" }}>*</span>
-            </div>
-            <RangePicker
-              value={exportDateRange}
-              allowClear={false}
-              presets={DATE_PRESETS}
-              onChange={(values) => {
-                if (values?.[0] && values?.[1]) {
-                  setExportDateRange([values[0], values[1]]);
-                }
-              }}
-              style={{ width: "100%" }}
-            />
-          </div>
-          {isSuperAdmin && !isAwaitingConfirmTab ? (
-            <div>
-              <div style={{ marginBottom: 6 }}>归属成员（可多选）</div>
-              <Select
-                mode="multiple"
-                allowClear
-                showSearch
-                optionFilterProp="label"
-                placeholder="不选则导出全部归属成员"
-                loading={exportMetaLoading}
-                value={exportOwners}
-                onChange={setExportOwners}
-                style={{ width: "100%" }}
-                options={exportOwnerMembers.map((m) => ({
-                  value: m,
-                  label: m,
-                }))}
-              />
-            </div>
-          ) : null}
-          <div>
-            <div style={{ marginBottom: 6 }}>商品（可多选）</div>
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="不选则导出有权限的全部商品"
-              loading={exportMetaLoading}
-              value={exportProductIds}
-              onChange={setExportProductIds}
-              style={{ width: "100%" }}
-              options={exportProducts.map((p) => ({
-                value: p.id,
-                label: p.name || p.id,
-              }))}
-            />
-          </div>
-        </Space>
+        <div>
+          <div style={{ marginBottom: 6 }}>商品（可多选）</div>
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="不选则导出有权限的全部商品"
+            loading={exportMetaLoading}
+            value={exportProductIds}
+            onChange={setExportProductIds}
+            style={{ width: "100%" }}
+            options={exportProducts.map((p) => ({
+              value: p.id,
+              label: p.name || p.id,
+            }))}
+          />
+        </div>
       </Modal>
       <Table
         rowKey="id"

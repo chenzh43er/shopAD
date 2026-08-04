@@ -224,6 +224,10 @@ export interface Product {
     Currency,
     "id" | "code" | "name" | "name_zh" | "symbol" | "symbol_suffix"
   > | null;
+  /** 关联域名 id */
+  domain_id: string | null;
+  /** 关联域名（查询时附带） */
+  domain?: Pick<Domain, "id" | "host" | "name" | "remark"> | null;
   /** 商品封面 */
   cover_url: string | null;
   /** 商品轮播图 */
@@ -465,6 +469,29 @@ export interface UpsertCurrencyInput {
   sort_order?: number;
 }
 
+/** 落地页域名 */
+export interface Domain {
+  id: string;
+  /** 主机名（不含协议），如 shop.example.com */
+  host: string;
+  /** 显示名称 */
+  name: string;
+  /** 备注 */
+  remark: string | null;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertDomainInput {
+  host: string;
+  name?: string;
+  remark?: string | null;
+  enabled?: boolean;
+  sort_order?: number;
+}
+
 /** 物流导出寄件人默认配置 */
 export interface LogisticsShipper {
   id: string;
@@ -593,6 +620,7 @@ export interface CreateProductInput {
   sales_count?: number;
   weight?: number;
   region_id?: string | null;
+  domain_id?: string | null;
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
   owner_ids?: string[];
 }
@@ -620,6 +648,7 @@ export interface UpdateProductInput {
   sales_count?: number;
   weight?: number;
   region_id?: string | null;
+  domain_id?: string | null;
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
   owner_ids?: string[];
 }

@@ -9,6 +9,7 @@ import {
   GlobalOutlined,
   PayCircleOutlined,
   TeamOutlined,
+  LinkOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { USER_ROLE_LABELS } from "@shopad/shared";
@@ -36,6 +37,7 @@ function resolveSelectedKey(
   if (pathname.startsWith("/shippers")) return "/shippers";
   if (pathname.startsWith("/address-regions")) return "/address-regions";
   if (pathname.startsWith("/currencies")) return "/currencies";
+  if (pathname.startsWith("/domains")) return "/domains";
   if (pathname.startsWith("/employees")) return "/employees";
   if (pathname === "/") return "/";
   return "";
@@ -125,6 +127,11 @@ export function AdminLayout() {
         key: "/currencies",
         icon: <PayCircleOutlined />,
         label: <Link to="/currencies">币种管理</Link>,
+      },
+      {
+        key: "/domains",
+        icon: <LinkOutlined />,
+        label: <Link to="/domains">域名管理</Link>,
       },
     ];
   }, [isSuperAdmin]);

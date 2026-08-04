@@ -26,6 +26,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   type AddressLibrary,
   type Currency,
+  type Domain,
   type Product,
   type Profile,
 } from "@shopad/shared";
@@ -90,6 +91,7 @@ interface FormValues {
   weight?: number;
   region_id?: string | null;
   currency_id?: string | null;
+  domain_id?: string | null;
   owner_ids?: string[];
 }
 
@@ -116,6 +118,8 @@ export function ProductFormPage() {
   const [regionsLoading, setRegionsLoading] = useState(false);
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [currenciesLoading, setCurrenciesLoading] = useState(false);
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [domainsLoading, setDomainsLoading] = useState(false);
   const [owners, setOwners] = useState<Profile[]>([]);
   const [ownersLoading, setOwnersLoading] = useState(false);
   const packagesEnabled = Form.useWatch("packages_enabled", form) ?? false;
@@ -184,6 +188,29 @@ export function ProductFormPage() {
       cancelled = true;
     };
   }, [id, form]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setDomainsLoading(true);
+      try {
+        const res = await apiFetch<{ data: Domain[] }>(
+          "/api/domains?enabled=1",
+        );
+        if (cancelled) return;
+        setDomains(res.data);
+      } catch (e) {
+        if (!cancelled) {
+          message.error(e instanceof Error ? e.message : "加载域名失败");
+        }
+      } finally {
+        if (!cancelled) setDomainsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -296,6 +323,7 @@ export function ProductFormPage() {
           weight: Number(data.weight ?? 1),
           region_id: data.region_id ?? undefined,
           currency_id: data.currency_id ?? undefined,
+          domain_id: data.domain_id ?? undefined,
           owner_ids: data.owner_ids ?? data.owners?.map((o) => o.id) ?? [],
         });
         setCoverUrl(data.cover_url);
@@ -417,6 +445,7 @@ export function ProductFormPage() {
       weight: values.weight ?? 1,
       region_id: values.region_id || null,
       currency_id: values.currency_id || null,
+      domain_id: values.domain_id || null,
       ...(isSuperAdmin ? { owner_ids: values.owner_ids ?? [] } : {}),
     };
   };
@@ -676,6 +705,31 @@ export function ProductFormPage() {
           options={currencies.map((c) => ({
             value: c.id,
             label: `${c.code} ${c.symbol} · ${c.name_zh}`,
+          }))}
+        />
+      </Form.Item>
+      <Form.Item
+        label="域名"
+        name="domain_id"
+        rules={[{ required: true, message: "请选择域名" }]}
+        extra={
+          domains.length === 0 && !domainsLoading ? (
+            <span>
+              暂无域名，请先到 <Link to="/domains">域名管理</Link> 新增
+            </span>
+          ) : (
+            "上架前须选择落地页域名"
+          )
+        }
+      >
+        <Select
+          showSearch
+          optionFilterProp="label"
+          loading={domainsLoading}
+          placeholder="请选择域名"
+          options={domains.map((d) => ({
+            value: d.id,
+            label: d.name ? `${d.host}（${d.name}）` : d.host,
           }))}
         />
       </Form.Item>

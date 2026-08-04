@@ -80,10 +80,9 @@ export function buildFinanceExcel(rows: FinanceExportRow[]): Blob {
 }
 
 /** 按导出时刻生成唯一文件名 */
-export function financeExportFilename(from: dayjs.Dayjs, to: dayjs.Dayjs): string {
-  const range = `${from.format("YYYYMMDD")}-${to.format("YYYYMMDD")}`;
+export function financeExportFilename(): string {
   const stamp = dayjs().format("YYYYMMDD_HHmmss");
-  return `财务导出_${range}_${stamp}.xlsx`;
+  return `财务导出_${stamp}.xlsx`;
 }
 
 export { downloadBlob } from "./downloadBlob";

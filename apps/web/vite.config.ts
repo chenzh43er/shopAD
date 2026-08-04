@@ -14,7 +14,7 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
-          if (id.includes("xlsx")) return "xlsx";
+          if (id.includes("xlsx") || id.includes("exceljs")) return "xlsx";
           if (id.includes("@supabase")) return "supabase";
           // Keep react + antd in one chunk to avoid circular chunk
           // (antd -> react -> antd) that breaks React.createContext at runtime.

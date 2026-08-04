@@ -129,7 +129,7 @@ function actorFrom(c: { get: (k: keyof Variables) => string }) {
 }
 
 const PRODUCT_SELECT =
-  "*, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix)";
+  "*, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix), domain:domains!products_domain_id_fkey(id, host, name, remark)";
 
 async function resolveRegionId(
   supabase: ReturnType<typeof createServiceClient>,
@@ -208,6 +208,43 @@ async function resolveCurrencyId(
   if (!data) return { ok: false, error: "所选币种不存在" };
   if (!data.enabled) return { ok: false, error: "所选币种已停用" };
   return { ok: true, currencyId: id };
+}
+
+async function resolveDomainId(
+  supabase: ReturnType<typeof createServiceClient>,
+  domainId: unknown,
+  required: boolean,
+): Promise<
+  { ok: true; domainId: string | null } | { ok: false; error: string }
+> {
+  if (domainId === undefined) {
+    return required
+      ? { ok: false, error: "请选择域名" }
+      : { ok: true, domainId: null };
+  }
+  if (domainId === null || domainId === "") {
+    return required
+      ? { ok: false, error: "请选择域名" }
+      : { ok: true, domainId: null };
+  }
+  if (typeof domainId !== "string") {
+    return { ok: false, error: "域名无效" };
+  }
+  const id = domainId.trim();
+  if (!id) {
+    return required
+      ? { ok: false, error: "请选择域名" }
+      : { ok: true, domainId: null };
+  }
+  const { data, error } = await supabase
+    .from("domains")
+    .select("id, enabled")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "所选域名不存在" };
+  if (!data.enabled) return { ok: false, error: "所选域名已停用" };
+  return { ok: true, domainId: id };
 }
 
 /** 校验并解析所属人列表；仅超级管理员可指定他人，可多名 */
@@ -526,6 +563,7 @@ productsRoutes.post("/:id/copy", async (c) => {
     weight: Number(source.weight ?? 1),
     region_id: source.region_id ?? null,
     currency_id: source.currency_id ?? null,
+    domain_id: source.domain_id ?? null,
     created_by: actor.id,
     updated_by: actor.id,
   };
@@ -757,6 +795,14 @@ productsRoutes.post("/", async (c) => {
   if (!currencyResolved.ok) {
     return c.json({ error: currencyResolved.error }, 400);
   }
+  const domainResolved = await resolveDomainId(
+    supabase,
+    body.domain_id,
+    status === "on_sale",
+  );
+  if (!domainResolved.ok) {
+    return c.json({ error: domainResolved.error }, 400);
+  }
 
   const ownerResolved = await resolveOwnerIds(supabase, {
     userId: c.get("userId"),
@@ -792,6 +838,7 @@ productsRoutes.post("/", async (c) => {
     weight: body.weight ?? 1,
     region_id: regionResolved.regionId,
     currency_id: currencyResolved.currencyId,
+    domain_id: domainResolved.domainId,
     created_by: actor.id,
     updated_by: actor.id,
   };
@@ -968,6 +1015,9 @@ productsRoutes.put("/:id", async (c) => {
   if (body.currency_id !== undefined) {
     patch.currency_id = body.currency_id;
   }
+  if (body.domain_id !== undefined) {
+    patch.domain_id = body.domain_id;
+  }
 
   const supabase = createServiceClient(c.env);
   try {
@@ -1028,6 +1078,18 @@ productsRoutes.put("/:id", async (c) => {
     patch.currency_id = currencyResolved.currencyId;
   }
 
+  if (body.domain_id !== undefined) {
+    const domainResolved = await resolveDomainId(
+      supabase,
+      body.domain_id,
+      false,
+    );
+    if (!domainResolved.ok) {
+      return c.json({ error: domainResolved.error }, 400);
+    }
+    patch.domain_id = domainResolved.domainId;
+  }
+
   const { data: before } = await supabase
     .from("products")
     .select("*")
@@ -1057,6 +1119,13 @@ productsRoutes.put("/:id", async (c) => {
       : (before.currency_id as string | null);
   if (nextStatus === "on_sale" && !nextCurrencyId) {
     return c.json({ error: "上架前请先选择币种" }, 400);
+  }
+  const nextDomainId =
+    patch.domain_id !== undefined
+      ? (patch.domain_id as string | null)
+      : (before.domain_id as string | null);
+  if (nextStatus === "on_sale" && !nextDomainId) {
+    return c.json({ error: "上架前请先选择域名" }, 400);
   }
 
   let { data, error } = await supabase
@@ -1150,7 +1219,7 @@ productsRoutes.patch("/:id/status", async (c) => {
   }
   const { data: before } = await supabase
     .from("products")
-    .select("status, link_suffix, region_id, currency_id")
+    .select("status, link_suffix, region_id, currency_id, domain_id")
     .eq("id", id)
     .maybeSingle();
 
@@ -1163,6 +1232,9 @@ productsRoutes.patch("/:id/status", async (c) => {
   }
   if (body.status === "on_sale" && !before.currency_id) {
     return c.json({ error: "上架前请先选择币种" }, 400);
+  }
+  if (body.status === "on_sale" && !before.domain_id) {
+    return c.json({ error: "上架前请先选择域名" }, 400);
   }
 
   const { data, error } = await supabase

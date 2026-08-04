@@ -1,48 +1,24 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import dayjs from "dayjs";
 
+/**
+ * 极兔物流导入模板：仅标红列取订单数据，其余列按模板固定文本填充。
+ * 标红列：收件人 / 收件人电话 / 收件地区 / 收件地址 / 中文属性*数量 / 备注 / 电商订单号 / 代收货款
+ */
 export type LogisticsExportRow = {
-  weight: number | "";
-  shipper_name: string;
-  shipper_phone: string;
-  shipper_province: string;
-  shipper_city: string;
-  shipper_district: string;
-  shipper_address: string;
-  shipper_address_info: string;
-  consignor_flag: string;
-  consignor_name: string;
-  consignor_phone: string;
   customer_name: string;
   customer_phone: string;
-  shipping_province: string;
-  shipping_city: string;
   shipping_district: string;
-  shipping_detail: string;
-  shipping_address_info: string;
-  payment_method: string;
+  /** 收件地址：省,市,区,明细（对齐模板样例） */
+  shipping_address: string;
   sku_quantity: string;
-  item_category: string;
-  item_value: number | "";
-  insurance_type: string;
-  insurance_flag: string;
-  package_count: number;
-  item_type: string;
   remark: string;
-  /** 系统订单号 → 模板「电商订单号」 */
   order_no: string;
-  /** 运单号 / 物流订单号 */
-  logistics_order_no: string;
   cod_amount: number | "";
-  express_type: string;
-  shipping_fee: number | "";
-  other_fee: number | "";
 };
 
-/** 极兔物流导入模板列；订单号、物流订单号置于最前 */
+/** 与「物流导出模板.xlsx」表头严格一致（A–AF，共 32 列） */
 const HEADERS = [
-  "订单号",
-  "物流订单号",
   "重量",
   "寄件人",
   "寄件人电话",
@@ -77,88 +53,130 @@ const HEADERS = [
   "其它费",
 ] as const;
 
-function displayWidth(value: string | number): number {
-  const s = String(value ?? "");
-  let w = 0;
-  for (const ch of s) {
-    const code = ch.codePointAt(0) ?? 0;
-    w += code > 0xff ? 2 : 1;
-  }
-  return w;
-}
+/** 模板中非标红列的固定填充（取自模板样例行） */
+const FIXED = {
+  weight: "1",
+  shipper_name: "UBT",
+  shipper_phone: "087893521997",
+  shipper_province: "",
+  shipper_city: "JAKARTA",
+  shipper_district: "",
+  shipper_address: "ruko Mutiara Palem  cengkareng Jakarta Barat.",
+  shipper_address_info: "",
+  consignor_flag: "0",
+  consignor_name: "",
+  consignor_phone: "",
+  shipping_province: "",
+  shipping_city: "",
+  shipping_address_info: "",
+  payment_method: "月结",
+  item_category: "",
+  item_value: "",
+  insurance_type: "",
+  insurance_flag: "0",
+  package_count: "1",
+  item_type: "BARANG",
+  express_type: "EZ",
+  shipping_fee: "",
+  other_fee: "",
+} as const;
 
-function colWidth(values: (string | number)[], min = 8, max = 56): number {
-  let widest = min;
-  for (const v of values) {
-    widest = Math.max(widest, displayWidth(v) + 2);
-  }
-  return Math.min(widest, max);
-}
+/** 对齐模板黑字列：宋体 11（导出不标红） */
+const FONT: Partial<ExcelJS.Font> = {
+  name: "宋体",
+  size: 11,
+  color: { argb: "FF000000" },
+  charset: 134,
+};
 
-export function buildLogisticsExcel(rows: LogisticsExportRow[]): Blob {
-  const dataRows = rows.map((r) => [
-    r.order_no,
-    r.logistics_order_no,
-    r.weight,
-    r.shipper_name,
-    r.shipper_phone,
-    r.shipper_province,
-    r.shipper_city,
-    r.shipper_district,
-    r.shipper_address,
-    r.shipper_address_info,
-    r.consignor_flag,
-    r.consignor_name,
-    r.consignor_phone,
+/** 模板列宽均为 20.6；默认行高 13.5 */
+const COL_WIDTH = 20.6;
+const ROW_HEIGHT = 13.5;
+
+function rowValues(r: LogisticsExportRow): (string | number)[] {
+  return [
+    FIXED.weight,
+    FIXED.shipper_name,
+    FIXED.shipper_phone,
+    FIXED.shipper_province,
+    FIXED.shipper_city,
+    FIXED.shipper_district,
+    FIXED.shipper_address,
+    FIXED.shipper_address_info,
+    FIXED.consignor_flag,
+    FIXED.consignor_name,
+    FIXED.consignor_phone,
     r.customer_name,
     r.customer_phone,
-    r.shipping_province,
-    r.shipping_city,
+    FIXED.shipping_province,
+    FIXED.shipping_city,
     r.shipping_district,
-    r.shipping_detail,
-    r.shipping_address_info,
-    r.payment_method,
+    r.shipping_address,
+    FIXED.shipping_address_info,
+    FIXED.payment_method,
     r.sku_quantity,
-    r.item_category,
-    r.item_value,
-    r.insurance_type,
-    r.insurance_flag,
-    r.package_count,
-    r.item_type,
+    FIXED.item_category,
+    FIXED.item_value,
+    FIXED.insurance_type,
+    FIXED.insurance_flag,
+    FIXED.package_count,
+    FIXED.item_type,
     r.remark,
     r.order_no,
-    r.cod_amount,
-    r.express_type,
-    r.shipping_fee,
-    r.other_fee,
-  ]);
+    r.cod_amount === "" ? "" : String(r.cod_amount),
+    FIXED.express_type,
+    FIXED.shipping_fee,
+    FIXED.other_fee,
+  ];
+}
 
-  const sheetRows: (string | number)[][] = [[...HEADERS], ...dataRows];
-  const ws = XLSX.utils.aoa_to_sheet(sheetRows);
+function applyCellStyle(cell: ExcelJS.Cell, opts: { header?: boolean }) {
+  cell.font = { ...FONT };
+  // 模板数据列使用文本格式 @（numFmtId 49）
+  cell.numFmt = "@";
+  cell.alignment = opts.header
+    ? { horizontal: "center", vertical: "middle" }
+    : { vertical: "middle", wrapText: false };
+}
 
-  ws["!cols"] = Array.from({ length: HEADERS.length }, (_, col) => ({
-    wch: colWidth(
-      [HEADERS[col], ...dataRows.map((row) => row[col] ?? "")],
-      col === 18 || col === 8 ? 24 : col <= 1 ? 16 : 8,
-      col === 18 || col === 8 ? 64 : 40,
-    ),
-  }));
-  ws["!rows"] = sheetRows.map((_, i) => ({ hpt: i === 0 ? 22 : 18 }));
+export async function buildLogisticsExcel(
+  rows: LogisticsExportRow[],
+): Promise<Blob> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("物流导出", {
+    properties: { defaultColWidth: 9, defaultRowHeight: ROW_HEIGHT },
+    views: [{ state: "normal", showGridLines: true }],
+  });
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "物流导出");
-  const buffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  for (let i = 1; i <= HEADERS.length; i++) {
+    ws.getColumn(i).width = COL_WIDTH;
+  }
+
+  const headerRow = ws.addRow([...HEADERS]);
+  headerRow.height = ROW_HEIGHT;
+  headerRow.eachCell({ includeEmpty: true }, (cell) => {
+    applyCellStyle(cell, { header: true });
+  });
+
+  for (const r of rows) {
+    const values = rowValues(r);
+    const dataRow = ws.addRow(values);
+    dataRow.height = ROW_HEIGHT;
+    dataRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      applyCellStyle(cell, { header: false });
+      // 强制按文本写入，避免电话/订单号被科学计数
+      const v = values[colNumber - 1];
+      cell.value = v === "" || v == null ? "" : String(v);
+    });
+  }
+
+  const buffer = await wb.xlsx.writeBuffer();
   return new Blob([buffer], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
 }
 
-export function logisticsExportFilename(
-  from: dayjs.Dayjs,
-  to: dayjs.Dayjs,
-  statusLabel: string,
-): string {
-  const range = `${from.format("YYYYMMDD")}-${to.format("YYYYMMDD")}`;
+export function logisticsExportFilename(statusLabel: string): string {
   const stamp = dayjs().format("YYYYMMDD_HHmmss");
-  return `物流导出_${statusLabel}_${range}_${stamp}.xlsx`;
+  return `物流导出_${statusLabel}_${stamp}.xlsx`;
 }

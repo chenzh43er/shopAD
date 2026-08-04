@@ -8,6 +8,7 @@ import { uploadsRoutes } from "./routes/uploads";
 import { shippersRoutes } from "./routes/shippers";
 import { addressLibrariesRoutes } from "./routes/addressLibraries";
 import { currenciesRoutes } from "./routes/currencies";
+import { domainsRoutes } from "./routes/domains";
 import { employeesRoutes, meRoutes } from "./routes/employees";
 import type { Env, Variables } from "./types";
 import { cors } from "hono/cors";
@@ -50,6 +51,7 @@ api.route("/orders", ordersRoutes);
 api.route("/shippers", shippersRoutes);
 api.route("/address-libraries", addressLibrariesRoutes);
 api.route("/currencies", currenciesRoutes);
+api.route("/domains", domainsRoutes);
 api.route("/uploads", uploadsRoutes);
 
 app.route("/api", api);

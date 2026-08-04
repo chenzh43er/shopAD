@@ -22,7 +22,6 @@ import {
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import { INPUT_LIMITS } from "../lib/inputLimits";
-import { formatMoney } from "../lib/formatMoney";
 import { formatActor } from "../components/AuditLogPanel";
 
 const statusColor: Record<ProductStatus, string> = {
@@ -106,6 +105,12 @@ export function ProductsPage() {
       render: (_, row) => row.region?.name || "—",
     },
     {
+      title: "域名",
+      key: "domain",
+      width: 180,
+      render: (_, row) => row.domain?.host || "—",
+    },
+    {
       title: "链接后缀",
       dataIndex: "link_suffix",
       width: 280,
@@ -116,18 +121,6 @@ export function ProductsPage() {
       dataIndex: "sku_code",
       width: 120,
       render: (v) => v || "—",
-    },
-    {
-      title: "币种",
-      key: "currency",
-      width: 90,
-      render: (_, row) => row.currency?.code || "—",
-    },
-    {
-      title: "价格",
-      dataIndex: "price",
-      width: 130,
-      render: (v: number, row) => formatMoney(v, row.currency),
     },
     {
       title: "状态",

@@ -36,6 +36,9 @@ const AddressRegionsPage = lazy(() =>
 const CurrenciesPage = lazy(() =>
   import("./pages/CurrenciesPage").then((m) => ({ default: m.CurrenciesPage })),
 );
+const DomainsPage = lazy(() =>
+  import("./pages/DomainsPage").then((m) => ({ default: m.DomainsPage })),
+);
 const EmployeesPage = lazy(() =>
   import("./pages/EmployeesPage").then((m) => ({ default: m.EmployeesPage })),
 );
@@ -81,6 +84,7 @@ export default function App() {
               <Route path="shippers" element={<ShippersPage />} />
               <Route path="address-regions" element={<AddressRegionsPage />} />
               <Route path="currencies" element={<CurrenciesPage />} />
+              <Route path="domains" element={<DomainsPage />} />
             </Route>
           </Route>
         </Route>

@@ -30,8 +30,9 @@ import type { Env, Variables } from "../types";
 const FINANCE_EXPORT_MAX_ROWS = 5000;
 const FINANCE_EXPORT_SELECT =
   "id, order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity";
+/** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, weight, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, consignor_flag, consignor_name, consignor_phone, payment_method, sku_code, quantity, item_category, item_value, insurance_type, insurance_flag, package_count, item_type, remark, cod_amount, total_amount, express_type, shipping_fee, other_fee, owner_member, created_at, updated_at";
+  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, remark, cod_amount, total_amount";
 /** 列表页所需列（避免 select * 拖大 payload / IO） */
 const ORDER_LIST_SELECT =
   "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, reviewed_by, payment_type, updated_at";
@@ -56,20 +57,6 @@ function parseCsvIds(raw: unknown, max = 500): string[] {
     if (result.length >= max) break;
   }
   return result;
-}
-
-function parseDateBound(
-  raw: unknown,
-  label: string,
-): { ok: true; iso: string } | { ok: false; error: string } {
-  if (typeof raw !== "string" || !raw.trim()) {
-    return { ok: false, error: `请提供${label}` };
-  }
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) {
-    return { ok: false, error: `${label}无效` };
-  }
-  return { ok: true, iso: d.toISOString() };
 }
 
 function parsePage(raw: string | undefined, fallback = 1): number {
@@ -129,6 +116,97 @@ function parsePhones(raw: string | undefined): string[] {
     result.push(digits);
   }
   return result;
+}
+
+/** 可选日期：未传则不按时间筛选；传了无效值才报错 */
+function parseOptionalDateBound(
+  raw: unknown,
+  label: string,
+): { ok: true; iso: string | null } | { ok: false; error: string } {
+  if (raw == null || raw === "") return { ok: true, iso: null };
+  if (typeof raw !== "string" || !raw.trim()) return { ok: true, iso: null };
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    return { ok: false, error: `${label}无效` };
+  }
+  return { ok: true, iso: d.toISOString() };
+}
+
+function parsePhonesInput(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return parsePhones(
+      raw.filter((x): x is string => typeof x === "string").join(","),
+    );
+  }
+  if (typeof raw === "string") return parsePhones(raw);
+  return [];
+}
+
+type ExportListFilters = {
+  dateFrom: string | null;
+  dateTo: string | null;
+  orderNo: string;
+  orderNos: string[];
+  customerPhone: string;
+  customerPhones: string[];
+};
+
+function parseExportListFilters(body: {
+  date_from?: unknown;
+  date_to?: unknown;
+  order_no?: unknown;
+  order_nos?: unknown;
+  customer_phone?: unknown;
+  customer_phones?: unknown;
+}): { ok: true; filters: ExportListFilters } | { ok: false; error: string } {
+  const from = parseOptionalDateBound(body.date_from, "开始日期");
+  if (!from.ok) return from;
+  const to = parseOptionalDateBound(body.date_to, "结束日期");
+  if (!to.ok) return to;
+  if (from.iso && to.iso && from.iso > to.iso) {
+    return { ok: false, error: "开始日期不能晚于结束日期" };
+  }
+  return {
+    ok: true,
+    filters: {
+      dateFrom: from.iso,
+      dateTo: to.iso,
+      orderNo:
+        typeof body.order_no === "string" ? body.order_no.trim() : "",
+      orderNos: parseCsvIds(body.order_nos, MAX_BATCH_ORDER_NOS),
+      customerPhone: phoneSearchDigits(
+        typeof body.customer_phone === "string" ? body.customer_phone : "",
+      ),
+      customerPhones: parsePhonesInput(body.customer_phones),
+    },
+  };
+}
+
+/** 与列表页一致：批量订单号/手机号、单号/电话搜索、可选更新时间区间 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyExportListFilters(query: any, filters: ExportListFilters) {
+  const batchByOrderNo = filters.orderNos.length > 0;
+  const batchByPhone = !batchByOrderNo && filters.customerPhones.length > 0;
+  if (batchByOrderNo) {
+    query = query.in("order_no", filters.orderNos);
+  } else if (batchByPhone) {
+    query = query.or(
+      filters.customerPhones
+        .map((p) => `customer_phone.ilike.%${p}%`)
+        .join(","),
+    );
+  } else if (filters.orderNo) {
+    query = query.ilike("order_no", `${filters.orderNo}%`);
+  } else if (filters.customerPhone) {
+    query = query.ilike("customer_phone", `%${filters.customerPhone}%`);
+  }
+  if (filters.dateFrom) {
+    query = query.gte("updated_at", filters.dateFrom);
+  }
+  if (filters.dateTo) {
+    query = query.lte("updated_at", filters.dateTo);
+  }
+  return query;
 }
 
 function isOrderStatus(value: unknown): value is OrderStatus {
@@ -864,7 +942,7 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
 
 /**
  * 已发货订单财务导出数据（对齐财务系统导出模板列）。
- * 管理员可按归属成员多选；所有人可按有权限的商品多选。
+ * 沿用列表页当前筛选（日期 / 订单号 / 手机号等），弹窗仅再选商品。
  */
 ordersRoutes.post("/finance-export", async (c) => {
   const body = (await c.req.json()) as {
@@ -872,15 +950,14 @@ ordersRoutes.post("/finance-export", async (c) => {
     date_to?: unknown;
     product_ids?: unknown;
     owner_members?: unknown;
+    order_no?: unknown;
+    order_nos?: unknown;
+    customer_phone?: unknown;
+    customer_phones?: unknown;
   };
 
-  const from = parseDateBound(body.date_from, "开始日期");
-  if (!from.ok) return c.json({ error: from.error }, 400);
-  const to = parseDateBound(body.date_to, "结束日期");
-  if (!to.ok) return c.json({ error: to.error }, 400);
-  if (from.iso > to.iso) {
-    return c.json({ error: "开始日期不能晚于结束日期" }, 400);
-  }
+  const listFilters = parseExportListFilters(body);
+  if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
 
   const productIds = parseCsvIds(body.product_ids);
   const ownerMembers = parseCsvIds(body.owner_members, 200);
@@ -924,10 +1001,10 @@ ordersRoutes.post("/finance-export", async (c) => {
     .select(FINANCE_EXPORT_SELECT)
     .eq("payment_type", "cod")
     .eq("status", "cod_shipped")
-    .gte("updated_at", from.iso)
-    .lte("updated_at", to.iso)
     .order("created_at", { ascending: false })
     .limit(FINANCE_EXPORT_MAX_ROWS);
+
+  query = applyExportListFilters(query, listFilters.filters);
 
   if (filterProductIds) {
     query = query.in("product_id", filterProductIds);
@@ -984,8 +1061,10 @@ function asNumberOrEmpty(value: unknown): number | "" {
 }
 
 /**
- * 待确认 / 已发货 / 已签收物流导出（对齐极兔物流导入模板列）。
- * 电商订单号 = 系统订单号；另附物流订单号（运单号）。
+ * 待确认 / 已发货 / 已签收物流导出。
+ * 仅返回极兔模板标红列所需订单数据（收件人/电话/地区/地址/中文属性*数量/备注/电商订单号/代收货款）；
+ * 寄件人等非标红列由前端按模板固定文本填充。
+ * 沿用列表页当前筛选（日期 / 订单号 / 手机号等），弹窗仅再选商品。
  */
 ordersRoutes.post("/logistics-export", async (c) => {
   const body = (await c.req.json()) as {
@@ -994,6 +1073,10 @@ ordersRoutes.post("/logistics-export", async (c) => {
     date_to?: unknown;
     product_ids?: unknown;
     owner_members?: unknown;
+    order_no?: unknown;
+    order_nos?: unknown;
+    customer_phone?: unknown;
+    customer_phones?: unknown;
   };
 
   const status =
@@ -1006,13 +1089,8 @@ ordersRoutes.post("/logistics-export", async (c) => {
     return c.json({ error: "仅支持待确认、已发货或已签收导出" }, 400);
   }
 
-  const from = parseDateBound(body.date_from, "开始日期");
-  if (!from.ok) return c.json({ error: from.error }, 400);
-  const to = parseDateBound(body.date_to, "结束日期");
-  if (!to.ok) return c.json({ error: to.error }, 400);
-  if (from.iso > to.iso) {
-    return c.json({ error: "开始日期不能晚于结束日期" }, 400);
-  }
+  const listFilters = parseExportListFilters(body);
+  if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
 
   const productIds = parseCsvIds(body.product_ids);
   const ownerMembers = parseCsvIds(body.owner_members, 200);
@@ -1056,10 +1134,10 @@ ordersRoutes.post("/logistics-export", async (c) => {
     .select(LOGISTICS_EXPORT_SELECT)
     .eq("payment_type", "cod")
     .eq("status", status)
-    .gte("updated_at", from.iso)
-    .lte("updated_at", to.iso)
     .order("created_at", { ascending: false })
     .limit(LOGISTICS_EXPORT_MAX);
+
+  query = applyExportListFilters(query, listFilters.filters);
 
   if (filterProductIds) {
     query = query.in("product_id", filterProductIds);
@@ -1077,49 +1155,27 @@ ordersRoutes.post("/logistics-export", async (c) => {
         ? row.quantity
         : Number(row.quantity) || 0;
     const sku = asText(row.sku_code);
-    const shippingDetail =
+    const province = asText(row.shipping_province);
+    const city = asText(row.shipping_city);
+    const district = asText(row.shipping_district);
+    const detail =
       asText(row.shipping_detail) || asText(row.shipping_address);
+    // 模板样例：「省,市,区,明细」
+    const shippingAddress = [province, city, district, detail]
+      .filter(Boolean)
+      .join(",");
     const codAmount = asNumberOrEmpty(row.cod_amount);
     const totalAmount = asNumberOrEmpty(row.total_amount);
-    const weight = asNumberOrEmpty(row.weight);
 
     return {
-      weight: weight === "" ? 1 : weight,
-      shipper_name: asText(row.shipper_name),
-      shipper_phone: asText(row.shipper_phone),
-      shipper_province: asText(row.shipper_province),
-      shipper_city: asText(row.shipper_city),
-      shipper_district: asText(row.shipper_district),
-      shipper_address: asText(row.shipper_address),
-      shipper_address_info: asText(row.shipper_address_info),
-      consignor_flag: asText(row.consignor_flag) || "0",
-      consignor_name: asText(row.consignor_name),
-      consignor_phone: asText(row.consignor_phone),
       customer_name: asText(row.customer_name),
       customer_phone: asText(row.customer_phone),
-      shipping_province: asText(row.shipping_province),
-      shipping_city: asText(row.shipping_city),
-      shipping_district: asText(row.shipping_district),
-      shipping_detail: shippingDetail,
-      shipping_address_info: "",
-      payment_method: asText(row.payment_method) || "月结",
+      shipping_district: district,
+      shipping_address: shippingAddress,
       sku_quantity: sku ? `${sku} * ${qty}` : "",
-      item_category: asText(row.item_category),
-      item_value: asNumberOrEmpty(row.item_value),
-      insurance_type: asText(row.insurance_type),
-      insurance_flag: asText(row.insurance_flag) || "0",
-      package_count:
-        typeof row.package_count === "number" && row.package_count > 0
-          ? row.package_count
-          : 1,
-      item_type: asText(row.item_type) || "BARANG",
       remark: asText(row.remark),
       order_no: asText(row.order_no),
-      logistics_order_no: asText(row.shipping_order_no),
       cod_amount: codAmount === "" ? totalAmount : codAmount,
-      express_type: asText(row.express_type) || "EZ",
-      shipping_fee: asNumberOrEmpty(row.shipping_fee),
-      other_fee: asNumberOrEmpty(row.other_fee),
     };
   });
 
