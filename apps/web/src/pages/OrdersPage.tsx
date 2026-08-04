@@ -1199,7 +1199,10 @@ export function OrdersPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>COD订单</h1>
+        <div className="page-header-title">
+          <h1>COD订单</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
       </div>
       <p style={{ color: "#666", marginTop: -8, marginBottom: 12 }}>
         {isAllTab
@@ -1722,6 +1725,7 @@ export function OrdersPage() {
           pageSize,
           total,
           showSizeChanger: true,
+          showTotal: (n) => `共 ${n} 条`,
           onChange: (p, ps) => {
             setPage(p);
             setPageSize(ps);

@@ -35,6 +35,7 @@ export function CurrenciesPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<Currency[]>([]);
+  const [total, setTotal] = useState(0);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Currency | null>(null);
   const [form] = Form.useForm<UpsertCurrencyInput>();
@@ -44,6 +45,7 @@ export function CurrenciesPage() {
     try {
       const res = await apiFetch<CurrencyListRes>("/api/currencies");
       setData(res.data);
+      setTotal(res.total);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -156,7 +158,10 @@ export function CurrenciesPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>币种管理</h1>
+        <div className="page-header-title">
+          <h1>币种管理</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
         <Button type="primary" onClick={openCreate}>
           新增币种
         </Button>

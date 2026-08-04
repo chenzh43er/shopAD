@@ -34,6 +34,7 @@ export function EmployeesPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<Profile[]>([]);
+  const [total, setTotal] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Profile | null>(null);
@@ -45,6 +46,7 @@ export function EmployeesPage() {
     try {
       const res = await apiFetch<ListRes>("/api/employees");
       setData(res.data);
+      setTotal(res.total);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -141,8 +143,11 @@ export function EmployeesPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ display: "flex", gap: 12 }}>
-        <h1 style={{ flex: 1, margin: 0 }}>员工管理</h1>
+      <div className="page-header">
+        <div className="page-header-title">
+          <h1>员工管理</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
         <Button type="primary" onClick={openCreate}>
           新建员工
         </Button>

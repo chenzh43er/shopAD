@@ -38,6 +38,13 @@ const ACTIVE_STATUS_OPTIONS = (
   .filter(([value]) => value !== "off_sale")
   .map(([value, label]) => ({ value, label }));
 
+function buildProductUrl(product: Product): string | null {
+  const host = product.domain?.host?.trim();
+  const suffix = product.link_suffix?.trim().replace(/^\/+/, "");
+  if (!host || !suffix) return null;
+  return `https://${host}/${suffix}`;
+}
+
 export function ProductsPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -82,6 +89,79 @@ export function ProductsPage() {
   }, [load]);
 
   const columns: ColumnsType<Product> = [
+    {
+      title: "操作",
+      key: "actions",
+      width: 260,
+      fixed: "left",
+      render: (_, record) => (
+        <Space wrap>
+          <Button
+            size="small"
+            onClick={() => navigate(`/products/${record.id}/edit`)}
+          >
+            编辑
+          </Button>
+          <Button
+            size="small"
+            onClick={async () => {
+              const url = buildProductUrl(record);
+              if (!url) {
+                message.warning("请先配置域名和链接后缀");
+                return;
+              }
+              try {
+                await navigator.clipboard.writeText(url);
+                message.success("已复制产品链接");
+              } catch {
+                message.error("复制失败");
+              }
+            }}
+          >
+            复制链接
+          </Button>
+          {isDeletedTab ? (
+            <Button
+              size="small"
+              type="primary"
+              onClick={async () => {
+                try {
+                  await apiFetch(`/api/products/${record.id}/status`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ status: "on_sale" }),
+                  });
+                  message.success("已恢复并上架");
+                  void load();
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : "操作失败");
+                }
+              }}
+            >
+              恢复
+            </Button>
+          ) : (
+            <Popconfirm
+              title="确认删除该商品？"
+              onConfirm={async () => {
+                try {
+                  await apiFetch(`/api/products/${record.id}`, {
+                    method: "DELETE",
+                  });
+                  message.success("已删除");
+                  void load();
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : "删除失败");
+                }
+              }}
+            >
+              <Button size="small" danger>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
+        </Space>
+      ),
+    },
     {
       title: "封面",
       dataIndex: "cover_url",
@@ -149,66 +229,15 @@ export function ProductsPage() {
       width: 170,
       render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
     },
-    {
-      title: "操作",
-      key: "actions",
-      width: 180,
-      render: (_, record) => (
-        <Space wrap>
-          <Button
-            size="small"
-            onClick={() => navigate(`/products/${record.id}/edit`)}
-          >
-            编辑
-          </Button>
-          {isDeletedTab ? (
-            <Button
-              size="small"
-              type="primary"
-              onClick={async () => {
-                try {
-                  await apiFetch(`/api/products/${record.id}/status`, {
-                    method: "PATCH",
-                    body: JSON.stringify({ status: "on_sale" }),
-                  });
-                  message.success("已恢复并上架");
-                  void load();
-                } catch (e) {
-                  message.error(e instanceof Error ? e.message : "操作失败");
-                }
-              }}
-            >
-              恢复
-            </Button>
-          ) : (
-            <Popconfirm
-              title="确认删除该商品？"
-              onConfirm={async () => {
-                try {
-                  await apiFetch(`/api/products/${record.id}`, {
-                    method: "DELETE",
-                  });
-                  message.success("已删除");
-                  void load();
-                } catch (e) {
-                  message.error(e instanceof Error ? e.message : "删除失败");
-                }
-              }}
-            >
-              <Button size="small" danger>
-                删除
-              </Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
-    },
   ];
 
   return (
     <div>
       <div className="page-header">
-        <h1>商品管理</h1>
+        <div className="page-header-title">
+          <h1>商品管理</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
         {!isDeletedTab && (
           <Button type="primary" onClick={() => navigate("/products/new")}>
             新建商品
@@ -267,6 +296,7 @@ export function ProductsPage() {
           pageSize,
           total,
           showSizeChanger: true,
+          showTotal: (n) => `共 ${n} 条`,
           onChange: (p, ps) => {
             setPage(p);
             setPageSize(ps);

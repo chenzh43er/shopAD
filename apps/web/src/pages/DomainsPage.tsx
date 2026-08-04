@@ -31,6 +31,7 @@ export function DomainsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<Domain[]>([]);
+  const [total, setTotal] = useState(0);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Domain | null>(null);
   const [form] = Form.useForm<UpsertDomainInput>();
@@ -40,6 +41,7 @@ export function DomainsPage() {
     try {
       const res = await apiFetch<DomainListRes>("/api/domains");
       setData(res.data);
+      setTotal(res.total);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -135,7 +137,10 @@ export function DomainsPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>域名管理</h1>
+        <div className="page-header-title">
+          <h1>域名管理</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
         <Button type="primary" onClick={openCreate}>
           新增域名
         </Button>

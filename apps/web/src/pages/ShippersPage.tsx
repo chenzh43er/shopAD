@@ -39,6 +39,7 @@ export function ShippersPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<LogisticsShipper[]>([]);
+  const [total, setTotal] = useState(0);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<LogisticsShipper | null>(null);
   const [form] = Form.useForm<UpsertLogisticsShipperInput>();
@@ -48,6 +49,7 @@ export function ShippersPage() {
     try {
       const res = await apiFetch<ShipperListRes>("/api/shippers");
       setData(res.data);
+      setTotal(res.total);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载失败");
     } finally {
@@ -143,7 +145,10 @@ export function ShippersPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>寄件人管理</h1>
+        <div className="page-header-title">
+          <h1>寄件人管理</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
         <Button type="primary" onClick={openCreate}>
           新增寄件人
         </Button>

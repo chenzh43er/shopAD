@@ -45,6 +45,7 @@ export function AddressRegionsPage() {
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [data, setData] = useState<AddressLibrary[]>([]);
+  const [total, setTotal] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<AddressLibrary | null>(null);
   const [createFile, setCreateFile] = useState<File | null>(null);
@@ -65,6 +66,7 @@ export function AddressRegionsPage() {
     try {
       const res = await apiFetch<LibraryListRes>("/api/address-libraries");
       setData(res.data);
+      setTotal(res.total);
       setDetail((prev) => {
         if (!prev) return null;
         return res.data.find((item) => item.id === prev.id) ?? null;
@@ -296,7 +298,10 @@ export function AddressRegionsPage() {
   return (
     <div>
       <div className="page-header">
-        <h1>地区管理</h1>
+        <div className="page-header-title">
+          <h1>地区管理</h1>
+          <span className="list-count">共 {total} 条</span>
+        </div>
         <Button type="primary" onClick={openCreate}>
           新增地区
         </Button>
