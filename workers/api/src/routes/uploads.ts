@@ -13,6 +13,8 @@ const ALLOWED_TYPES = new Set([
 ]);
 
 const MAX_SIZE = 5 * 1024 * 1024;
+/** GIF 无法在 Worker 内有效压缩，限制体积以免拖垮落地页 */
+const MAX_GIF_SIZE = 500 * 1024;
 
 export const uploadsRoutes = new Hono<{
   Bindings: Env;
@@ -46,6 +48,16 @@ uploadsRoutes.post("/product-image", async (c) => {
 
   if (fileSize > MAX_SIZE) {
     return c.json({ error: "图片不能超过 5MB" }, 400);
+  }
+
+  if (fileType === "image/gif" && fileSize > MAX_GIF_SIZE) {
+    return c.json(
+      {
+        error:
+          "GIF 不能超过 500KB（动画无法压缩）。请改用短视频，或导出为 WebP/JPEG 静图后再上传。",
+      },
+      400,
+    );
   }
 
   const original = await blob.arrayBuffer();
