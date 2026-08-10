@@ -109,9 +109,9 @@ Pages 环境变量：
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `VITE_API_BASE_URL`（Worker 线上地址，如 `https://shopad-api.xxx.workers.dev`）
+- `VITE_API_BASE_URL` 保持为空（浏览器走同源 `/api`，由 `apps/web/functions` 代理到 Worker；勿直连 `*.workers.dev`，国内常被阻断）
 
-部署后把 Worker 的 `CORS_ORIGINS` 设为 Pages 域名。
+可选：在 Pages 项目设置 `API_UPSTREAM` 覆盖默认 Worker 地址。
 
 ## 订单状态流转
 

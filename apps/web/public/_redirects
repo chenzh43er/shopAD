@@ -1,1 +1,2 @@
+# SPA fallback；/api/* 由 Pages Functions 处理（见 functions/ + _routes.json）
 /*    /index.html   200
