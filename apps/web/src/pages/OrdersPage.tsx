@@ -42,8 +42,8 @@ import isoWeek from "dayjs/plugin/isoWeek";
 
 dayjs.extend(isoWeek);
 
-const MAX_BATCH_ORDER_NOS = 200;
-const MAX_BATCH_PHONES = 200;
+const MAX_BATCH_ORDER_NOS = 500;
+const MAX_BATCH_PHONES = 500;
 
 /** 解析粘贴的订单号：换行 / 逗号 / 空白 / 分号均可 */
 function parseBatchOrderNos(raw: string): string[] {
@@ -442,7 +442,7 @@ export function OrdersPage() {
     setBatchPhoneDraft("");
     setBatchOrderNos(nos);
     setPage(1);
-    setPageSize(Math.min(100, Math.max(nos.length, 20)));
+    setPageSize(Math.min(500, Math.max(nos.length, 20)));
     setBatchModalOpen(false);
   };
 
@@ -475,7 +475,7 @@ export function OrdersPage() {
     setBatchDraft("");
     setBatchPhones(phones);
     setPage(1);
-    setPageSize(Math.min(100, Math.max(phones.length, 20)));
+    setPageSize(Math.min(500, Math.max(phones.length, 20)));
     setBatchPhoneModalOpen(false);
   };
 
@@ -1708,6 +1708,7 @@ export function OrdersPage() {
           pageSize,
           total,
           showSizeChanger: true,
+          pageSizeOptions: ["10", "20", "50", "100", "500"],
           showTotal: (n) => `共 ${n} 条`,
           onChange: (p, ps) => {
             setPage(p);

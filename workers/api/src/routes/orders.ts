@@ -67,11 +67,11 @@ function parsePage(raw: string | undefined, fallback = 1): number {
 function parsePageSize(raw: string | undefined, fallback = 20): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), 100);
+  return Math.min(Math.floor(n), 500);
 }
 
-const MAX_BATCH_ORDER_NOS = 200;
-const MAX_BATCH_PHONES = 200;
+const MAX_BATCH_ORDER_NOS = 500;
+const MAX_BATCH_PHONES = 500;
 
 /** 解析批量订单号：支持逗号 / 空白 / 换行分隔 */
 function parseOrderNos(raw: string | undefined): string[] {
