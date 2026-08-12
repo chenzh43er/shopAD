@@ -319,7 +319,7 @@ export function DashboardPage() {
                       <>
                         <Text strong>6. 批量查询</Text>
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                          任意 COD 列表可用「批量查询订单号」跨状态定位订单（换行、逗号或分号分隔均可）。
+                          任意 COD 列表可用「批量查询订单号 / 手机号」在当前状态下定位订单（换行、逗号或分号分隔均可）。
                         </Paragraph>
                       </>
                     ),

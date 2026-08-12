@@ -66,11 +66,14 @@ function phoneSearchDigits(raw: string): string {
   return n.replace(/^0+/, "");
 }
 
-/** 解析粘贴的手机号：换行 / 逗号 / 空白 / 分号均可 */
+/**
+ * 解析粘贴的手机号：换行 / 逗号 / 分号分隔。
+ * 行内空格保留（如 +62 81218331371 → 6281218331371），不按空格拆成多个号。
+ */
 function parseBatchPhones(raw: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const part of raw.split(/[\s,，;；]+/)) {
+  for (const part of raw.split(/[\n\r,，;；]+/)) {
     const digits = phoneSearchDigits(part);
     if (!digits || seen.has(digits)) continue;
     if (result.length >= MAX_BATCH_PHONES) break;
@@ -221,7 +224,6 @@ export function OrdersPage() {
   const [data, setData] = useState<Order[]>([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
   const pendingBatchNotify = useRef<"order_no" | "phone" | null>(null);
-  const prevCodTabRef = useRef<CodTabKey>(activeCodTab);
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
@@ -299,21 +301,21 @@ export function OrdersPage() {
         payment_type: filters.paymentType,
       });
 
-      // 批量查询跨子状态展示，不按当前 Tab 的 status / review_status 收窄
-      if (!isBatchQuery) {
-        if (filters.reviewStatus) {
-          params.set("review_status", filters.reviewStatus);
-        }
-        if (filters.status) {
-          params.set("status", filters.status);
-        }
+      // 批量查询仍沿用当前 Tab 的 status / review_status，不跳转到全部订单
+      if (filters.reviewStatus) {
+        params.set("review_status", filters.reviewStatus);
+      }
+      if (filters.status) {
+        params.set("status", filters.status);
+      }
+      if (isBatchOrderQuery) {
+        params.set("order_nos", batchOrderNos.join(","));
+      } else if (isBatchPhoneQuery) {
+        params.set("customer_phones", batchPhones.join(","));
+      } else {
         if (orderNo.trim()) params.set("order_no", orderNo.trim());
         const phone = phoneSearchDigits(customerPhone);
         if (phone) params.set("customer_phone", phone);
-      } else if (isBatchOrderQuery) {
-        params.set("order_nos", batchOrderNos.join(","));
-      } else {
-        params.set("customer_phones", batchPhones.join(","));
       }
       if (dateRange?.[0] && dateRange?.[1]) {
         params.set("date_from", dateRange[0].startOf("day").toISOString());
@@ -389,8 +391,8 @@ export function OrdersPage() {
     customerPhone,
     batchOrderNos,
     batchPhones,
-    isBatchQuery,
     isBatchOrderQuery,
+    isBatchPhoneQuery,
     dateRange,
   ]);
 
@@ -404,19 +406,6 @@ export function OrdersPage() {
       navigate(`/cod/${DEFAULT_COD_TAB}`, { replace: true });
     }
   }, [routeTab, navigate]);
-
-  // 从「全部订单」切到子状态（含侧栏）时，清掉跨状态批量条件
-  useEffect(() => {
-    const prev = prevCodTabRef.current;
-    prevCodTabRef.current = activeCodTab;
-    if (prev !== "all" || activeCodTab === "all") return;
-    if (batchOrderNos.length === 0 && batchPhones.length === 0) return;
-    setBatchOrderNos([]);
-    setBatchDraft("");
-    setBatchPhones([]);
-    setBatchPhoneDraft("");
-    setPageSize(20);
-  }, [activeCodTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setSelectedRowKeys([]);
@@ -455,10 +444,6 @@ export function OrdersPage() {
     setPage(1);
     setPageSize(Math.min(100, Math.max(nos.length, 20)));
     setBatchModalOpen(false);
-    // 批量结果跨状态，统一在「全部订单」展示
-    if (activeCodTab !== "all") {
-      navigate("/cod/all");
-    }
   };
 
   const clearBatchQuery = () => {
@@ -475,7 +460,7 @@ export function OrdersPage() {
       return;
     }
     const rawCount = batchPhoneDraft
-      .split(/[\s,，;；]+/)
+      .split(/[\n\r,，;；]+/)
       .map((s) => s.trim())
       .filter(Boolean).length;
     if (rawCount > MAX_BATCH_PHONES) {
@@ -492,10 +477,6 @@ export function OrdersPage() {
     setPage(1);
     setPageSize(Math.min(100, Math.max(phones.length, 20)));
     setBatchPhoneModalOpen(false);
-    // 批量结果跨状态，统一在「全部订单」展示
-    if (activeCodTab !== "all") {
-      navigate("/cod/all");
-    }
   };
 
   const clearBatchPhoneQuery = () => {
@@ -1523,8 +1504,8 @@ export function OrdersPage() {
       >
         <p style={{ color: "#666", marginBottom: 8 }}>
           粘贴订单号，支持换行、逗号或空格分隔；单次最多{" "}
-          {MAX_BATCH_ORDER_NOS} 个。批量查询会跨 COD
-          子状态展示匹配结果。
+          {MAX_BATCH_ORDER_NOS}{" "}
+          个。结果仍按当前列表状态筛选。
         </p>
         <Input.TextArea
           value={batchDraft}
@@ -1544,15 +1525,17 @@ export function OrdersPage() {
         destroyOnClose
       >
         <p style={{ color: "#666", marginBottom: 8 }}>
-          粘贴手机号，支持换行、逗号或空格分隔；单次最多{" "}
+          粘贴手机号，支持换行、逗号或分号分隔；单次最多{" "}
           {MAX_BATCH_PHONES}{" "}
-          个。可带或不带国际区号、前导 0；批量查询会跨 COD
-          子状态展示匹配结果。
+          个。支持国际号格式（如 +62 81218331371 → 6281218331371）；可带或不带区号、前导
+          0；结果仍按当前列表状态筛选。
         </p>
         <Input.TextArea
           value={batchPhoneDraft}
           onChange={(e) => setBatchPhoneDraft(e.target.value)}
-          placeholder={"例如：\n081234567890\n6281234567890\n13200132000"}
+          placeholder={
+            "例如：\n+62 81218331371\n6281234567890\n081234567890"
+          }
           rows={10}
           allowClear
         />

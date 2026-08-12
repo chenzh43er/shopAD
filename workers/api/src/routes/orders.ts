@@ -103,12 +103,12 @@ function phoneSearchDigits(raw: string): string {
   return n.replace(/^0+/, "");
 }
 
-/** 解析批量手机号：支持逗号 / 空白 / 换行分隔 */
+/** 解析批量手机号：换行 / 逗号 / 分号分隔；行内空格保留给国际号（如 +62 812…） */
 function parsePhones(raw: string | undefined): string[] {
   if (!raw?.trim()) return [];
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const part of raw.split(/[\s,，;；]+/)) {
+  for (const part of raw.split(/[\n\r,，;；]+/)) {
     const digits = phoneSearchDigits(part);
     if (!digits || seen.has(digits)) continue;
     if (result.length >= MAX_BATCH_PHONES) break;
