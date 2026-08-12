@@ -29,10 +29,10 @@ import type { Env, Variables } from "../types";
 
 const FINANCE_EXPORT_MAX_ROWS = 5000;
 const FINANCE_EXPORT_SELECT =
-  "id, order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity";
+  "id, order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count";
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
-  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, remark, cod_amount, total_amount";
+  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, remark, cod_amount, total_amount";
 /** 列表页所需列（避免 select * 拖大 payload / IO） */
 const ORDER_LIST_SELECT =
   "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, reviewed_by, payment_type, updated_at";
@@ -1017,11 +1017,7 @@ ordersRoutes.post("/finance-export", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
 
   const rows = (data ?? []).map((row) => {
-    const qty = typeof row.quantity === "number" ? row.quantity : Number(row.quantity) || 0;
-    const sku =
-      typeof row.sku_code === "string" && row.sku_code.trim()
-        ? row.sku_code.trim()
-        : "";
+    const qty = orderPurchaseQty(row);
     return {
       order_no: typeof row.order_no === "string" ? row.order_no : "",
       product_name:
@@ -1033,7 +1029,7 @@ ordersRoutes.post("/finance-export", async (c) => {
           : Number(row.total_amount) || 0,
       owner_member:
         typeof row.owner_member === "string" ? row.owner_member : "",
-      sku_quantity: sku ? `${sku} * ${qty}` : "",
+      sku_quantity: formatSkuQuantity(row),
       quantity: qty,
     };
   });
@@ -1058,6 +1054,40 @@ function asNumberOrEmpty(value: unknown): number | "" {
   if (value == null || value === "") return "";
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : "";
+}
+
+/** 购买份数（套餐份数）；无效时按 1 */
+function orderPurchaseQty(row: { quantity?: unknown }): number {
+  const n =
+    typeof row.quantity === "number" ? row.quantity : Number(row.quantity);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+}
+
+/**
+ * 「中文属性*数量」用件数：套餐明细数量(package_count) × 购买份数(quantity)。
+ * 下单时 package_count 存的是套餐内 SUM(item.quantity)，不是快递件数。
+ */
+function orderSkuUnits(row: {
+  quantity?: unknown;
+  package_count?: unknown;
+}): number {
+  const purchaseQty = orderPurchaseQty(row);
+  const pkg =
+    typeof row.package_count === "number"
+      ? row.package_count
+      : Number(row.package_count);
+  const perPackage = Number.isFinite(pkg) && pkg > 0 ? Math.floor(pkg) : 1;
+  return perPackage * purchaseQty;
+}
+
+function formatSkuQuantity(row: {
+  sku_code?: unknown;
+  quantity?: unknown;
+  package_count?: unknown;
+}): string {
+  const sku = asText(row.sku_code);
+  if (!sku) return "";
+  return `${sku} * ${orderSkuUnits(row)}`;
 }
 
 /**
@@ -1150,11 +1180,6 @@ ordersRoutes.post("/logistics-export", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
 
   const rows = ((data ?? []) as Record<string, unknown>[]).map((row) => {
-    const qty =
-      typeof row.quantity === "number"
-        ? row.quantity
-        : Number(row.quantity) || 0;
-    const sku = asText(row.sku_code);
     const province = asText(row.shipping_province);
     const city = asText(row.shipping_city);
     const district = asText(row.shipping_district);
@@ -1172,7 +1197,7 @@ ordersRoutes.post("/logistics-export", async (c) => {
       customer_phone: asText(row.customer_phone),
       shipping_district: district,
       shipping_address: shippingAddress,
-      sku_quantity: sku ? `${sku} * ${qty}` : "",
+      sku_quantity: formatSkuQuantity(row),
       remark: asText(row.remark),
       order_no: asText(row.order_no),
       cod_amount: codAmount === "" ? totalAmount : codAmount,

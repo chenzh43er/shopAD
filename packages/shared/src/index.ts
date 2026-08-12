@@ -367,7 +367,7 @@ export interface Order {
   express_type: string | null;
   shipping_fee: number | null;
   other_fee: number | null;
-  /** 物流件数（非套餐） */
+  /** 套餐内商品件数快照（下单时写入；用于物流/财务「中文属性*数量」） */
   package_count: number;
   weight: number | null;
   insurance_type: string | null;

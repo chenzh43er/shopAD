@@ -355,7 +355,7 @@ export function OrderDetailPage() {
         </Descriptions.Item>
         <Descriptions.Item label="中文属性">
           {order.sku_code
-            ? `${order.sku_code} * ${order.quantity}`
+            ? `${order.sku_code} * ${Math.max(1, Number(order.package_count) || 1) * Math.max(1, Number(order.quantity) || 1)}`
             : "—"}
         </Descriptions.Item>
         <Descriptions.Item label="购买数量">{order.quantity}</Descriptions.Item>
