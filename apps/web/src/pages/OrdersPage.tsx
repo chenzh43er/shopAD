@@ -1217,6 +1217,23 @@ export function OrdersPage() {
       onHeaderCell: () => ellipsisCell(120),
       render: (v: string | null) => <CellEllipsis text={v} maxWidth={104} />,
     },
+    {
+      title: "订单创建日期",
+      dataIndex: "created_at",
+      width: 150,
+      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
+    },
+    {
+      title: "订单备注",
+      dataIndex: "remark",
+      width: 140,
+      ellipsis: true,
+      onCell: () => ellipsisCell(140),
+      onHeaderCell: () => ellipsisCell(140),
+      render: (v: string | null) => (
+        <CellEllipsis text={v} maxWidth={124} />
+      ),
+    },
     ...(isPendingReview
       ? [
           {
@@ -1291,23 +1308,6 @@ export function OrdersPage() {
       render: (_, row) => (
         <CellEllipsis text={formatActor(row.reviewer)} maxWidth={72} />
       ),
-    },
-    {
-      title: "订单备注",
-      dataIndex: "remark",
-      width: 140,
-      ellipsis: true,
-      onCell: () => ellipsisCell(140),
-      onHeaderCell: () => ellipsisCell(140),
-      render: (v: string | null) => (
-        <CellEllipsis text={v} maxWidth={124} />
-      ),
-    },
-    {
-      title: "订单创建日期",
-      dataIndex: "created_at",
-      width: 150,
-      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
     },
     {
       title: "最近更新时间",
