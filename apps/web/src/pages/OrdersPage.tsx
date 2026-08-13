@@ -10,6 +10,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Typography,
   Upload,
   message,
 } from "antd";
@@ -30,6 +31,7 @@ import {
 import { apiFetch } from "../lib/api";
 import type { FinanceExportRow } from "../lib/buildFinanceExcel";
 import type { LogisticsExportRow } from "../lib/buildLogisticsExcel";
+import type { OrdersExportRow } from "../lib/buildOrdersExcel";
 import type { ShipExcelRow } from "../lib/parseShipText";
 import { parseShipText } from "../lib/parseShipText";
 import { formatMoney } from "../lib/formatMoney";
@@ -94,6 +96,43 @@ function formatShippingAddress(order: Order): string {
   const detail = order.shipping_detail || order.shipping_address || "";
   if (region && detail) return `${region} ${detail}`;
   return region || detail || "—";
+}
+
+/** 表格长文本：定宽省略，悬停看全文（配合全局 nowrap / auto 布局） */
+function CellEllipsis({
+  text,
+  maxWidth,
+  empty = "—",
+}: {
+  text: string | null | undefined;
+  maxWidth: number;
+  empty?: string;
+}) {
+  const value = (text ?? "").trim() || empty;
+  return (
+    <Typography.Text
+      ellipsis={{ tooltip: value === empty ? undefined : value }}
+      style={{
+        display: "block",
+        maxWidth,
+        width: maxWidth,
+        margin: 0,
+        overflow: "hidden",
+      }}
+    >
+      {value}
+    </Typography.Text>
+  );
+}
+
+function ellipsisCell(maxWidth: number) {
+  return {
+    style: {
+      maxWidth,
+      width: maxWidth,
+      overflow: "hidden" as const,
+    },
+  };
 }
 
 const { RangePicker } = DatePicker;
@@ -241,9 +280,9 @@ export function OrdersPage() {
   const shipTextTruncWarned = useRef(false);
 
   const [exportOpen, setExportOpen] = useState(false);
-  const [exportKind, setExportKind] = useState<"finance" | "logistics">(
-    "finance",
-  );
+  const [exportKind, setExportKind] = useState<
+    "finance" | "logistics" | "orders"
+  >("finance");
   const [exporting, setExporting] = useState(false);
   const [exportMetaLoading, setExportMetaLoading] = useState(false);
   const [exportProducts, setExportProducts] = useState<
@@ -797,9 +836,12 @@ export function OrdersPage() {
     setExportProductIds([]);
   };
 
-  const openExportModal = async (kind: "finance" | "logistics") => {
+  const openExportModal = async (
+    kind: "finance" | "logistics" | "orders",
+  ) => {
     if (kind === "finance" && !isShippedTab) return;
     if (kind === "logistics" && !exportOrderStatus) return;
+    if (kind === "orders" && !isAllTab) return;
 
     setExportKind(kind);
     setExportOpen(true);
@@ -809,7 +851,9 @@ export function OrdersPage() {
       const status =
         kind === "finance"
           ? "cod_shipped"
-          : (exportOrderStatus ?? "cod_shipped");
+          : kind === "logistics"
+            ? (exportOrderStatus ?? "cod_shipped")
+            : "cod_shipped";
       const res = await apiFetch<{
         products: Array<{ id: string; name: string }>;
         owner_members: string[];
@@ -825,6 +869,10 @@ export function OrdersPage() {
   const submitExport = async () => {
     if (exportKind === "logistics" && !exportOrderStatus) {
       message.warning("当前列表不支持物流导出");
+      return;
+    }
+    if (exportKind === "orders" && !isAllTab) {
+      message.warning("当前列表不支持全部订单导出");
       return;
     }
 
@@ -867,6 +915,32 @@ export function OrdersPage() {
         );
         const { downloadBlob } = await import("../lib/downloadBlob");
         downloadBlob(buildFinanceExcel(res.data), financeExportFilename());
+        if (res.truncated) {
+          message.warning(
+            `已导出前 ${res.total} 笔（达到上限），请缩小筛选条件后重试`,
+          );
+        } else {
+          message.success(`已导出 ${res.total} 笔订单`);
+        }
+      } else if (exportKind === "orders") {
+        const res = await apiFetch<{
+          data: OrdersExportRow[];
+          total: number;
+          truncated?: boolean;
+        }>("/api/orders/full-export", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!res.data.length) {
+          message.warning("没有符合条件的订单");
+          return;
+        }
+        const [{ buildOrdersExcel, ordersExportFilename }, { downloadBlob }] =
+          await Promise.all([
+            import("../lib/buildOrdersExcel"),
+            import("../lib/downloadBlob"),
+          ]);
+        downloadBlob(buildOrdersExcel(res.data), ordersExportFilename());
         if (res.truncated) {
           message.warning(
             `已导出前 ${res.total} 笔（达到上限），请缩小筛选条件后重试`,
@@ -1068,88 +1142,11 @@ export function OrdersPage() {
   };
 
   const columns: ColumnsType<Order> = [
-    { title: "订单号", dataIndex: "order_no", width: 180 },
-    {
-      title: "商品",
-      dataIndex: "product_name",
-      width: 140,
-      render: (v: string) => v || "—",
-    },
-    {
-      title: "套餐",
-      dataIndex: "package_name",
-      width: 140,
-      render: (v: string | null) => v || "—",
-    },
-    { title: "客户", dataIndex: "customer_name", width: 120 },
-    { title: "电话", dataIndex: "customer_phone", width: 130 },
-    ...(isPendingReview
-      ? [
-          {
-            title: "收件地址",
-            key: "shipping_address",
-            width: 360,
-            render: (_: unknown, row: Order) => formatShippingAddress(row),
-          } satisfies ColumnsType<Order>[number],
-        ]
-      : []),
-    {
-      title: "金额",
-      dataIndex: "total_amount",
-      width: 140,
-      render: (v: number, row) => formatMoney(v, row.currency),
-    },
-    {
-      title: "状态",
-      dataIndex: "status",
-      width: 100,
-      render: (s: OrderStatus) => (
-        <Tag color={statusColor[s]}>{ORDER_STATUS_LABELS[s]}</Tag>
-      ),
-    },
-    ...(isInvalidTab
-      ? [
-          {
-            title: "拒绝理由",
-            dataIndex: "reject_reason",
-            width: 240,
-            render: (v: string | null) => v || "—",
-          } satisfies ColumnsType<Order>[number],
-        ]
-      : [
-          {
-            title: "审核",
-            dataIndex: "review_status",
-            width: 100,
-            render: (v: ReviewStatus | null | undefined) => {
-              const s = (v ?? "pending") as ReviewStatus;
-              const color =
-                s === "pending"
-                  ? "orange"
-                  : s === "approved"
-                    ? "green"
-                    : s === "rejected"
-                      ? "red"
-                      : "default";
-              return <Tag color={color}>{REVIEW_STATUS_LABELS[s]}</Tag>;
-            },
-          } satisfies ColumnsType<Order>[number],
-        ]),
-    {
-      title: "审核人",
-      width: 100,
-      render: (_, row) => formatActor(row.reviewer),
-    },
-    {
-      title: "最近更新时间",
-      dataIndex: "updated_at",
-      width: 170,
-      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
-    },
     {
       title: "操作",
       key: "actions",
       width: 100,
+      fixed: "left",
       render: (_, record) => {
         const actionLabel =
           record.review_status === "pending"
@@ -1174,6 +1171,149 @@ export function OrdersPage() {
           </Button>
         );
       },
+    },
+    {
+      title: "订单号",
+      dataIndex: "order_no",
+      width: 160,
+      ellipsis: true,
+      onCell: () => ellipsisCell(160),
+      onHeaderCell: () => ellipsisCell(160),
+      render: (v: string) => <CellEllipsis text={v} maxWidth={144} />,
+    },
+    {
+      title: "商品",
+      dataIndex: "product_name",
+      width: 120,
+      ellipsis: true,
+      onCell: () => ellipsisCell(120),
+      onHeaderCell: () => ellipsisCell(120),
+      render: (v: string) => <CellEllipsis text={v} maxWidth={104} />,
+    },
+    {
+      title: "套餐",
+      dataIndex: "package_name",
+      width: 120,
+      ellipsis: true,
+      onCell: () => ellipsisCell(120),
+      onHeaderCell: () => ellipsisCell(120),
+      render: (v: string | null) => <CellEllipsis text={v} maxWidth={104} />,
+    },
+    {
+      title: "客户",
+      dataIndex: "customer_name",
+      width: 96,
+      ellipsis: true,
+      onCell: () => ellipsisCell(96),
+      onHeaderCell: () => ellipsisCell(96),
+      render: (v: string) => <CellEllipsis text={v} maxWidth={80} />,
+    },
+    {
+      title: "电话",
+      dataIndex: "customer_phone",
+      width: 120,
+      ellipsis: true,
+      onCell: () => ellipsisCell(120),
+      onHeaderCell: () => ellipsisCell(120),
+      render: (v: string | null) => <CellEllipsis text={v} maxWidth={104} />,
+    },
+    ...(isPendingReview
+      ? [
+          {
+            title: "收件地址",
+            key: "shipping_address",
+            width: 320,
+            ellipsis: true,
+            onCell: () => ellipsisCell(320),
+            onHeaderCell: () => ellipsisCell(320),
+            render: (_: unknown, row: Order) => (
+              <CellEllipsis
+                text={formatShippingAddress(row)}
+                maxWidth={304}
+              />
+            ),
+          } satisfies ColumnsType<Order>[number],
+        ]
+      : []),
+    {
+      title: "金额",
+      dataIndex: "total_amount",
+      width: 120,
+      render: (v: number, row) => formatMoney(v, row.currency),
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      width: 88,
+      render: (s: OrderStatus) => (
+        <Tag color={statusColor[s]}>{ORDER_STATUS_LABELS[s]}</Tag>
+      ),
+    },
+    ...(isInvalidTab
+      ? [
+          {
+            title: "拒绝理由",
+            dataIndex: "reject_reason",
+            width: 160,
+            ellipsis: true,
+            onCell: () => ellipsisCell(160),
+            onHeaderCell: () => ellipsisCell(160),
+            render: (v: string | null) => (
+              <CellEllipsis text={v} maxWidth={144} />
+            ),
+          } satisfies ColumnsType<Order>[number],
+        ]
+      : [
+          {
+            title: "审核",
+            dataIndex: "review_status",
+            width: 88,
+            render: (v: ReviewStatus | null | undefined) => {
+              const s = (v ?? "pending") as ReviewStatus;
+              const color =
+                s === "pending"
+                  ? "orange"
+                  : s === "approved"
+                    ? "green"
+                    : s === "rejected"
+                      ? "red"
+                      : "default";
+              return <Tag color={color}>{REVIEW_STATUS_LABELS[s]}</Tag>;
+            },
+          } satisfies ColumnsType<Order>[number],
+        ]),
+    {
+      title: "审核人",
+      width: 88,
+      ellipsis: true,
+      onCell: () => ellipsisCell(88),
+      onHeaderCell: () => ellipsisCell(88),
+      render: (_, row) => (
+        <CellEllipsis text={formatActor(row.reviewer)} maxWidth={72} />
+      ),
+    },
+    {
+      title: "订单备注",
+      dataIndex: "remark",
+      width: 140,
+      ellipsis: true,
+      onCell: () => ellipsisCell(140),
+      onHeaderCell: () => ellipsisCell(140),
+      render: (v: string | null) => (
+        <CellEllipsis text={v} maxWidth={124} />
+      ),
+    },
+    {
+      title: "订单创建日期",
+      dataIndex: "created_at",
+      width: 150,
+      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
+    },
+    {
+      title: "最近更新时间",
+      dataIndex: "updated_at",
+      width: 150,
+      render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
     },
   ];
 
@@ -1299,6 +1439,14 @@ export function OrdersPage() {
           </Tag>
         ) : null}
         <Button onClick={() => void load()}>刷新</Button>
+        {isAllTab ? (
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={() => void openExportModal("orders")}
+          >
+            导出订单
+          </Button>
+        ) : null}
         {isPendingReview ? (
           <>
             <Button
@@ -1655,7 +1803,13 @@ export function OrdersPage() {
         </Space>
       </Modal>
       <Modal
-        title={exportKind === "finance" ? "导出财务 Excel" : "导出物流 Excel"}
+        title={
+          exportKind === "finance"
+            ? "导出财务 Excel"
+            : exportKind === "logistics"
+              ? "导出物流 Excel"
+              : "导出订单"
+        }
         open={exportOpen}
         onCancel={resetExportModal}
         onOk={() => void submitExport()}
@@ -1668,7 +1822,9 @@ export function OrdersPage() {
         <p style={{ color: "#666", marginBottom: 12 }}>
           {exportKind === "finance"
             ? "按当前列表筛选条件导出已发货订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
-            : "按当前列表筛选条件导出，对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。可再按商品收窄。"}
+            : exportKind === "logistics"
+              ? "按当前列表筛选条件导出，对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。可再按商品收窄。"
+              : "按当前列表筛选条件导出全部 COD 订单的完整业务字段（客户、地址、商品、金额、状态、寄件人等）。可再按商品收窄。"}
         </p>
         <div>
           <div style={{ marginBottom: 6 }}>商品（可多选）</div>

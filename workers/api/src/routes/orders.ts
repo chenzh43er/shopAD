@@ -2,7 +2,10 @@ import { Hono } from "hono";
 import {
   canAdvanceCodOrder,
   canTransitionOrder,
+  ORDER_STATUS_LABELS,
   ORDER_STATUSES,
+  PAYMENT_TYPE_LABELS,
+  REVIEW_STATUS_LABELS,
   type OrderStatus,
   type PaymentType,
   type ReviewStatus,
@@ -16,6 +19,7 @@ import {
 import {
   applyOrderOwnerScope,
   assertOrderAccess,
+  assertProductAccess,
   isSuperAdmin,
   listOwnedProductIds,
   scopeProductsByOwner,
@@ -33,9 +37,12 @@ const FINANCE_EXPORT_SELECT =
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
   "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, remark, cod_amount, total_amount";
+/** 全部订单导出：业务可读字段（不含内部 UUID） */
+const FULL_EXPORT_SELECT =
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
 /** 列表页所需列（避免 select * 拖大 payload / IO） */
 const ORDER_LIST_SELECT =
-  "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, reviewed_by, payment_type, updated_at";
+  "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at";
 
 function parseCsvIds(raw: unknown, max = 500): string[] {
   const parts: string[] = [];
@@ -1211,6 +1218,160 @@ ordersRoutes.post("/logistics-export", async (c) => {
   });
 });
 
+/**
+ * 全部订单导出：按当前列表筛选导出 COD 订单完整业务字段。
+ * 沿用列表页筛选（日期 / 订单号 / 手机号等），弹窗可再按商品收窄。
+ */
+ordersRoutes.post("/full-export", async (c) => {
+  const body = (await c.req.json()) as {
+    date_from?: unknown;
+    date_to?: unknown;
+    product_ids?: unknown;
+    order_no?: unknown;
+    order_nos?: unknown;
+    customer_phone?: unknown;
+    customer_phones?: unknown;
+  };
+
+  const listFilters = parseExportListFilters(body);
+  if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
+
+  const productIds = parseCsvIds(body.product_ids);
+
+  const supabase = createServiceClient(c.env);
+
+  let allowedProductIds: string[] | "all";
+  try {
+    allowedProductIds = await listOwnedProductIds(supabase, c);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+  if (allowedProductIds !== "all" && allowedProductIds.length === 0) {
+    return c.json({ data: [], total: 0 });
+  }
+
+  let filterProductIds: string[] | null = null;
+  if (productIds.length > 0) {
+    if (allowedProductIds === "all") {
+      filterProductIds = productIds;
+    } else {
+      const owned = new Set(allowedProductIds);
+      filterProductIds = productIds.filter((id) => owned.has(id));
+      if (filterProductIds.length === 0) {
+        return c.json({ data: [], total: 0 });
+      }
+    }
+  } else if (allowedProductIds !== "all") {
+    filterProductIds = allowedProductIds;
+  }
+
+  let query = supabase
+    .from("orders")
+    .select(FULL_EXPORT_SELECT)
+    .eq("payment_type", "cod")
+    .order("updated_at", { ascending: false })
+    .limit(FINANCE_EXPORT_MAX_ROWS);
+
+  query = applyExportListFilters(query, listFilters.filters);
+
+  if (filterProductIds) {
+    query = query.in("product_id", filterProductIds);
+  }
+
+  const { data, error } = await query;
+  if (error) return c.json({ error: error.message }, 500);
+
+  const rawRows = (data ?? []) as Array<
+    Record<string, unknown> & {
+      product_id?: string | null;
+      sku_code?: unknown;
+      quantity?: unknown;
+      package_count?: unknown;
+    }
+  >;
+  const withCurrency = await attachOrderCurrency(supabase, rawRows);
+
+  const rows = withCurrency.map((row) => {
+    const status = asText(row.status) as OrderStatus;
+    const reviewStatus = asText(row.review_status) as ReviewStatus;
+    const paymentType = asText(row.payment_type) as PaymentType;
+    const province = asText(row.shipping_province);
+    const city = asText(row.shipping_city);
+    const district = asText(row.shipping_district);
+    const detail =
+      asText(row.shipping_detail) || asText(row.shipping_address);
+    const shippingFull = [province, city, district, detail]
+      .filter(Boolean)
+      .join(" ");
+    const currency = row.currency;
+
+    return {
+      order_no: asText(row.order_no),
+      shipping_order_no: asText(row.shipping_order_no),
+      status_label: ORDER_STATUS_LABELS[status] ?? asText(row.status),
+      review_status_label:
+        REVIEW_STATUS_LABELS[reviewStatus] ?? asText(row.review_status),
+      payment_type_label:
+        PAYMENT_TYPE_LABELS[paymentType] ?? asText(row.payment_type),
+      payment_method: asText(row.payment_method),
+      customer_name: asText(row.customer_name),
+      customer_phone: asText(row.customer_phone),
+      shipping_province: province,
+      shipping_city: city,
+      shipping_district: district,
+      shipping_detail: asText(row.shipping_detail),
+      shipping_address: asText(row.shipping_address),
+      shipping_full: shippingFull,
+      product_name: asText(row.product_name),
+      package_name: asText(row.package_name),
+      package_name_external: asText(row.package_name_external),
+      sku_code: asText(row.sku_code),
+      sku_quantity: formatSkuQuantity(row),
+      unit_price: asNumberOrEmpty(row.unit_price),
+      quantity: orderPurchaseQty(row),
+      package_count: asNumberOrEmpty(row.package_count),
+      total_amount: asNumberOrEmpty(row.total_amount),
+      cod_amount: asNumberOrEmpty(row.cod_amount),
+      shipping_fee: asNumberOrEmpty(row.shipping_fee),
+      other_fee: asNumberOrEmpty(row.other_fee),
+      currency_code: asText(currency?.code),
+      currency_symbol: asText(currency?.symbol),
+      owner_member: asText(row.owner_member),
+      remark: asText(row.remark),
+      reject_reason: asText(row.reject_reason),
+      weight: asNumberOrEmpty(row.weight),
+      express_type: asText(row.express_type),
+      insurance_type: asText(row.insurance_type),
+      insurance_flag: asText(row.insurance_flag),
+      item_value: asNumberOrEmpty(row.item_value),
+      item_category: asText(row.item_category),
+      item_type: asText(row.item_type),
+      consignor_flag: asText(row.consignor_flag),
+      consignor_name: asText(row.consignor_name),
+      consignor_phone: asText(row.consignor_phone),
+      shipper_name: asText(row.shipper_name),
+      shipper_phone: asText(row.shipper_phone),
+      shipper_province: asText(row.shipper_province),
+      shipper_city: asText(row.shipper_city),
+      shipper_district: asText(row.shipper_district),
+      shipper_address: asText(row.shipper_address),
+      shipper_address_info: asText(row.shipper_address_info),
+      reviewed_at: asText(row.reviewed_at),
+      created_at: asText(row.created_at),
+      updated_at: asText(row.updated_at),
+    };
+  });
+
+  return c.json({
+    data: rows,
+    total: rows.length,
+    truncated: rows.length >= FINANCE_EXPORT_MAX_ROWS,
+  });
+});
+
 ordersRoutes.get("/:id/logs", async (c) => {
   const id = c.req.param("id");
   const supabase = createServiceClient(c.env);
@@ -1263,6 +1424,351 @@ ordersRoutes.get("/:id", async (c) => {
 
   const withActors = await attachActorsOne(supabase, order);
   return c.json(await attachOrderCurrencyOne(supabase, withActors));
+});
+
+function optionalTrimmedString(
+  value: unknown,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const t = value.trim();
+  return t || null;
+}
+
+function requiredTrimmedString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  return t || null;
+}
+
+/** 套餐内商品件数：SUM(item.quantity)，至少为 1 */
+async function resolvePackageItemCount(
+  supabase: ServiceClient,
+  packageId: string,
+): Promise<number> {
+  const { data: items, error } = await supabase
+    .from("product_package_items")
+    .select("quantity")
+    .eq("package_id", packageId);
+  if (error) throw new Error(error.message);
+  const sum = (items ?? []).reduce((acc, row) => {
+    const n =
+      typeof row.quantity === "number" ? row.quantity : Number(row.quantity);
+    return acc + (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
+  }, 0);
+  return Math.max(1, sum || 1);
+}
+
+/**
+ * 编辑订单基础信息。
+ * 更换商品/套餐时，product_name、sku_code、套餐名、单价、package_count 等一律按商品实际数据同步，不信任前端快照。
+ */
+ordersRoutes.patch("/:id", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json()) as Record<string, unknown>;
+  const actor = actorFrom(c);
+
+  const supabase = createServiceClient(c.env);
+  const { data: before, error: beforeError } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (beforeError) return c.json({ error: beforeError.message }, 500);
+  if (!before) return c.json({ error: "订单不存在" }, 404);
+
+  try {
+    const access = await assertOrderAccess(supabase, before, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+
+  const patch: Record<string, unknown> = { updated_by: actor.id };
+  let touched = false;
+
+  if (body.customer_name !== undefined) {
+    const name = requiredTrimmedString(body.customer_name);
+    if (!name) return c.json({ error: "收件人不能为空" }, 400);
+    patch.customer_name = name;
+    touched = true;
+  }
+
+  for (const key of [
+    "customer_phone",
+    "shipping_province",
+    "shipping_city",
+    "shipping_district",
+    "shipping_detail",
+    "shipping_address",
+    "owner_member",
+    "shipping_order_no",
+    "remark",
+  ] as const) {
+    if (body[key] === undefined) continue;
+    const v = optionalTrimmedString(body[key]);
+    if (v === undefined) return c.json({ error: `${key} 格式无效` }, 400);
+    patch[key] = v;
+    touched = true;
+  }
+
+  let quantity =
+    typeof before.quantity === "number"
+      ? before.quantity
+      : Number(before.quantity) || 1;
+  if (body.quantity !== undefined) {
+    const q =
+      typeof body.quantity === "number"
+        ? body.quantity
+        : Number(body.quantity);
+    if (!Number.isFinite(q) || q <= 0 || !Number.isInteger(q)) {
+      return c.json({ error: "购买数量须为正整数" }, 400);
+    }
+    quantity = q;
+    patch.quantity = quantity;
+    touched = true;
+  }
+
+  const productIdChanging = body.product_id !== undefined;
+  const packageIdChanging = body.package_id !== undefined;
+  let productId =
+    typeof before.product_id === "string" ? before.product_id : null;
+  let unitPrice =
+    typeof before.unit_price === "number"
+      ? before.unit_price
+      : Number(before.unit_price) || 0;
+  let packageCount =
+    typeof before.package_count === "number"
+      ? before.package_count
+      : Number(before.package_count) || 1;
+  let productWeight = 1;
+
+  if (productIdChanging || packageIdChanging) {
+    if (productIdChanging) {
+      const nextProductId = requiredTrimmedString(body.product_id);
+      if (!nextProductId) return c.json({ error: "请选择商品" }, 400);
+      productId = nextProductId;
+    }
+    if (!productId) {
+      return c.json({ error: "订单未关联商品，无法更换套餐" }, 400);
+    }
+
+    try {
+      const access = await assertProductAccess(supabase, productId, c);
+      if (!access.ok) return c.json({ error: access.error }, access.status);
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "权限校验失败" },
+        500,
+      );
+    }
+
+    const { data: product, error: productError } = await supabase
+      .from("products")
+      .select("id, name, sku_code, price, packages_enabled, weight, status")
+      .eq("id", productId)
+      .maybeSingle();
+    if (productError) return c.json({ error: productError.message }, 500);
+    if (!product) return c.json({ error: "商品不存在" }, 404);
+    if (
+      product.status === "off_sale" &&
+      product.id !== before.product_id
+    ) {
+      return c.json({ error: "商品已删除，无法选用" }, 400);
+    }
+
+    productWeight =
+      typeof product.weight === "number" && product.weight >= 0
+        ? product.weight
+        : Number(product.weight) || 1;
+
+    patch.product_id = product.id;
+    patch.product_name = product.name;
+    patch.sku_code =
+      typeof product.sku_code === "string" && product.sku_code.trim()
+        ? product.sku_code.trim()
+        : null;
+    touched = true;
+
+    const { data: packages, error: packagesError } = await supabase
+      .from("product_packages")
+      .select("id, name, name_external, original_price, discount_price")
+      .eq("product_id", product.id)
+      .order("sort_order", { ascending: true });
+    if (packagesError) return c.json({ error: packagesError.message }, 500);
+
+    const usePackages =
+      Boolean(product.packages_enabled) && (packages ?? []).length > 0;
+
+    let nextPackageId: string | null = null;
+    if (packageIdChanging) {
+      if (body.package_id === null || body.package_id === "") {
+        nextPackageId = null;
+      } else {
+        nextPackageId = requiredTrimmedString(body.package_id);
+        if (!nextPackageId) return c.json({ error: "套餐无效" }, 400);
+      }
+    } else if (productIdChanging) {
+      // 换商品且未指定套餐：有套餐则要求显式选择
+      nextPackageId = null;
+    } else {
+      nextPackageId =
+        typeof before.package_id === "string" ? before.package_id : null;
+    }
+
+    if (usePackages) {
+      if (!nextPackageId) {
+        return c.json({ error: "该商品已开启套餐，请选择套餐" }, 400);
+      }
+      const pkg = (packages ?? []).find((p) => p.id === nextPackageId);
+      if (!pkg) {
+        return c.json({ error: "套餐不存在或不属于该商品" }, 400);
+      }
+      try {
+        packageCount = await resolvePackageItemCount(supabase, pkg.id);
+      } catch (e) {
+        return c.json(
+          { error: e instanceof Error ? e.message : "读取套餐明细失败" },
+          500,
+        );
+      }
+      const priceRaw =
+        pkg.discount_price != null ? pkg.discount_price : pkg.original_price;
+      unitPrice =
+        typeof priceRaw === "number" ? priceRaw : Number(priceRaw) || 0;
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return c.json({ error: "套餐价格无效" }, 400);
+      }
+      patch.package_id = pkg.id;
+      patch.package_name = pkg.name;
+      patch.package_name_external = pkg.name_external;
+      patch.unit_price = unitPrice;
+      patch.package_count = packageCount;
+    } else {
+      if (nextPackageId) {
+        return c.json({ error: "该商品未开启套餐，无需选择套餐" }, 400);
+      }
+      unitPrice =
+        typeof product.price === "number"
+          ? product.price
+          : Number(product.price) || 0;
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return c.json({ error: "商品价格无效" }, 400);
+      }
+      packageCount = 1;
+      patch.package_id = null;
+      patch.package_name = null;
+      patch.package_name_external = null;
+      patch.unit_price = unitPrice;
+      patch.package_count = packageCount;
+    }
+
+    patch.weight = Number((productWeight * packageCount).toFixed(2));
+  }
+
+  // 数量或商品/套餐变更时重算金额
+  if (
+    body.quantity !== undefined ||
+    productIdChanging ||
+    packageIdChanging
+  ) {
+    const totalAmount = Number((unitPrice * quantity).toFixed(2));
+    patch.total_amount = totalAmount;
+    patch.item_value = totalAmount;
+    if (before.payment_type === "cod") {
+      patch.cod_amount = totalAmount;
+    }
+    touched = true;
+  }
+
+  // 结构化地址变更且未显式传 shipping_address 时自动拼接
+  if (
+    body.shipping_address === undefined &&
+    (body.shipping_province !== undefined ||
+      body.shipping_city !== undefined ||
+      body.shipping_district !== undefined ||
+      body.shipping_detail !== undefined)
+  ) {
+    const province =
+      (patch.shipping_province as string | null | undefined) !== undefined
+        ? (patch.shipping_province as string | null)
+        : (before.shipping_province as string | null);
+    const city =
+      (patch.shipping_city as string | null | undefined) !== undefined
+        ? (patch.shipping_city as string | null)
+        : (before.shipping_city as string | null);
+    const district =
+      (patch.shipping_district as string | null | undefined) !== undefined
+        ? (patch.shipping_district as string | null)
+        : (before.shipping_district as string | null);
+    const detail =
+      (patch.shipping_detail as string | null | undefined) !== undefined
+        ? (patch.shipping_detail as string | null)
+        : (before.shipping_detail as string | null);
+    const composed = [province, city, district, detail]
+      .filter((x): x is string => Boolean(x && String(x).trim()))
+      .join(" ");
+    patch.shipping_address = composed || null;
+  }
+
+  if (!touched) {
+    return c.json({ error: "没有需要更新的字段" }, 400);
+  }
+
+  const { data, error } = await supabase
+    .from("orders")
+    .update(patch)
+    .eq("id", id)
+    .select("*")
+    .maybeSingle();
+
+  if (error) return c.json({ error: error.message }, 500);
+  if (!data) return c.json({ error: "订单不存在" }, 404);
+
+  await writeAuditLog(supabase, {
+    entityType: "order",
+    entityId: id,
+    action: "order_update",
+    actor,
+    changes: {
+      before: {
+        customer_name: before.customer_name,
+        customer_phone: before.customer_phone,
+        product_id: before.product_id,
+        product_name: before.product_name,
+        package_id: before.package_id,
+        package_name: before.package_name,
+        sku_code: before.sku_code,
+        quantity: before.quantity,
+        unit_price: before.unit_price,
+        total_amount: before.total_amount,
+      },
+      after: {
+        customer_name: data.customer_name,
+        customer_phone: data.customer_phone,
+        product_id: data.product_id,
+        product_name: data.product_name,
+        package_id: data.package_id,
+        package_name: data.package_name,
+        sku_code: data.sku_code,
+        quantity: data.quantity,
+        unit_price: data.unit_price,
+        total_amount: data.total_amount,
+      },
+    },
+  });
+
+  return c.json(
+    await attachOrderCurrencyOne(
+      supabase,
+      await attachActorsOne(supabase, data),
+    ),
+  );
 });
 
 ordersRoutes.patch("/:id/status", async (c) => {

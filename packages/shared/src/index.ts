@@ -652,3 +652,23 @@ export interface UpdateProductInput {
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
   owner_ids?: string[];
 }
+
+/** 后台编辑订单（商品/套餐变更时服务端按实际数据同步快照） */
+export interface UpdateOrderInput {
+  customer_name?: string;
+  customer_phone?: string | null;
+  shipping_province?: string | null;
+  shipping_city?: string | null;
+  shipping_district?: string | null;
+  shipping_detail?: string | null;
+  /** 完整收件地址信息；未传时可由结构化地址自动拼接 */
+  shipping_address?: string | null;
+  quantity?: number;
+  /** 更换商品：同步 product_name、sku_code 等 */
+  product_id?: string;
+  /** 更换套餐：同步套餐名/单价/件数；无套餐商品传 null */
+  package_id?: string | null;
+  owner_member?: string | null;
+  shipping_order_no?: string | null;
+  remark?: string | null;
+}
