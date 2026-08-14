@@ -113,6 +113,16 @@ Pages 环境变量：
 
 可选：在 Pages 项目设置 `API_UPSTREAM` 覆盖默认 Worker 地址。
 
+### 安全加固（概要）
+
+代码侧已默认启用：Pages `_headers`（HSTS/CSP/防点击劫持等）、Worker `secureHeaders`、CORS 白名单不回落、公开查单 IP 限流、敏感表 RLS。
+
+建议在控制台同步完成：
+
+1. Cloudflare（`acomedia.work`）：SSL/TLS → **Full (strict)**；Security → 开启 **Bot Fight Mode**；尽量只用自定义域访问，少暴露 `*.workers.dev`
+2. Supabase：Authentication → 关闭公开注册；Site URL / Redirect URLs 仅允许 `https://acomedia.work`（及 www）
+3. 在 SQL Editor 执行最新 migration（含 `domains` / `currencies` / `product_owners` 的 RLS）
+
 ### 自定义域名（`acomedia.work`）
 
 域名需已在**同一 Cloudflare 账号**下处于「活动」状态，然后：

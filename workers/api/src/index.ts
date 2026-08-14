@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
 import { requireStaff } from "./middleware/auth";
 import { productsRoutes } from "./routes/products";
 import { packagesRoutes } from "./routes/packages";
@@ -11,9 +13,29 @@ import { currenciesRoutes } from "./routes/currencies";
 import { domainsRoutes } from "./routes/domains";
 import { employeesRoutes, meRoutes } from "./routes/employees";
 import type { Env, Variables } from "./types";
-import { cors } from "hono/cors";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+app.use(
+  "*",
+  secureHeaders({
+    xFrameOptions: "DENY",
+    xContentTypeOptions: "nosniff",
+    referrerPolicy: "strict-origin-when-cross-origin",
+    strictTransportSecurity: "max-age=31536000; includeSubDomains",
+    crossOriginOpenerPolicy: "same-origin",
+    permissionsPolicy: {
+      accelerometer: [],
+      camera: [],
+      geolocation: [],
+      gyroscope: [],
+      magnetometer: [],
+      microphone: [],
+      payment: [],
+      usb: [],
+    },
+  }),
+);
 
 app.use("*", async (c, next) => {
   const origins = (c.env.CORS_ORIGINS ?? "http://localhost:5173")
@@ -23,8 +45,9 @@ app.use("*", async (c, next) => {
 
   const middleware = cors({
     origin: (origin) => {
-      if (!origin) return origins[0] ?? "*";
-      return origins.includes(origin) ? origin : origins[0] ?? "";
+      // 无 Origin（如同机 curl）不回显；未在白名单内一律拒绝，勿回落 origins[0]
+      if (!origin) return "";
+      return origins.includes(origin) ? origin : "";
     },
     allowHeaders: ["Authorization", "Content-Type"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -59,7 +82,7 @@ app.route("/api", api);
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 app.onError((err, c) => {
   console.error(err);
-  return c.json({ error: err.message || "Internal Server Error" }, 500);
+  return c.json({ error: "Internal Server Error" }, 500);
 });
 
 export default app;

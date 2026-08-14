@@ -4,10 +4,43 @@
  */
 const DEFAULT_UPSTREAM = "https://shopad-api.ubeator.workers.dev";
 
+const ALLOWED_METHODS = new Set([
+  "GET",
+  "HEAD",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "OPTIONS",
+]);
+
+const STRIP_REQUEST_HEADERS = [
+  "cookie",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "cf-connecting-ip",
+  "cf-ipcountry",
+  "cf-ray",
+  "cf-visitor",
+  "x-forwarded-for",
+  "x-real-ip",
+];
+
 export async function onRequest(context: {
   request: Request;
   env: { API_UPSTREAM?: string };
 }): Promise<Response> {
+  const method = context.request.method.toUpperCase();
+  if (!ALLOWED_METHODS.has(method)) {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+
   const upstream = (context.env.API_UPSTREAM || DEFAULT_UPSTREAM).replace(
     /\/$/,
     "",
@@ -17,8 +50,14 @@ export async function onRequest(context: {
 
   const headers = new Headers(context.request.headers);
   headers.delete("host");
+  for (const name of STRIP_REQUEST_HEADERS) {
+    headers.delete(name);
+  }
   headers.set("X-Forwarded-Host", incoming.host);
   headers.set("X-Forwarded-Proto", incoming.protocol.replace(":", ""));
+  // 保留真实客户端 IP 供上游限流（仅信任 Cloudflare 注入）
+  const cfIp = context.request.headers.get("cf-connecting-ip");
+  if (cfIp) headers.set("cf-connecting-ip", cfIp);
 
   const init: RequestInit = {
     method: context.request.method,
@@ -26,7 +65,7 @@ export async function onRequest(context: {
     redirect: "manual",
   };
 
-  if (context.request.method !== "GET" && context.request.method !== "HEAD") {
+  if (method !== "GET" && method !== "HEAD") {
     init.body = context.request.body;
   }
 
