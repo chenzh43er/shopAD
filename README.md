@@ -96,7 +96,7 @@ npx wrangler secret put SUPABASE_URL
 npx wrangler secret put SUPABASE_ANON_KEY
 npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 npx wrangler secret put SUPABASE_JWT_SECRET
-# 可选：更新 wrangler.toml 中 CORS_ORIGINS 为 Pages 域名
+# 可选：更新 wrangler.toml 中 CORS_ORIGINS 为 Pages / 自定义域名
 pnpm deploy
 ```
 
@@ -112,6 +112,17 @@ Pages 环境变量：
 - `VITE_API_BASE_URL` 保持为空（浏览器走同源 `/api`，由 `apps/web/functions` 代理到 Worker；勿直连 `*.workers.dev`，国内常被阻断）
 
 可选：在 Pages 项目设置 `API_UPSTREAM` 覆盖默认 Worker 地址。
+
+### 自定义域名（`acomedia.work`）
+
+域名需已在**同一 Cloudflare 账号**下处于「活动」状态，然后：
+
+1. **Workers & Pages** → 项目 `shopad` → **Custom domains** → **Set up a domain**
+2. 添加 `acomedia.work`（可选再加 `www.acomedia.work`）；同账号 zone 会自动写 CNAME，状态变 Active 即可
+3. 重新部署 Worker（使 `CORS_ORIGINS` 含新域名生效）
+4. **Supabase** → Authentication → URL Configuration：
+   - Site URL：`https://acomedia.work`
+   - Redirect URLs 增加：`https://acomedia.work/**`、`https://www.acomedia.work/**`（若启用 www）
 
 ## 订单状态流转
 

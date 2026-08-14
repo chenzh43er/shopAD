@@ -1,6 +1,6 @@
 /**
  * 将 /api/* 同源代理到 Worker。
- * 浏览器只访问 shopad.pages.dev，避免国内直连 *.workers.dev 超时导致无法登录。
+ * 浏览器只访问 Pages 域名（shopad.pages.dev / acomedia.work），避免国内直连 *.workers.dev 超时。
  */
 const DEFAULT_UPSTREAM = "https://shopad-api.ubeator.workers.dev";
 
