@@ -165,6 +165,21 @@ Pages 环境变量：
 
 ## 安全说明
 
-- 浏览器只使用 Supabase **anon** key；**service_role** 仅存在于 Worker secrets
-- 数据表开启 RLS 且无公开写策略；管理写操作走 Worker
+密钥 / 连接串三层分工（同一 Supabase 库）：
+
+| 运行面 | 凭证 | 说明 |
+|--------|------|------|
+| `apps/web` 浏览器 | `VITE_SUPABASE_ANON_KEY`（anon / publishable） | 禁止 service_role；受 RLS 约束 |
+| `workers/api` | `SUPABASE_SERVICE_ROLE_KEY`（仅 Wrangler secrets） | 旁路 RLS，只做已鉴权管理写 |
+| `product-1` 落地页 | `DATABASE_URL` → 角色 **`storefront`** | 见迁移 `20260817010000_storefront_db_role.sql`；禁止 postgres / 超管 |
+
+部署 `storefront` 角色后请执行：
+
+```sql
+ALTER ROLE storefront WITH PASSWORD '强随机密码';
+```
+
+连接串示例：`postgresql://storefront:密码@db.<ref>.supabase.co:5432/postgres`
+
+- 数据表开启 RLS；anon 无公开写策略；管理写操作走 Worker
 - 生产环境建议关闭公开注册，仅邀请管理员账号

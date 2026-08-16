@@ -1,7 +1,9 @@
 # Local development secrets — copy from this example
+# 分工：本文件仅 Worker；前端只用 VITE_SUPABASE_ANON_KEY；落地页用 storefront 的 DATABASE_URL
 SUPABASE_URL=
 # New-style keys from Dashboard → Project Settings → API Keys
 SUPABASE_ANON_KEY=sb_publishable_...
+# 仅服务端；勿复制到 apps/web 或 product-1
 SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 # Optional (legacy HS256 verify); not required when using auth.getUser
 SUPABASE_JWT_SECRET=
