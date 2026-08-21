@@ -359,7 +359,7 @@ export function DashboardPage() {
                 </li>
                 <li>
                   <Text strong>财务 Excel</Text>
-                  ：在「已发货」使用「导出财务 Excel」，按最近更新时间筛选，可按归属成员与商品过滤。
+                  ：在「已发货」使用「导出财务 Excel」，按订单创建日期筛选，可按归属成员与商品过滤。
                 </li>
                 <li>若提示达到导出上限，请缩小时间范围或筛选条件后重试。</li>
               </ol>

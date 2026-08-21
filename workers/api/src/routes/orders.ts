@@ -189,7 +189,7 @@ function parseExportListFilters(body: {
   };
 }
 
-/** 与列表页一致：批量订单号/手机号、单号/电话搜索、可选更新时间区间 */
+/** 与列表页一致：批量订单号/手机号、单号/电话搜索、可选创建时间区间 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyExportListFilters(query: any, filters: ExportListFilters) {
   const batchByOrderNo = filters.orderNos.length > 0;
@@ -208,10 +208,10 @@ function applyExportListFilters(query: any, filters: ExportListFilters) {
     query = query.ilike("customer_phone", `%${filters.customerPhone}%`);
   }
   if (filters.dateFrom) {
-    query = query.gte("updated_at", filters.dateFrom);
+    query = query.gte("created_at", filters.dateFrom);
   }
   if (filters.dateTo) {
-    query = query.lte("updated_at", filters.dateTo);
+    query = query.lte("created_at", filters.dateTo);
   }
   return query;
 }
@@ -787,7 +787,7 @@ ordersRoutes.get("/", async (c) => {
   let query = supabase
     .from("orders")
     .select(ORDER_LIST_SELECT, { count: "estimated" })
-    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
   try {
@@ -842,20 +842,20 @@ ordersRoutes.get("/", async (c) => {
   if (paymentType === "cod" || paymentType === "non_cod") {
     query = query.eq("payment_type", paymentType);
   }
-  // 按最近更新时间筛选日期区间
+  // 按订单创建日期筛选日期区间
   if (dateFrom) {
     const from = new Date(dateFrom);
     if (Number.isNaN(from.getTime())) {
       return c.json({ error: "开始日期无效" }, 400);
     }
-    query = query.gte("updated_at", from.toISOString());
+    query = query.gte("created_at", from.toISOString());
   }
   if (dateTo) {
     const to = new Date(dateTo);
     if (Number.isNaN(to.getTime())) {
       return c.json({ error: "结束日期无效" }, 400);
     }
-    query = query.lte("updated_at", to.toISOString());
+    query = query.lte("created_at", to.toISOString());
   }
 
   const { data, error, count } = await query;
@@ -1272,7 +1272,7 @@ ordersRoutes.post("/full-export", async (c) => {
     .from("orders")
     .select(FULL_EXPORT_SELECT)
     .eq("payment_type", "cod")
-    .order("updated_at", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(FINANCE_EXPORT_MAX_ROWS);
 
   query = applyExportListFilters(query, listFilters.filters);
