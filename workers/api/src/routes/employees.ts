@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import {
   isUserRole,
+  isSuperAdmin as checkSuperAdmin,
   normalizeUserRole,
   type CreateEmployeeInput,
   type Profile,
@@ -8,6 +9,12 @@ import {
   type UserRole,
 } from "@shopad/shared";
 import { createServiceClient } from "../lib/supabase";
+import {
+  listAllowedRegionIds,
+  loadProfileRegionIds,
+  parseRegionIdsFromMetadata,
+  syncProfileRegions,
+} from "../lib/access";
 import { requireSuperAdmin } from "../middleware/auth";
 import type { Env, Variables } from "../types";
 
@@ -27,6 +34,33 @@ function trimDisplayName(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const t = value.trim();
   return t || null;
+}
+
+function parseRegionIds(value: unknown): string[] | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return null;
+  const ids = [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return ids;
+}
+
+function validateEmployeeRegionIds(
+  role: UserRole,
+  regionIds: string[] | undefined,
+  opts?: { required?: boolean },
+): { ok: true } | { ok: false; error: string } {
+  if (role === "super_admin") return { ok: true };
+  const required = opts?.required ?? false;
+  if (required && (!regionIds || regionIds.length === 0)) {
+    return { ok: false, error: "员工须至少分配一个地区" };
+  }
+  return { ok: true };
 }
 
 function isMissingColumnError(message: string): boolean {
@@ -140,6 +174,7 @@ async function loadProfilesWithEmail(
       is_active: row.is_active !== false,
       created_by: row.created_by ?? null,
       created_at: row.created_at,
+      region_ids: parseRegionIdsFromMetadata(userData.user?.user_metadata),
     });
   }
 
@@ -155,6 +190,11 @@ meRoutes.get("/", async (c) => {
     if (!profile) return c.json({ error: "账号资料不存在" }, 404);
 
     const role = normalizeUserRole(profile.role) ?? c.get("userRole");
+    let regionIds: string[] = [];
+    if (!checkSuperAdmin(role)) {
+      const allowed = await listAllowedRegionIds(supabase, c);
+      regionIds = allowed === "all" ? [] : allowed;
+    }
     const payload: Profile = {
       id: profile.id,
       email: c.get("userEmail") || null,
@@ -163,6 +203,7 @@ meRoutes.get("/", async (c) => {
       is_active: profile.is_active !== false,
       created_by: profile.created_by ?? null,
       created_at: profile.created_at,
+      region_ids: regionIds,
     };
     return c.json(payload);
   } catch (e) {
@@ -208,6 +249,17 @@ employeesRoutes.post("/", async (c) => {
     return c.json({ error: "密码至少 6 位" }, 400);
   }
 
+  const regionIds = parseRegionIds(body.region_ids);
+  if (regionIds === null && body.region_ids !== undefined) {
+    return c.json({ error: "地区权限格式无效" }, 400);
+  }
+  const regionCheck = validateEmployeeRegionIds(role, regionIds ?? undefined, {
+    required: true,
+  });
+  if (!regionCheck.ok) {
+    return c.json({ error: regionCheck.error }, 400);
+  }
+
   const supabase = createServiceClient(c.env);
   const { data: created, error: createError } =
     await supabase.auth.admin.createUser({
@@ -217,6 +269,7 @@ employeesRoutes.post("/", async (c) => {
       user_metadata: {
         display_name: displayName ?? email.split("@")[0],
         role,
+        region_ids: role === "employee" ? (regionIds ?? []) : [],
       },
     });
 
@@ -244,6 +297,21 @@ employeesRoutes.post("/", async (c) => {
     return c.json({ error: profileError }, 500);
   }
 
+  let savedRegionIds: string[] = [];
+  if (role === "employee" && regionIds && regionIds.length > 0) {
+    const synced = await syncProfileRegions(
+      supabase,
+      created.user.id,
+      regionIds,
+      c.get("userId"),
+    );
+    if (!synced.ok) {
+      await supabase.auth.admin.deleteUser(created.user.id);
+      return c.json({ error: synced.error }, 400);
+    }
+    savedRegionIds = regionIds;
+  }
+
   const profile: Profile = {
     id: created.user.id,
     email: created.user.email ?? email,
@@ -252,6 +320,7 @@ employeesRoutes.post("/", async (c) => {
     is_active: true,
     created_by: c.get("userId"),
     created_at: new Date().toISOString(),
+    region_ids: savedRegionIds,
   };
   return c.json(profile, 201);
 });
@@ -293,6 +362,34 @@ employeesRoutes.patch("/:id", async (c) => {
     patch.is_active = Boolean(body.is_active);
   }
 
+  const parsedRegionIds = parseRegionIds(body.region_ids);
+  if (parsedRegionIds === null && body.region_ids !== undefined) {
+    return c.json({ error: "地区权限格式无效" }, 400);
+  }
+
+  const nextRole =
+    (patch.role as UserRole | undefined) ??
+    normalizeUserRole(existing.role) ??
+    "employee";
+
+  if (parsedRegionIds !== null) {
+    const regionCheck = validateEmployeeRegionIds(nextRole, parsedRegionIds, {
+      required: nextRole === "employee",
+    });
+    if (!regionCheck.ok) {
+      return c.json({ error: regionCheck.error }, 400);
+    }
+  } else if (nextRole === "employee") {
+    const existingRegions = await loadProfileRegionIds(supabase, [id]);
+    const current = existingRegions.get(id) ?? [];
+    const regionCheck = validateEmployeeRegionIds(nextRole, current, {
+      required: true,
+    });
+    if (!regionCheck.ok) {
+      return c.json({ error: regionCheck.error }, 400);
+    }
+  }
+
   if (Object.keys(patch).length > 0) {
     const { error: updateError } = await updateProfileCompat(
       supabase,
@@ -312,11 +409,26 @@ employeesRoutes.patch("/:id", async (c) => {
     if (pwdError) return c.json({ error: pwdError.message }, 400);
   }
 
+  let savedRegionIds: string[] | undefined;
+  if (parsedRegionIds !== null) {
+    const toSync = nextRole === "super_admin" ? [] : parsedRegionIds;
+    const synced = await syncProfileRegions(
+      supabase,
+      id,
+      toSync,
+      c.get("userId"),
+    );
+    if (!synced.ok) return c.json({ error: synced.error }, 400);
+    savedRegionIds = toSync;
+  } else if (nextRole === "super_admin") {
+    const synced = await syncProfileRegions(supabase, id, [], c.get("userId"));
+    if (!synced.ok) return c.json({ error: synced.error }, 400);
+    savedRegionIds = [];
+  } else {
+    savedRegionIds = (await loadProfileRegionIds(supabase, [id])).get(id) ?? [];
+  }
+
   const { data: userData } = await supabase.auth.admin.getUserById(id);
-  const nextRole =
-    (patch.role as UserRole | undefined) ??
-    normalizeUserRole(existing.role) ??
-    "employee";
   const profile: Profile = {
     id,
     email: userData.user?.email ?? null,
@@ -331,6 +443,7 @@ employeesRoutes.patch("/:id", async (c) => {
         : existing.is_active !== false,
     created_by: existing.created_by ?? null,
     created_at: existing.created_at,
+    region_ids: savedRegionIds,
   };
   return c.json(profile);
 });

@@ -7,7 +7,9 @@
     "dev:web": "pnpm --filter @shopad/web dev",
     "dev:api": "pnpm --filter @shopad/api dev",
     "build": "pnpm -r --filter @shopad/shared --filter @shopad/web --filter @shopad/api build",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "seed:saudi": "node scripts/seed-saudi-region.mjs",
+    "generate:saudi-migration": "node scripts/generate-saudi-migration.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -21,6 +23,7 @@
     ]
   },
   "devDependencies": {
+    "@supabase/supabase-js": "^2.49.1",
     "@types/pg": "^8.20.0",
     "dotenv": "^17.4.2",
     "pg": "^8.22.0",

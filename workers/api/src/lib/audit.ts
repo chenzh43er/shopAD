@@ -18,11 +18,8 @@ export type WriteAuditInput = {
   remark?: string | null;
 };
 
-export async function writeAuditLog(
-  supabase: SupabaseClient,
-  input: WriteAuditInput,
-): Promise<void> {
-  const { error } = await supabase.from("audit_logs").insert({
+function auditRow(input: WriteAuditInput) {
+  return {
     entity_type: input.entityType,
     entity_id: input.entityId,
     action: input.action,
@@ -33,10 +30,35 @@ export async function writeAuditLog(
     to_value: input.toValue ?? null,
     changes: input.changes ?? null,
     remark: input.remark ?? null,
-  });
+  };
+}
+
+export async function writeAuditLog(
+  supabase: SupabaseClient,
+  input: WriteAuditInput,
+): Promise<void> {
+  const { error } = await supabase.from("audit_logs").insert(auditRow(input));
 
   if (error) {
     console.error("writeAuditLog failed:", error.message);
+  }
+}
+
+const AUDIT_BATCH_CHUNK = 100;
+
+export async function writeAuditLogs(
+  supabase: SupabaseClient,
+  inputs: WriteAuditInput[],
+): Promise<void> {
+  if (inputs.length === 0) return;
+  for (let i = 0; i < inputs.length; i += AUDIT_BATCH_CHUNK) {
+    const chunk = inputs.slice(i, i + AUDIT_BATCH_CHUNK);
+    const { error } = await supabase
+      .from("audit_logs")
+      .insert(chunk.map(auditRow));
+    if (error) {
+      console.error("writeAuditLogs failed:", error.message);
+    }
   }
 }
 

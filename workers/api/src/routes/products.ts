@@ -13,8 +13,11 @@ import {
 } from "../lib/audit";
 import {
   assertProductAccess,
+  assertRegionAccess,
   attachProductOwners,
   attachProductOwnersOne,
+  isSuperAdmin,
+  listAllowedRegionIds,
   scopeProductsByOwner,
   syncProductOwners,
 } from "../lib/access";
@@ -131,10 +134,16 @@ function actorFrom(c: { get: (k: keyof Variables) => string }) {
 const PRODUCT_SELECT =
   "*, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix), domain:domains!products_domain_id_fkey(id, host, name, remark)";
 
+type ProductAppContext = import("hono").Context<{
+  Bindings: import("../types").Env;
+  Variables: import("../types").Variables;
+}>;
+
 async function resolveRegionId(
   supabase: ReturnType<typeof createServiceClient>,
   regionId: unknown,
   required: boolean,
+  c?: ProductAppContext,
 ): Promise<{ ok: true; regionId: string | null } | { ok: false; error: string }> {
   if (regionId === undefined) {
     return required
@@ -162,6 +171,10 @@ async function resolveRegionId(
     .maybeSingle();
   if (error) return { ok: false, error: error.message };
   if (!data) return { ok: false, error: "所选地区不存在" };
+  if (c && !isSuperAdmin(c)) {
+    const regionAccess = await assertRegionAccess(supabase, id, c);
+    if (!regionAccess.ok) return { ok: false, error: regionAccess.error };
+  }
   return { ok: true, regionId: id };
 }
 
@@ -387,6 +400,7 @@ productsRoutes.get("/", async (c) => {
   const pageSize = parsePageSize(c.req.query("pageSize"));
   const q = c.req.query("q")?.trim();
   const status = c.req.query("status");
+  const regionId = c.req.query("region_id")?.trim();
 
   const supabase = createServiceClient(c.env);
   // status 字母序降序：on_sale → off_sale → draft，已上架优先
@@ -419,6 +433,24 @@ productsRoutes.get("/", async (c) => {
   } else {
     // 默认列表排除已删除（off_sale）
     query = query.neq("status", "off_sale");
+  }
+  if (regionId === "__none__") {
+    query = query.is("region_id", null);
+  } else if (regionId) {
+    if (!isSuperAdmin(c)) {
+      try {
+        const allowed = await listAllowedRegionIds(supabase, c);
+        if (allowed !== "all" && !allowed.includes(regionId)) {
+          return c.json({ data: [], total: 0, page, pageSize });
+        }
+      } catch (e) {
+        return c.json(
+          { error: e instanceof Error ? e.message : "权限校验失败" },
+          500,
+        );
+      }
+    }
+    query = query.eq("region_id", regionId);
   }
 
   const { data, error, count } = await query;
@@ -783,6 +815,7 @@ productsRoutes.post("/", async (c) => {
     supabase,
     body.region_id,
     status === "on_sale",
+    c,
   );
   if (!regionResolved.ok) {
     return c.json({ error: regionResolved.error }, 400);
@@ -1059,6 +1092,7 @@ productsRoutes.put("/:id", async (c) => {
       supabase,
       body.region_id,
       false,
+      c,
     );
     if (!regionResolved.ok) {
       return c.json({ error: regionResolved.error }, 400);

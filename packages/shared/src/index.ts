@@ -142,6 +142,54 @@ export function getAllowedOrderTransitions(
   );
 }
 
+/** COD 订单可恢复上一步的当前状态（待审核为流程起点，不可恢复） */
+export const COD_REVERTIBLE_STATUSES = [
+  "awaiting_confirm",
+  "awaiting_shipment",
+  "cod_shipped",
+  "cod_completed",
+  "cod_refused",
+  "cancelled",
+] as const satisfies readonly OrderStatus[];
+
+const COD_REVERTIBLE_STATUS_SET = new Set<OrderStatus>(COD_REVERTIBLE_STATUSES);
+
+/** 无审计记录时的默认上一步状态 */
+export const COD_REVERT_FALLBACK: Partial<Record<OrderStatus, OrderStatus>> = {
+  awaiting_confirm: "awaiting_review",
+  awaiting_shipment: "awaiting_confirm",
+  cod_shipped: "awaiting_shipment",
+  cod_completed: "cod_shipped",
+  cod_refused: "cod_shipped",
+};
+
+export function canRevertCodOrder(
+  paymentType: PaymentType,
+  status: OrderStatus,
+): boolean {
+  return paymentType === "cod" && COD_REVERTIBLE_STATUS_SET.has(status);
+}
+
+/** COD 订单超级管理员可强制流转的目标状态 */
+export const COD_FORCE_STATUSES = [
+  "awaiting_review",
+  "awaiting_confirm",
+  "awaiting_shipment",
+  "cod_shipped",
+  "cod_completed",
+  "cod_refused",
+  "cancelled",
+] as const satisfies readonly OrderStatus[];
+
+const COD_FORCE_STATUS_SET = new Set<OrderStatus>(COD_FORCE_STATUSES);
+
+export function isCodForceStatus(value: unknown): value is OrderStatus {
+  return (
+    typeof value === "string" &&
+    COD_FORCE_STATUS_SET.has(value as OrderStatus)
+  );
+}
+
 export function isPaymentType(value: unknown): value is PaymentType {
   return value === "cod" || value === "non_cod";
 }
@@ -187,6 +235,8 @@ export interface Profile {
   is_active: boolean;
   created_by: string | null;
   created_at: string;
+  /** 员工可操作的地区（地址库 id）；超管不受此限制 */
+  region_ids?: string[];
 }
 
 export interface CreateEmployeeInput {
@@ -194,6 +244,8 @@ export interface CreateEmployeeInput {
   password: string;
   display_name?: string | null;
   role?: UserRole;
+  /** 员工角色须至少分配一个地区 */
+  region_ids?: string[];
 }
 
 export interface UpdateEmployeeInput {
@@ -201,6 +253,7 @@ export interface UpdateEmployeeInput {
   role?: UserRole;
   is_active?: boolean;
   password?: string;
+  region_ids?: string[];
 }
 
 export interface ActorRef {

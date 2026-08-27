@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Button,
   Descriptions,
   Form,
   Input,
-  InputNumber,
   Modal,
   Select,
   Space,
@@ -16,20 +15,18 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ORDER_STATUS_LABELS,
   REVIEW_STATUS_LABELS,
+  canRevertCodOrder,
   type LogisticsShipper,
   type Order,
   type OrderStatus,
-  type Paginated,
   type PaymentType,
-  type Product,
-  type ProductPackageWithItems,
   type ReviewStatus,
-  type UpdateOrderInput,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import { formatMoney } from "../lib/formatMoney";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
+import { OrderEditModal } from "../components/OrderEditModal";
 import {
   getOrdersListFrom,
   setOrdersListFrom,
@@ -75,35 +72,6 @@ type ShipMetaFormValues = {
   shipping_order_no: string;
   owner_member: string;
 };
-
-type EditOrderFormValues = {
-  customer_name: string;
-  customer_phone?: string;
-  shipping_province?: string;
-  shipping_city?: string;
-  shipping_district?: string;
-  shipping_detail?: string;
-  shipping_address?: string;
-  product_id: string;
-  package_id?: string;
-  quantity: number;
-  owner_member?: string;
-  shipping_order_no?: string;
-};
-
-function packageItemCount(pkg: ProductPackageWithItems): number {
-  const sum = (pkg.items ?? []).reduce((acc, item) => {
-    const n = Number(item.quantity);
-    return acc + (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
-  }, 0);
-  return Math.max(1, sum || 1);
-}
-
-function packageUnitPrice(pkg: ProductPackageWithItems): number {
-  const raw = pkg.discount_price ?? pkg.original_price;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : 0;
-}
 
 function isShipTransition(status: OrderStatus): boolean {
   return status === "shipped" || status === "cod_shipped";
@@ -171,24 +139,6 @@ export function OrderDetailPage() {
   const [invalidMode, setInvalidMode] = useState<"status" | "review">("status");
 
   const [editOpen, setEditOpen] = useState(false);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editLoading, setEditLoading] = useState(false);
-  const [editProducts, setEditProducts] = useState<
-    Array<Pick<Product, "id" | "name" | "sku_code" | "price" | "packages_enabled" | "weight">>
-  >([]);
-  const [editPackages, setEditPackages] = useState<ProductPackageWithItems[]>(
-    [],
-  );
-  const [editSkuCode, setEditSkuCode] = useState<string | null>(null);
-  const [editUnitPrice, setEditUnitPrice] = useState(0);
-  const [editPackageCount, setEditPackageCount] = useState(1);
-  const [editPackagesEnabled, setEditPackagesEnabled] = useState(false);
-  const [editForm] = Form.useForm<EditOrderFormValues>();
-  const editQuantity = Form.useWatch("quantity", editForm) ?? 1;
-  const editPreviewTotal = useMemo(
-    () => Number((editUnitPrice * Math.max(1, Number(editQuantity) || 1)).toFixed(2)),
-    [editUnitPrice, editQuantity],
-  );
 
   // 详情页侧栏/返回路径跟随订单当前 COD 状态（审核后不再锁在进入时的列表）
   useEffect(() => {
@@ -237,209 +187,6 @@ export function OrderDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  const loadEditProducts = async () => {
-    const res = await apiFetch<
-      Paginated<
-        Pick<
-          Product,
-          | "id"
-          | "name"
-          | "sku_code"
-          | "price"
-          | "packages_enabled"
-          | "weight"
-        >
-      >
-    >("/api/products?page=1&pageSize=500");
-    return res.data ?? [];
-  };
-
-  const loadEditPackages = async (productId: string) => {
-    const res = await apiFetch<{ data: ProductPackageWithItems[] }>(
-      `/api/products/${productId}/packages`,
-    );
-    return res.data ?? [];
-  };
-
-  const applyProductSync = async (
-    productId: string,
-    preferredPackageId?: string | null,
-  ) => {
-    const product =
-      editProducts.find((p) => p.id === productId) ??
-      (await apiFetch<Product>(`/api/products/${productId}`));
-
-    const packages = await loadEditPackages(productId);
-    setEditPackages(packages);
-    setEditSkuCode(product.sku_code ?? null);
-
-    const usePackages = Boolean(product.packages_enabled) && packages.length > 0;
-    setEditPackagesEnabled(usePackages);
-
-    if (usePackages) {
-      const selected =
-        packages.find((p) => p.id === preferredPackageId) ?? packages[0];
-      const count = packageItemCount(selected);
-      const price = packageUnitPrice(selected);
-      setEditPackageCount(count);
-      setEditUnitPrice(price);
-      editForm.setFieldsValue({
-        product_id: productId,
-        package_id: selected.id,
-      });
-    } else {
-      setEditPackageCount(1);
-      setEditUnitPrice(Number(product.price) || 0);
-      editForm.setFieldsValue({
-        product_id: productId,
-        package_id: undefined,
-      });
-    }
-  };
-
-  const applyPackageSync = (packageId: string) => {
-    const pkg = editPackages.find((p) => p.id === packageId);
-    if (!pkg) return;
-    setEditPackageCount(packageItemCount(pkg));
-    setEditUnitPrice(packageUnitPrice(pkg));
-    editForm.setFieldsValue({ package_id: packageId });
-  };
-
-  const openEditModal = async () => {
-    if (!order) return;
-    setEditOpen(true);
-    setEditLoading(true);
-    try {
-      const products = await loadEditProducts();
-      // 当前商品若不在列表（已下架等），补进选项避免无法回显
-      let list = products;
-      if (
-        order.product_id &&
-        !list.some((p) => p.id === order.product_id)
-      ) {
-        try {
-          const current = await apiFetch<Product>(
-            `/api/products/${order.product_id}`,
-          );
-          list = [
-            {
-              id: current.id,
-              name: current.name,
-              sku_code: current.sku_code,
-              price: current.price,
-              packages_enabled: current.packages_enabled,
-              weight: current.weight,
-            },
-            ...list,
-          ];
-        } catch {
-          list = [
-            {
-              id: order.product_id,
-              name: order.product_name || order.product_id,
-              sku_code: order.sku_code,
-              price: order.unit_price,
-              packages_enabled: Boolean(order.package_id),
-              weight: order.weight ?? 1,
-            },
-            ...list,
-          ];
-        }
-      }
-      setEditProducts(list);
-
-      editForm.setFieldsValue({
-        customer_name: order.customer_name,
-        customer_phone: order.customer_phone ?? "",
-        shipping_province: order.shipping_province ?? "",
-        shipping_city: order.shipping_city ?? "",
-        shipping_district: order.shipping_district ?? "",
-        shipping_detail: order.shipping_detail ?? "",
-        shipping_address: order.shipping_address ?? "",
-        product_id: order.product_id ?? undefined,
-        package_id: order.package_id ?? undefined,
-        quantity: Math.max(1, Number(order.quantity) || 1),
-        owner_member: order.owner_member ?? "",
-        shipping_order_no: order.shipping_order_no ?? "",
-      });
-
-      if (order.product_id) {
-        // 先写入 products，再同步套餐（applyProductSync 依赖 editProducts 时可能尚未更新）
-        const packages = await loadEditPackages(order.product_id);
-        setEditPackages(packages);
-        const product =
-          list.find((p) => p.id === order.product_id) ??
-          (await apiFetch<Product>(`/api/products/${order.product_id}`));
-        setEditSkuCode(product.sku_code ?? order.sku_code ?? null);
-        const usePackages =
-          Boolean(product.packages_enabled) && packages.length > 0;
-        setEditPackagesEnabled(usePackages);
-        if (usePackages) {
-          const selected =
-            packages.find((p) => p.id === order.package_id) ?? packages[0];
-          setEditPackageCount(packageItemCount(selected));
-          setEditUnitPrice(packageUnitPrice(selected));
-          editForm.setFieldsValue({ package_id: selected.id });
-        } else {
-          setEditPackageCount(1);
-          setEditUnitPrice(Number(product.price) || Number(order.unit_price) || 0);
-          editForm.setFieldsValue({ package_id: undefined });
-        }
-      } else {
-        setEditPackages([]);
-        setEditSkuCode(order.sku_code);
-        setEditUnitPrice(Number(order.unit_price) || 0);
-        setEditPackageCount(Math.max(1, Number(order.package_count) || 1));
-        setEditPackagesEnabled(false);
-      }
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "加载编辑数据失败");
-      setEditOpen(false);
-    } finally {
-      setEditLoading(false);
-    }
-  };
-
-  const submitEdit = async () => {
-    if (!order) return;
-    try {
-      const values = await editForm.validateFields();
-      setEditSaving(true);
-      const payload: UpdateOrderInput = {
-        customer_name: values.customer_name.trim(),
-        customer_phone: values.customer_phone?.trim() || null,
-        shipping_province: values.shipping_province?.trim() || null,
-        shipping_city: values.shipping_city?.trim() || null,
-        shipping_district: values.shipping_district?.trim() || null,
-        shipping_detail: values.shipping_detail?.trim() || null,
-        shipping_address: values.shipping_address?.trim() || null,
-        quantity: values.quantity,
-        owner_member: values.owner_member?.trim() || null,
-        shipping_order_no: values.shipping_order_no?.trim() || null,
-      };
-
-      if (values.product_id) {
-        payload.product_id = values.product_id;
-        payload.package_id = editPackagesEnabled
-          ? values.package_id || null
-          : null;
-      }
-
-      await apiFetch<Order>(`/api/orders/${order.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      });
-      message.success("订单信息已更新");
-      setEditOpen(false);
-      await load();
-    } catch (e) {
-      if (e && typeof e === "object" && "errorFields" in e) return;
-      message.error(e instanceof Error ? e.message : "保存失败");
-    } finally {
-      setEditSaving(false);
-    }
-  };
 
   const changeStatus = async (
     next: OrderStatus,
@@ -581,6 +328,7 @@ export function OrderDetailPage() {
     order.status === "awaiting_review" ||
     order.status === "awaiting_confirm" ||
     order.status === "awaiting_shipment";
+  const canRevert = canRevertCodOrder(paymentType, order.status);
   const lineTotal = Number(order.unit_price) * Number(order.quantity || 0);
   const backPath = fromPath || resolveCodListPath(order);
 
@@ -589,7 +337,41 @@ export function OrderDetailPage() {
       <div className="page-header">
         <h1>订单详情</h1>
         <Space>
-          <Button type="primary" onClick={() => void openEditModal()}>
+          {canRevert ? (
+            <Button
+              loading={saving}
+              onClick={() => {
+                Modal.confirm({
+                  title: "恢复上一步",
+                  content: "确认将该订单恢复到上一步状态？",
+                  okText: "确认恢复",
+                  cancelText: "取消",
+                  onOk: async () => {
+                    setSaving(true);
+                    try {
+                      const restored = await apiFetch<Order>(
+                        `/api/orders/${order.id}/revert`,
+                        { method: "PATCH", body: JSON.stringify({}) },
+                      );
+                      message.success(
+                        `已恢复为「${ORDER_STATUS_LABELS[restored.status]}」`,
+                      );
+                      goToCodList(resolveCodListPath(restored));
+                    } catch (e) {
+                      message.error(
+                        e instanceof Error ? e.message : "恢复失败",
+                      );
+                    } finally {
+                      setSaving(false);
+                    }
+                  },
+                });
+              }}
+            >
+              恢复上一步
+            </Button>
+          ) : null}
+          <Button type="primary" onClick={() => setEditOpen(true)}>
             编辑订单
           </Button>
           <Button>
@@ -766,34 +548,8 @@ export function OrderDetailPage() {
               <p style={{ color: "var(--muted)", margin: 0 }}>
                 已标记为无效订单
                 {order.reject_reason ? `：${order.reject_reason}` : "。"}
-                可恢复为作废前的状态后重新处理。
+                可恢复上一步后重新处理。
               </p>
-              <Button
-                type="primary"
-                loading={saving}
-                onClick={async () => {
-                  setSaving(true);
-                  try {
-                    const restored = await apiFetch<Order>(
-                      `/api/orders/${order.id}/review`,
-                      {
-                        method: "PATCH",
-                        body: JSON.stringify({ decision: "reopen" }),
-                      },
-                    );
-                    message.success(
-                      `已恢复为「${ORDER_STATUS_LABELS[restored.status]}」`,
-                    );
-                    goToCodList(resolveCodListPath(restored));
-                  } catch (e) {
-                    message.error(e instanceof Error ? e.message : "操作失败");
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-              >
-                恢复原先状态
-              </Button>
             </Space>
           ) : (
             <p style={{ color: "var(--muted)" }}>
@@ -1141,164 +897,16 @@ export function OrderDetailPage() {
         </Form>
       </Modal>
 
-      <Modal
-        title="编辑订单"
+      <OrderEditModal
         open={editOpen}
-        onCancel={() => {
-          if (editSaving) return;
-          setEditOpen(false);
+        orderId={order.id}
+        onClose={() => setEditOpen(false)}
+        onSaved={(updated) => {
+          setOrder(updated);
+          setRemark(updated.remark ?? "");
+          setLogKey((k) => k + 1);
         }}
-        confirmLoading={editSaving}
-        okText="保存"
-        onOk={() => void submitEdit()}
-        destroyOnClose
-        width={720}
-      >
-        <Spin spinning={editLoading}>
-          <p style={{ color: "#666", marginBottom: 12 }}>
-            更换商品或套餐时，中文属性、单价、套餐件数会按商品实际数据自动同步。
-          </p>
-          <Form form={editForm} layout="vertical" disabled={editLoading}>
-            <Space wrap style={{ width: "100%" }} size="middle">
-              <Form.Item
-                name="customer_name"
-                label="收件人"
-                rules={[{ required: true, message: "请填写收件人" }]}
-                style={{ width: 220 }}
-              >
-                <Input maxLength={INPUT_LIMITS.name} />
-              </Form.Item>
-              <Form.Item
-                name="customer_phone"
-                label="收件人电话"
-                style={{ width: 220 }}
-              >
-                <Input maxLength={INPUT_LIMITS.phone} />
-              </Form.Item>
-            </Space>
-            <Space wrap style={{ width: "100%" }} size="middle">
-              <Form.Item
-                name="shipping_province"
-                label="收件省"
-                style={{ width: 140 }}
-              >
-                <Input maxLength={INPUT_LIMITS.region} />
-              </Form.Item>
-              <Form.Item
-                name="shipping_city"
-                label="收件城市"
-                style={{ width: 140 }}
-              >
-                <Input maxLength={INPUT_LIMITS.region} />
-              </Form.Item>
-              <Form.Item
-                name="shipping_district"
-                label="收件地区"
-                style={{ width: 140 }}
-              >
-                <Input maxLength={INPUT_LIMITS.region} />
-              </Form.Item>
-            </Space>
-            <Form.Item name="shipping_detail" label="收件地址">
-              <Input maxLength={INPUT_LIMITS.address} />
-            </Form.Item>
-            <Form.Item name="shipping_address" label="收件地址信息">
-              <Input maxLength={INPUT_LIMITS.addressInfo} />
-            </Form.Item>
-            <Form.Item
-              name="product_id"
-              label="商品"
-              rules={[{ required: true, message: "请选择商品" }]}
-            >
-              <Select
-                showSearch
-                optionFilterProp="label"
-                placeholder="选择商品"
-                options={editProducts.map((p) => ({
-                  value: p.id,
-                  label: p.name || p.id,
-                }))}
-                onChange={(productId: string) => {
-                  void applyProductSync(productId);
-                }}
-              />
-            </Form.Item>
-            {editPackagesEnabled ? (
-              <Form.Item
-                name="package_id"
-                label="套餐"
-                rules={[{ required: true, message: "请选择套餐" }]}
-              >
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  placeholder="选择套餐"
-                  options={editPackages.map((p) => ({
-                    value: p.id,
-                    label: p.name_external
-                      ? `${p.name}（${p.name_external}）`
-                      : p.name,
-                  }))}
-                  onChange={(packageId: string) => {
-                    applyPackageSync(packageId);
-                  }}
-                />
-              </Form.Item>
-            ) : (
-              <Form.Item label="套餐">
-                <Input value="该商品未开启套餐" disabled />
-              </Form.Item>
-            )}
-            <Space wrap style={{ width: "100%" }} size="middle">
-              <Form.Item label="中文属性" style={{ width: 220 }}>
-                <Input
-                  value={editSkuCode || "—"}
-                  disabled
-                />
-              </Form.Item>
-              <Form.Item label="单价" style={{ width: 160 }}>
-                <Input
-                  value={formatMoney(editUnitPrice, order.currency)}
-                  disabled
-                />
-              </Form.Item>
-              <Form.Item label="套餐内件数" style={{ width: 140 }}>
-                <Input value={String(editPackageCount)} disabled />
-              </Form.Item>
-              <Form.Item
-                name="quantity"
-                label="购买数量"
-                rules={[{ required: true, message: "请填写购买数量" }]}
-                style={{ width: 140 }}
-              >
-                <InputNumber min={1} precision={0} style={{ width: "100%" }} />
-              </Form.Item>
-              <Form.Item label="预估总金额" style={{ width: 180 }}>
-                <Input
-                  value={formatMoney(editPreviewTotal, order.currency)}
-                  disabled
-                />
-              </Form.Item>
-            </Space>
-            <Space wrap style={{ width: "100%" }} size="middle">
-              <Form.Item
-                name="owner_member"
-                label="归属成员"
-                style={{ width: 220 }}
-              >
-                <Input maxLength={INPUT_LIMITS.shippingMeta} />
-              </Form.Item>
-              <Form.Item
-                name="shipping_order_no"
-                label="发货订单号"
-                style={{ width: 220 }}
-              >
-                <Input maxLength={INPUT_LIMITS.shippingMeta} />
-              </Form.Item>
-            </Space>
-          </Form>
-        </Spin>
-      </Modal>
+      />
     </div>
   );
 }

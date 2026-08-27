@@ -16,6 +16,7 @@ import dayjs from "dayjs";
 import { useNavigate } from "react-router-dom";
 import {
   PRODUCT_STATUS_LABELS,
+  type AddressLibrary,
   type Paginated,
   type Product,
   type ProductStatus,
@@ -38,6 +39,9 @@ const ACTIVE_STATUS_OPTIONS = (
   .filter(([value]) => value !== "off_sale")
   .map(([value, label]) => ({ value, label }));
 
+/** 筛选未设置地区的商品 */
+const REGION_UNSET = "__none__";
+
 function buildProductUrl(product: Product): string | null {
   const host = product.domain?.host?.trim();
   const suffix = product.link_suffix?.trim().replace(/^\/+/, "");
@@ -51,6 +55,9 @@ export function ProductsPage() {
   const [tab, setTab] = useState<ListTab>("active");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<ProductStatus | undefined>();
+  const [regionId, setRegionId] = useState<string | undefined>();
+  const [regions, setRegions] = useState<AddressLibrary[]>([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
@@ -71,6 +78,9 @@ export function ProductsPage() {
       } else if (status) {
         params.set("status", status);
       }
+      if (regionId) {
+        params.set("region_id", regionId);
+      }
 
       const res = await apiFetch<Paginated<Product>>(
         `/api/products?${params.toString()}`,
@@ -82,11 +92,33 @@ export function ProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, q, status, isDeletedTab]);
+  }, [page, pageSize, q, status, regionId, isDeletedTab]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setRegionsLoading(true);
+      try {
+        const res = await apiFetch<{ data: AddressLibrary[] }>(
+          "/api/address-libraries",
+        );
+        if (!cancelled) setRegions(res.data);
+      } catch (e) {
+        if (!cancelled) {
+          message.error(e instanceof Error ? e.message : "加载地区失败");
+        }
+      } finally {
+        if (!cancelled) setRegionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const columns: ColumnsType<Product> = [
     {
@@ -250,6 +282,7 @@ export function ProductsPage() {
           setTab(key as ListTab);
           setPage(1);
           setStatus(undefined);
+          setRegionId(undefined);
           setQ("");
         }}
         items={[
@@ -283,6 +316,23 @@ export function ProductsPage() {
             options={ACTIVE_STATUS_OPTIONS}
           />
         )}
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="地区"
+          loading={regionsLoading}
+          style={{ width: 180 }}
+          value={regionId}
+          onChange={(v) => {
+            setPage(1);
+            setRegionId(v);
+          }}
+          options={[
+            ...regions.map((r) => ({ value: r.id, label: r.name })),
+            { value: REGION_UNSET, label: "未设置地区" },
+          ]}
+        />
         <Button onClick={() => void load()}>刷新</Button>
       </Space>
       <Table

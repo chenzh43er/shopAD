@@ -1,0 +1,238 @@
+[
+  {
+    "name": "Riyadh Region",
+    "cities": [
+      {
+        "name": "Riyadh",
+        "districts": [
+          "Al Olaya",
+          "Al Malaz",
+          "Al Nakheel",
+          "Al Murabba",
+          "Al Sulaymaniyah",
+          "Al Woroud",
+          "Al Sahafa"
+        ]
+      },
+      {
+        "name": "Al Kharj",
+        "districts": ["Al Kharj Center", "Al Rayyan", "Al Yamama"]
+      },
+      {
+        "name": "Al Majma'ah",
+        "districts": ["Al Majma'ah Center"]
+      },
+      {
+        "name": "Diriyah",
+        "districts": ["Diriyah Center", "Al Bujairi"]
+      }
+    ]
+  },
+  {
+    "name": "Makkah Region",
+    "cities": [
+      {
+        "name": "Jeddah",
+        "districts": [
+          "Al Hamra",
+          "Al Rawdah",
+          "Al Shati",
+          "Al Salamah",
+          "Al Andalus",
+          "Al Baghdadiyah"
+        ]
+      },
+      {
+        "name": "Mecca",
+        "districts": ["Al Aziziyah", "Al Shubaikah", "Al Misfalah", "Al Kakiyyah"]
+      },
+      {
+        "name": "Taif",
+        "districts": ["Al Shafa", "Al Hawiyah", "Al Faisaliyah"]
+      },
+      {
+        "name": "Rabigh",
+        "districts": ["Rabigh Center"]
+      }
+    ]
+  },
+  {
+    "name": "Madinah Region",
+    "cities": [
+      {
+        "name": "Medina",
+        "districts": ["Al Awali", "Al Haram", "Quba", "Al Iskan"]
+      },
+      {
+        "name": "Yanbu",
+        "districts": ["Yanbu Al Bahr", "Yanbu Al Sinaiyah"]
+      },
+      {
+        "name": "Al Ula",
+        "districts": ["Al Ula Center"]
+      }
+    ]
+  },
+  {
+    "name": "Eastern Province",
+    "cities": [
+      {
+        "name": "Dammam",
+        "districts": ["Al Faisaliyah", "Al Shati", "Al Adamah", "Al Mazruiyah"]
+      },
+      {
+        "name": "Khobar",
+        "districts": ["Al Khobar Al Shamalia", "Al Khobar Al Janubia", "Al Ulaya"]
+      },
+      {
+        "name": "Dhahran",
+        "districts": ["Dhahran Center", "Al Doha"]
+      },
+      {
+        "name": "Jubail",
+        "districts": ["Jubail Center", "Al Fanateer"]
+      },
+      {
+        "name": "Al Ahsa",
+        "districts": ["Al Hofuf", "Al Mubarraz"]
+      }
+    ]
+  },
+  {
+    "name": "Asir Region",
+    "cities": [
+      {
+        "name": "Abha",
+        "districts": ["Al Manhal", "Al Shafa"]
+      },
+      {
+        "name": "Khamis Mushait",
+        "districts": ["Al Khaleej", "Al Rawdah"]
+      },
+      {
+        "name": "Bisha",
+        "districts": ["Bisha Center"]
+      }
+    ]
+  },
+  {
+    "name": "Tabuk Region",
+    "cities": [
+      {
+        "name": "Tabuk",
+        "districts": ["Al Muruj", "Al Faisaliyah"]
+      },
+      {
+        "name": "Duba",
+        "districts": ["Duba Center"]
+      },
+      {
+        "name": "Haql",
+        "districts": ["Haql Center"]
+      }
+    ]
+  },
+  {
+    "name": "Hail Region",
+    "cities": [
+      {
+        "name": "Hail",
+        "districts": ["Al Muntazah", "Al Khuzama", "Al Nuzha"]
+      }
+    ]
+  },
+  {
+    "name": "Northern Borders Region",
+    "cities": [
+      {
+        "name": "Arar",
+        "districts": ["Arar Center"]
+      },
+      {
+        "name": "Rafha",
+        "districts": ["Rafha Center"]
+      },
+      {
+        "name": "Turaif",
+        "districts": ["Turaif Center"]
+      }
+    ]
+  },
+  {
+    "name": "Jazan Region",
+    "cities": [
+      {
+        "name": "Jazan",
+        "districts": ["Al Rawdah", "Al Safa"]
+      },
+      {
+        "name": "Sabya",
+        "districts": ["Sabya Center"]
+      },
+      {
+        "name": "Abu Arish",
+        "districts": ["Abu Arish Center"]
+      }
+    ]
+  },
+  {
+    "name": "Najran Region",
+    "cities": [
+      {
+        "name": "Najran",
+        "districts": ["Al Faisaliyah", "Al Mukhaym"]
+      },
+      {
+        "name": "Sharurah",
+        "districts": ["Sharurah Center"]
+      }
+    ]
+  },
+  {
+    "name": "Al Bahah Region",
+    "cities": [
+      {
+        "name": "Al Bahah",
+        "districts": ["Al Zahrah", "Al Faisaliyah"]
+      },
+      {
+        "name": "Baljurashi",
+        "districts": ["Baljurashi Center"]
+      }
+    ]
+  },
+  {
+    "name": "Al Jawf Region",
+    "cities": [
+      {
+        "name": "Sakaka",
+        "districts": ["Sakaka Center"]
+      },
+      {
+        "name": "Qurayyat",
+        "districts": ["Qurayyat Center"]
+      },
+      {
+        "name": "Tabarjal",
+        "districts": ["Tabarjal Center"]
+      }
+    ]
+  },
+  {
+    "name": "Al Qassim Region",
+    "cities": [
+      {
+        "name": "Buraidah",
+        "districts": ["Al Safra", "Al Muruj", "Al Iskan"]
+      },
+      {
+        "name": "Unayzah",
+        "districts": ["Unayzah Center"]
+      },
+      {
+        "name": "Ar Rass",
+        "districts": ["Ar Rass Center"]
+      }
+    ]
+  }
+]

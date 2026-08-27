@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Key } from "react";
 import {
   Button,
+  Checkbox,
   DatePicker,
   Form,
   Input,
@@ -14,13 +15,15 @@ import {
   Upload,
   message,
 } from "antd";
-import { DownloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { DownloadOutlined, RollbackOutlined, UploadOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
+  COD_FORCE_STATUSES,
   ORDER_STATUS_LABELS,
   REVIEW_STATUS_LABELS,
+  type AddressLibrary,
   type LogisticsShipper,
   type Order,
   type OrderStatus,
@@ -31,18 +34,21 @@ import {
 import { apiFetch } from "../lib/api";
 import type { FinanceExportRow } from "../lib/buildFinanceExcel";
 import type { LogisticsExportRow } from "../lib/buildLogisticsExcel";
-import type { OrdersExportRow } from "../lib/buildOrdersExcel";
+import {
+  ALL_ORDER_EXPORT_COLUMN_KEYS,
+  ORDER_EXPORT_COLUMNS,
+  type OrderExportColumnKey,
+  type OrdersExportRow,
+} from "../lib/buildOrdersExcel";
 import type { ShipExcelRow } from "../lib/parseShipText";
 import { parseShipText } from "../lib/parseShipText";
 import { formatMoney } from "../lib/formatMoney";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { formatActor } from "../components/AuditLogPanel";
+import { OrderEditModal } from "../components/OrderEditModal";
 import { setOrdersListFrom } from "../lib/listNav";
 import { useAuth } from "../auth/AuthContext";
 import dayjs from "dayjs";
-import isoWeek from "dayjs/plugin/isoWeek";
-
-dayjs.extend(isoWeek);
 
 const MAX_BATCH_ORDER_NOS = 500;
 const MAX_BATCH_PHONES = 500;
@@ -137,22 +143,38 @@ function ellipsisCell(maxWidth: number) {
 
 const { RangePicker } = DatePicker;
 
-const DATE_PRESETS: { label: string; value: [Dayjs, Dayjs] }[] = [
+const DATE_PRESETS: {
+  label: string;
+  value: () => [Dayjs, Dayjs];
+}[] = [
   {
-    label: "本日",
-    value: [dayjs().startOf("day"), dayjs().endOf("day")],
+    label: "今日",
+    value: () => [dayjs().startOf("day"), dayjs().endOf("day")],
   },
   {
-    label: "本周",
-    value: [dayjs().startOf("isoWeek"), dayjs().endOf("isoWeek")],
+    label: "昨日",
+    value: () => [
+      dayjs().subtract(1, "day").startOf("day"),
+      dayjs().subtract(1, "day").endOf("day"),
+    ],
+  },
+  {
+    label: "近七天",
+    value: () => [
+      dayjs().subtract(6, "day").startOf("day"),
+      dayjs().endOf("day"),
+    ],
   },
   {
     label: "本月",
-    value: [dayjs().startOf("month"), dayjs().endOf("month")],
+    value: () => [dayjs().startOf("month"), dayjs().endOf("day")],
   },
   {
-    label: "本年",
-    value: [dayjs().startOf("year"), dayjs().endOf("year")],
+    label: "近三个月",
+    value: () => [
+      dayjs().subtract(3, "month").startOf("day"),
+      dayjs().endOf("day"),
+    ],
   },
 ];
 
@@ -234,7 +256,7 @@ const DEFAULT_COD_TAB: CodTabKey = "pending_review";
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { profile, user } = useAuth();
+  const { profile, user, isSuperAdmin } = useAuth();
   const { tab: routeTab } = useParams<{ tab?: string }>();
   const defaultOwnerMember =
     profile?.display_name?.trim() ||
@@ -250,24 +272,42 @@ export function OrdersPage() {
   const [batching, setBatching] = useState(false);
   const [orderNo, setOrderNo] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
+  const [shippingOrderNo, setShippingOrderNo] = useState("");
   const [batchOrderNos, setBatchOrderNos] = useState<string[]>([]);
   const [batchPhones, setBatchPhones] = useState<string[]>([]);
+  const [batchShippingOrderNos, setBatchShippingOrderNos] = useState<string[]>(
+    [],
+  );
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchPhoneModalOpen, setBatchPhoneModalOpen] = useState(false);
+  const [batchShippingModalOpen, setBatchShippingModalOpen] = useState(false);
   const [batchDraft, setBatchDraft] = useState("");
   const [batchPhoneDraft, setBatchPhoneDraft] = useState("");
+  const [batchShippingDraft, setBatchShippingDraft] = useState("");
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [regionId, setRegionId] = useState<string | undefined>();
+  const [regions, setRegions] = useState<AddressLibrary[]>([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
   const [data, setData] = useState<Order[]>([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
-  const pendingBatchNotify = useRef<"order_no" | "phone" | null>(null);
+  const pendingBatchNotify = useRef<
+    "order_no" | "phone" | "shipping_order_no" | null
+  >(null);
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
   const [invalidModalOpen, setInvalidModalOpen] = useState(false);
   const [invalidReason, setInvalidReason] = useState("");
+  const [forceStatusModalOpen, setForceStatusModalOpen] = useState(false);
+  const [forceStatusTarget, setForceStatusTarget] = useState<OrderStatus>(
+    "awaiting_confirm",
+  );
+  const [forceStatusRemark, setForceStatusRemark] = useState("");
+  const [forceStatusRejectReason, setForceStatusRejectReason] = useState("");
+  const [editOrderId, setEditOrderId] = useState<string | null>(null);
 
   const [shipModalOpen, setShipModalOpen] = useState(false);
   const [shipRows, setShipRows] = useState<ShipExcelRow[]>([]);
@@ -289,6 +329,9 @@ export function OrdersPage() {
     Array<{ id: string; name: string }>
   >([]);
   const [exportProductIds, setExportProductIds] = useState<string[]>([]);
+  const [exportColumnKeys, setExportColumnKeys] = useState<OrderExportColumnKey[]>(
+    ALL_ORDER_EXPORT_COLUMN_KEYS,
+  );
 
   const isAllTab = activeCodTab === "all";
   const isPendingReview = activeCodTab === "pending_review";
@@ -296,16 +339,28 @@ export function OrdersPage() {
   const isAwaitingShipmentTab = activeCodTab === "awaiting_shipment";
   const isShippedTab = activeCodTab === "shipped";
   const isCompletedTab = activeCodTab === "completed";
+  const isRefusedTab = activeCodTab === "refused";
   const isInvalidTab = activeCodTab === "invalid";
+  const showRevertButton = activeCodTab !== "pending_review";
+  /** 待发货及之后状态支持运单号查询 */
+  const showWaybillSearch =
+    isAwaitingShipmentTab ||
+    isShippedTab ||
+    isCompletedTab ||
+    isRefusedTab ||
+    isInvalidTab;
   const isBatchOrderQuery = batchOrderNos.length > 0;
   const isBatchPhoneQuery = batchPhones.length > 0;
-  const isBatchQuery = isBatchOrderQuery || isBatchPhoneQuery;
+  const isBatchShippingQuery = batchShippingOrderNos.length > 0;
+  const isBatchQuery =
+    isBatchOrderQuery || isBatchPhoneQuery || isBatchShippingQuery;
   const enableRowSelection =
     isPendingReview ||
     isAwaitingConfirmTab ||
     isAwaitingShipmentTab ||
     isShippedTab ||
-    isInvalidTab;
+    isInvalidTab ||
+    isSuperAdmin;
   const exportOrderStatus:
     | "awaiting_confirm"
     | "cod_shipped"
@@ -351,14 +406,22 @@ export function OrdersPage() {
         params.set("order_nos", batchOrderNos.join(","));
       } else if (isBatchPhoneQuery) {
         params.set("customer_phones", batchPhones.join(","));
+      } else if (isBatchShippingQuery) {
+        params.set("shipping_order_nos", batchShippingOrderNos.join(","));
       } else {
         if (orderNo.trim()) params.set("order_no", orderNo.trim());
         const phone = phoneSearchDigits(customerPhone);
         if (phone) params.set("customer_phone", phone);
+        if (showWaybillSearch && shippingOrderNo.trim()) {
+          params.set("shipping_order_no", shippingOrderNo.trim());
+        }
       }
       if (dateRange?.[0] && dateRange?.[1]) {
         params.set("date_from", dateRange[0].startOf("day").toISOString());
         params.set("date_to", dateRange[1].endOf("day").toISOString());
+      }
+      if (regionId) {
+        params.set("region_id", regionId);
       }
 
       const res = await apiFetch<Paginated<Order>>(
@@ -371,7 +434,11 @@ export function OrdersPage() {
       if (notifyKind) {
         pendingBatchNotify.current = null;
         const queryItems =
-          notifyKind === "order_no" ? batchOrderNos : batchPhones;
+          notifyKind === "order_no"
+            ? batchOrderNos
+            : notifyKind === "phone"
+              ? batchPhones
+              : batchShippingOrderNos;
         if (res.total === 0) {
           message.warning("未找到匹配的订单");
         } else if (
@@ -386,6 +453,25 @@ export function OrdersPage() {
             missing.length > 5 ? ` 等 ${missing.length} 个` : "";
           message.info(
             `已找到 ${res.total} 笔；未匹配：${preview}${more}`,
+          );
+        } else if (
+          notifyKind === "shipping_order_no" &&
+          res.total < batchShippingOrderNos.length &&
+          res.data.length === res.total
+        ) {
+          const found = new Set(
+            res.data
+              .map((o) => o.shipping_order_no?.trim() || "")
+              .filter(Boolean),
+          );
+          const missing = batchShippingOrderNos.filter(
+            (no) => !found.has(no),
+          );
+          const preview = missing.slice(0, 5).join("、");
+          const more =
+            missing.length > 5 ? ` 等 ${missing.length} 个` : "";
+          message.info(
+            `已找到 ${res.total} 笔；未匹配运单号：${preview}${more}`,
           );
         } else if (
           notifyKind === "phone" &&
@@ -428,16 +514,52 @@ export function OrdersPage() {
     filters,
     orderNo,
     customerPhone,
+    shippingOrderNo,
     batchOrderNos,
     batchPhones,
+    batchShippingOrderNos,
     isBatchOrderQuery,
     isBatchPhoneQuery,
+    isBatchShippingQuery,
+    showWaybillSearch,
     dateRange,
+    regionId,
   ]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  /** 离开支持运单查询的 Tab 时清空运单筛选，避免状态残留 */
+  useEffect(() => {
+    if (!showWaybillSearch) {
+      setShippingOrderNo("");
+      setBatchShippingOrderNos([]);
+      setBatchShippingDraft("");
+    }
+  }, [showWaybillSearch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setRegionsLoading(true);
+      try {
+        const res = await apiFetch<{ data: AddressLibrary[] }>(
+          "/api/address-libraries",
+        );
+        if (!cancelled) setRegions(res.data);
+      } catch (e) {
+        if (!cancelled) {
+          message.error(e instanceof Error ? e.message : "加载地区失败");
+        }
+      } finally {
+        if (!cancelled) setRegionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 进入无效 COD 子路径时纠正到默认项
   useEffect(() => {
@@ -454,8 +576,10 @@ export function OrdersPage() {
     pageSize,
     orderNo,
     customerPhone,
+    shippingOrderNo,
     batchOrderNos,
     batchPhones,
+    batchShippingOrderNos,
     dateRange,
   ]);
 
@@ -477,8 +601,11 @@ export function OrdersPage() {
     pendingBatchNotify.current = "order_no";
     setOrderNo("");
     setCustomerPhone("");
+    setShippingOrderNo("");
     setBatchPhones([]);
     setBatchPhoneDraft("");
+    setBatchShippingOrderNos([]);
+    setBatchShippingDraft("");
     setBatchOrderNos(nos);
     setPage(1);
     setPageSize(Math.min(500, Math.max(nos.length, 20)));
@@ -510,8 +637,11 @@ export function OrdersPage() {
     pendingBatchNotify.current = "phone";
     setOrderNo("");
     setCustomerPhone("");
+    setShippingOrderNo("");
     setBatchOrderNos([]);
     setBatchDraft("");
+    setBatchShippingOrderNos([]);
+    setBatchShippingDraft("");
     setBatchPhones(phones);
     setPage(1);
     setPageSize(Math.min(500, Math.max(phones.length, 20)));
@@ -521,6 +651,42 @@ export function OrdersPage() {
   const clearBatchPhoneQuery = () => {
     setBatchPhones([]);
     setBatchPhoneDraft("");
+    setPage(1);
+    setPageSize(20);
+  };
+
+  const applyBatchShippingQuery = () => {
+    const nos = parseBatchOrderNos(batchShippingDraft);
+    if (nos.length === 0) {
+      message.warning("请粘贴至少一个运单号");
+      return;
+    }
+    const rawCount = batchShippingDraft
+      .split(/[\s,，;；]+/)
+      .map((s) => s.trim())
+      .filter(Boolean).length;
+    if (rawCount > MAX_BATCH_ORDER_NOS) {
+      message.warning(
+        `单次最多查询 ${MAX_BATCH_ORDER_NOS} 个运单号，已截取前 ${MAX_BATCH_ORDER_NOS} 个`,
+      );
+    }
+    pendingBatchNotify.current = "shipping_order_no";
+    setOrderNo("");
+    setCustomerPhone("");
+    setShippingOrderNo("");
+    setBatchOrderNos([]);
+    setBatchDraft("");
+    setBatchPhones([]);
+    setBatchPhoneDraft("");
+    setBatchShippingOrderNos(nos);
+    setPage(1);
+    setPageSize(Math.min(500, Math.max(nos.length, 20)));
+    setBatchShippingModalOpen(false);
+  };
+
+  const clearBatchShippingQuery = () => {
+    setBatchShippingOrderNos([]);
+    setBatchShippingDraft("");
     setPage(1);
     setPageSize(20);
   };
@@ -779,23 +945,23 @@ export function OrdersPage() {
     });
   };
 
-  const batchReopen = () => {
+  const batchRevert = () => {
     if (selectedRowKeys.length === 0) {
       message.warning("请先勾选要恢复的订单");
       return;
     }
     Modal.confirm({
-      title: "批量恢复原先状态",
-      content: `确认将选中的 ${selectedRowKeys.length} 笔无效订单恢复为作废前的状态？`,
+      title: "恢复上一步",
+      content: `确认将选中的 ${selectedRowKeys.length} 笔订单恢复到上一步状态？`,
       okText: "确认恢复",
       cancelText: "取消",
       onOk: async () => {
         setBatching(true);
         try {
           const res = await apiFetch<{
-            succeeded: Array<{ id: string; restored_status: OrderStatus }>;
+            succeeded: Array<{ id: string; previous_status: OrderStatus | null }>;
             failed: Array<{ id: string; error: string }>;
-          }>("/api/orders/batch-reopen", {
+          }>("/api/orders/batch-revert", {
             method: "POST",
             body: JSON.stringify({ ids: selectedRowKeys }),
           });
@@ -812,7 +978,109 @@ export function OrdersPage() {
           setSelectedRowKeys([]);
           await load();
         } catch (e) {
-          message.error(e instanceof Error ? e.message : "批量恢复失败");
+          message.error(e instanceof Error ? e.message : "恢复上一步失败");
+        } finally {
+          setBatching(false);
+        }
+      },
+    });
+  };
+
+  const openForceStatusModal = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要流转的订单");
+      return;
+    }
+    setForceStatusTarget("awaiting_confirm");
+    setForceStatusRemark("");
+    setForceStatusRejectReason("");
+    setForceStatusModalOpen(true);
+  };
+
+  const submitBatchForceStatus = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要流转的订单");
+      return;
+    }
+    if (forceStatusTarget === "cancelled" && !forceStatusRejectReason.trim()) {
+      message.warning("流转到无效订单时请填写理由");
+      return;
+    }
+
+    setBatching(true);
+    try {
+      const res = await apiFetch<{
+        succeeded: string[];
+        failed: Array<{ id: string; error: string }>;
+      }>("/api/orders/batch-force-status", {
+        method: "POST",
+        body: JSON.stringify({
+          ids: selectedRowKeys,
+          status: forceStatusTarget,
+          remark: forceStatusRemark.trim() || undefined,
+          reject_reason:
+            forceStatusTarget === "cancelled"
+              ? forceStatusRejectReason.trim()
+              : undefined,
+        }),
+      });
+      const ok = res.succeeded.length;
+      const fail = res.failed.length;
+      if (fail === 0) {
+        message.success(
+          `已强制流转 ${ok} 笔订单至「${ORDER_STATUS_LABELS[forceStatusTarget]}」`,
+        );
+      } else {
+        const detail = res.failed[0]?.error ? `：${res.failed[0].error}` : "";
+        message.warning(`流转 ${ok} 笔，失败 ${fail} 笔${detail}`);
+      }
+      setForceStatusModalOpen(false);
+      setForceStatusRemark("");
+      setForceStatusRejectReason("");
+      setSelectedRowKeys([]);
+      await load();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "强制流转失败");
+    } finally {
+      setBatching(false);
+    }
+  };
+
+  const batchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先勾选要删除的订单");
+      return;
+    }
+    Modal.confirm({
+      title: "批量删除订单",
+      content: `确认永久删除选中的 ${selectedRowKeys.length} 笔无效订单？此操作不可恢复。`,
+      okText: "确认删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        setBatching(true);
+        try {
+          const res = await apiFetch<{
+            succeeded: string[];
+            failed: Array<{ id: string; error: string }>;
+          }>("/api/orders/batch-delete", {
+            method: "POST",
+            body: JSON.stringify({ ids: selectedRowKeys }),
+          });
+          const ok = res.succeeded.length;
+          const fail = res.failed.length;
+          if (fail === 0) {
+            message.success(`已删除 ${ok} 笔订单`);
+          } else {
+            const detail = res.failed[0]?.error
+              ? `：${res.failed[0].error}`
+              : "";
+            message.warning(`删除 ${ok} 笔，失败 ${fail} 笔${detail}`);
+          }
+          setSelectedRowKeys([]);
+          await load();
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "批量删除失败");
         } finally {
           setBatching(false);
         }
@@ -834,6 +1102,7 @@ export function OrdersPage() {
   const resetExportModal = () => {
     setExportOpen(false);
     setExportProductIds([]);
+    setExportColumnKeys(ALL_ORDER_EXPORT_COLUMN_KEYS);
   };
 
   const openExportModal = async (
@@ -846,6 +1115,7 @@ export function OrdersPage() {
     setExportKind(kind);
     setExportOpen(true);
     setExportProductIds([]);
+    setExportColumnKeys(ALL_ORDER_EXPORT_COLUMN_KEYS);
     setExportMetaLoading(true);
     try {
       const status =
@@ -854,10 +1124,12 @@ export function OrdersPage() {
           : kind === "logistics"
             ? (exportOrderStatus ?? "cod_shipped")
             : "cod_shipped";
+      const metaParams = new URLSearchParams({ status });
+      if (regionId) metaParams.set("region_id", regionId);
       const res = await apiFetch<{
         products: Array<{ id: string; name: string }>;
         owner_members: string[];
-      }>(`/api/orders/finance-export/meta?status=${status}`);
+      }>(`/api/orders/finance-export/meta?${metaParams.toString()}`);
       setExportProducts(res.products ?? []);
     } catch (e) {
       message.error(e instanceof Error ? e.message : "加载导出选项失败");
@@ -875,12 +1147,19 @@ export function OrdersPage() {
       message.warning("当前列表不支持全部订单导出");
       return;
     }
+    if (exportKind === "orders" && exportColumnKeys.length === 0) {
+      message.warning("请至少选择一列导出");
+      return;
+    }
 
     setExporting(true);
     try {
       const payload: Record<string, unknown> = {
         product_ids: exportProductIds,
       };
+      if (regionId) {
+        payload.region_id = regionId;
+      }
 
       // 沿用列表页当前筛选条件（日期 / 单号 / 电话 / 批量查询）
       if (dateRange?.[0] && dateRange?.[1]) {
@@ -891,10 +1170,15 @@ export function OrdersPage() {
         payload.order_nos = batchOrderNos;
       } else if (isBatchPhoneQuery) {
         payload.customer_phones = batchPhones;
+      } else if (isBatchShippingQuery) {
+        payload.shipping_order_nos = batchShippingOrderNos;
       } else {
         if (orderNo.trim()) payload.order_no = orderNo.trim();
         const phone = phoneSearchDigits(customerPhone);
         if (phone) payload.customer_phone = phone;
+        if (showWaybillSearch && shippingOrderNo.trim()) {
+          payload.shipping_order_no = shippingOrderNo.trim();
+        }
       }
 
       if (exportKind === "finance") {
@@ -940,7 +1224,10 @@ export function OrdersPage() {
             import("../lib/buildOrdersExcel"),
             import("../lib/downloadBlob"),
           ]);
-        downloadBlob(buildOrdersExcel(res.data), ordersExportFilename());
+        downloadBlob(
+          buildOrdersExcel(res.data, exportColumnKeys),
+          ordersExportFilename(),
+        );
         if (res.truncated) {
           message.warning(
             `已导出前 ${res.total} 笔（达到上限），请缩小筛选条件后重试`,
@@ -1145,7 +1432,7 @@ export function OrdersPage() {
     {
       title: "操作",
       key: "actions",
-      width: 100,
+      width: 148,
       fixed: "left",
       render: (_, record) => {
         const actionLabel =
@@ -1159,16 +1446,24 @@ export function OrdersPage() {
                   ? "去签收"
                   : "详情";
         return (
-          <Button
-            size="small"
-            onClick={() => {
-              const from = `/cod/${activeCodTab}`;
-              setOrdersListFrom(from);
-              navigate(`/orders/${record.id}`, { state: { from } });
-            }}
-          >
-            {actionLabel}
-          </Button>
+          <Space size={4}>
+            <Button
+              size="small"
+              onClick={() => setEditOrderId(record.id)}
+            >
+              编辑
+            </Button>
+            <Button
+              size="small"
+              onClick={() => {
+                const from = `/cod/${activeCodTab}`;
+                setOrdersListFrom(from);
+                navigate(`/orders/${record.id}`, { state: { from } });
+              }}
+            >
+              {actionLabel}
+            </Button>
+          </Space>
         );
       },
     },
@@ -1324,6 +1619,20 @@ export function OrdersPage() {
           <h1>COD订单</h1>
           <span className="list-count">共 {total} 条</span>
         </div>
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="全部地区"
+          loading={regionsLoading}
+          style={{ width: 200 }}
+          value={regionId}
+          onChange={(v) => {
+            setPage(1);
+            setRegionId(v);
+          }}
+          options={regions.map((r) => ({ value: r.id, label: r.name }))}
+        />
       </div>
       <p style={{ color: "#666", marginTop: -8, marginBottom: 12 }}>
         {isAllTab
@@ -1357,19 +1666,6 @@ export function OrdersPage() {
           style={{ width: 280 }}
           placeholder={["开始日期", "结束日期"]}
         />
-        <Button.Group>
-          {DATE_PRESETS.map((p) => (
-            <Button
-              key={p.label}
-              onClick={() => {
-                setPage(1);
-                setDateRange(p.value);
-              }}
-            >
-              {p.label}
-            </Button>
-          ))}
-        </Button.Group>
         <Input.Search
           placeholder="搜索订单号"
           allowClear
@@ -1379,8 +1675,11 @@ export function OrdersPage() {
           onSearch={(value) => {
             setPage(1);
             setCustomerPhone("");
+            setShippingOrderNo("");
             setBatchPhones([]);
             setBatchPhoneDraft("");
+            setBatchShippingOrderNos([]);
+            setBatchShippingDraft("");
             setOrderNo(value);
           }}
         />
@@ -1401,8 +1700,11 @@ export function OrdersPage() {
           onSearch={(value) => {
             setPage(1);
             setOrderNo("");
+            setShippingOrderNo("");
             setBatchOrderNos([]);
             setBatchDraft("");
+            setBatchShippingOrderNos([]);
+            setBatchShippingDraft("");
             setCustomerPhone(value);
           }}
         />
@@ -1414,6 +1716,35 @@ export function OrdersPage() {
         >
           批量查询手机号
         </Button>
+        {showWaybillSearch ? (
+          <>
+            <Input.Search
+              placeholder="搜索运单号"
+              allowClear
+              disabled={isBatchQuery}
+              maxLength={INPUT_LIMITS.shippingMeta}
+              style={{ width: 220 }}
+              onSearch={(value) => {
+                setPage(1);
+                setOrderNo("");
+                setCustomerPhone("");
+                setBatchOrderNos([]);
+                setBatchDraft("");
+                setBatchPhones([]);
+                setBatchPhoneDraft("");
+                setShippingOrderNo(value);
+              }}
+            />
+            <Button
+              onClick={() => {
+                setBatchShippingDraft(batchShippingOrderNos.join("\n"));
+                setBatchShippingModalOpen(true);
+              }}
+            >
+              批量查询运单号
+            </Button>
+          </>
+        ) : null}
         {isBatchOrderQuery ? (
           <Tag
             color="blue"
@@ -1438,7 +1769,30 @@ export function OrdersPage() {
             批量手机号（{batchPhones.length}）
           </Tag>
         ) : null}
+        {isBatchShippingQuery ? (
+          <Tag
+            color="blue"
+            closable
+            onClose={(e) => {
+              e.preventDefault();
+              clearBatchShippingQuery();
+            }}
+          >
+            批量运单号（{batchShippingOrderNos.length}）
+          </Tag>
+        ) : null}
         <Button onClick={() => void load()}>刷新</Button>
+        {isSuperAdmin ? (
+          <Button
+            danger
+            disabled={selectedRowKeys.length === 0}
+            loading={batching}
+            onClick={openForceStatusModal}
+          >
+            强制流转状态
+            {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
+          </Button>
+        ) : null}
         {isAllTab ? (
           <Button
             icon={<DownloadOutlined />}
@@ -1562,13 +1916,28 @@ export function OrdersPage() {
           </Button>
         ) : null}
         {isInvalidTab ? (
+          isSuperAdmin ? (
+            <Button
+              danger
+              disabled={selectedRowKeys.length === 0}
+              loading={batching}
+              onClick={batchDelete}
+            >
+              批量删除订单
+              {selectedRowKeys.length > 0
+                ? `（${selectedRowKeys.length}）`
+                : ""}
+            </Button>
+          ) : null
+        ) : null}
+        {showRevertButton ? (
           <Button
-            type="primary"
+            icon={<RollbackOutlined />}
             disabled={selectedRowKeys.length === 0}
             loading={batching}
-            onClick={batchReopen}
+            onClick={batchRevert}
           >
-            批量恢复原先状态
+            恢复上一步
             {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
           </Button>
         ) : null}
@@ -1605,6 +1974,80 @@ export function OrdersPage() {
             showCount
             allowClear
           />
+        </div>
+      </Modal>
+      <Modal
+        title="强制流转订单状态"
+        open={forceStatusModalOpen}
+        onCancel={() => {
+          if (batching) return;
+          setForceStatusModalOpen(false);
+          setForceStatusRemark("");
+          setForceStatusRejectReason("");
+        }}
+        onOk={() => void submitBatchForceStatus()}
+        okText={
+          selectedRowKeys.length > 0
+            ? `确认流转（${selectedRowKeys.length}）`
+            : "确认流转"
+        }
+        okButtonProps={{
+          danger: true,
+          disabled:
+            forceStatusTarget === "cancelled" &&
+            !forceStatusRejectReason.trim(),
+        }}
+        cancelText="取消"
+        confirmLoading={batching}
+        destroyOnClose
+      >
+        <p style={{ color: "#666", marginBottom: 12 }}>
+          超级管理员专用：跳过常规流转规则，将选中的 {selectedRowKeys.length}{" "}
+          笔 COD 订单批量变更为目标状态。操作会写入审计日志。
+        </p>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}>目标状态</div>
+          <Select
+            style={{ width: "100%" }}
+            value={forceStatusTarget}
+            onChange={setForceStatusTarget}
+            options={COD_FORCE_STATUSES.map((status) => ({
+              value: status,
+              label: ORDER_STATUS_LABELS[status],
+            }))}
+          />
+        </div>
+        {forceStatusTarget === "cancelled" ? (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ marginBottom: 6 }}>无效理由（必填）</div>
+            {/* showCount 绝对定位在输入框下方，需预留高度 */}
+            <div style={{ marginBottom: 8 }}>
+              <Input.TextArea
+                value={forceStatusRejectReason}
+                onChange={(e) => setForceStatusRejectReason(e.target.value)}
+                placeholder="请填写流转为无效订单的理由"
+                rows={3}
+                maxLength={INPUT_LIMITS.remark}
+                showCount
+                allowClear
+              />
+            </div>
+          </div>
+        ) : null}
+        <div>
+          <div style={{ marginBottom: 6 }}>备注（选填）</div>
+          {/* showCount 绝对定位在输入框下方，需预留高度避免与 Modal 页脚重叠 */}
+          <div style={{ marginBottom: 24 }}>
+            <Input.TextArea
+              value={forceStatusRemark}
+              onChange={(e) => setForceStatusRemark(e.target.value)}
+              placeholder="可填写流转原因，会记录在审计日志中"
+              rows={2}
+              maxLength={INPUT_LIMITS.remark}
+              showCount
+              allowClear
+            />
+          </div>
         </div>
       </Modal>
       <Modal
@@ -1684,6 +2127,28 @@ export function OrdersPage() {
           placeholder={
             "例如：\n+62 81218331371\n6281234567890\n081234567890"
           }
+          rows={10}
+          allowClear
+        />
+      </Modal>
+      <Modal
+        title="批量查询运单号"
+        open={batchShippingModalOpen}
+        onCancel={() => setBatchShippingModalOpen(false)}
+        onOk={applyBatchShippingQuery}
+        okText="查询"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <p style={{ color: "#666", marginBottom: 8 }}>
+          粘贴运单号，支持换行、逗号或空格分隔；单次最多{" "}
+          {MAX_BATCH_ORDER_NOS}{" "}
+          个。结果仍按当前列表状态筛选。
+        </p>
+        <Input.TextArea
+          value={batchShippingDraft}
+          onChange={(e) => setBatchShippingDraft(e.target.value)}
+          placeholder={"例如：\nJT1234567890\nJT0987654321"}
           rows={10}
           allowClear
         />
@@ -1817,14 +2282,14 @@ export function OrdersPage() {
         cancelText="取消"
         confirmLoading={exporting}
         destroyOnClose
-        width={560}
+        width={exportKind === "orders" ? 680 : 560}
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
           {exportKind === "finance"
             ? "按当前列表筛选条件导出已发货订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
             : exportKind === "logistics"
               ? "按当前列表筛选条件导出，对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。可再按商品收窄。"
-              : "按当前列表筛选条件导出全部 COD 订单的完整业务字段（客户、地址、商品、金额、状态、寄件人等）。可再按商品收窄。"}
+              : "按当前列表筛选条件导出 COD 订单；勾选需要导出的数据列，未勾选的列不会出现在 Excel 中。可再按商品收窄。"}
         </p>
         <div>
           <div style={{ marginBottom: 6 }}>商品（可多选）</div>
@@ -1844,6 +2309,70 @@ export function OrdersPage() {
             }))}
           />
         </div>
+        {exportKind === "orders" ? (
+          <div style={{ marginTop: 16 }}>
+            <div
+              style={{
+                marginBottom: 6,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span>导出列（可多选）</span>
+              <Space size={0}>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => setExportColumnKeys(ALL_ORDER_EXPORT_COLUMN_KEYS)}
+                >
+                  全选
+                </Button>
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => setExportColumnKeys([])}
+                >
+                  清空
+                </Button>
+              </Space>
+            </div>
+            <Checkbox.Group
+              value={exportColumnKeys}
+              onChange={(values) =>
+                setExportColumnKeys(values as OrderExportColumnKey[])
+              }
+              style={{ width: "100%" }}
+            >
+              <div
+                style={{
+                  maxHeight: 260,
+                  overflow: "auto",
+                  border: "1px solid #d9d9d9",
+                  borderRadius: 6,
+                  padding: "8px 12px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: "4px 12px",
+                  }}
+                >
+                  {ORDER_EXPORT_COLUMNS.map((col) => (
+                    <Checkbox key={col.key} value={col.key}>
+                      {col.header}
+                    </Checkbox>
+                  ))}
+                </div>
+              </div>
+            </Checkbox.Group>
+            <div style={{ marginTop: 6, color: "#999", fontSize: 12 }}>
+              已选 {exportColumnKeys.length} / {ORDER_EXPORT_COLUMNS.length} 列
+            </div>
+          </div>
+        ) : null}
       </Modal>
       <Table
         rowKey="id"
@@ -1871,6 +2400,12 @@ export function OrdersPage() {
             setPageSize(ps);
           },
         }}
+      />
+      <OrderEditModal
+        open={editOrderId !== null}
+        orderId={editOrderId}
+        onClose={() => setEditOrderId(null)}
+        onSaved={() => void load()}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
   Form,
@@ -15,6 +15,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import {
   USER_ROLE_LABELS,
+  type AddressLibrary,
   type CreateEmployeeInput,
   type Profile,
   type UpdateEmployeeInput,
@@ -29,17 +30,67 @@ type ListRes = { data: Profile[]; total: number };
 type CreateForm = CreateEmployeeInput;
 type EditForm = UpdateEmployeeInput & { email?: string };
 
+function regionLabel(
+  regionId: string,
+  regions: AddressLibrary[],
+): string {
+  const region = regions.find((item) => item.id === regionId);
+  if (!region) return regionId.slice(0, 8);
+  const parts = [
+    region.name,
+    region.dial_code ? `+${region.dial_code}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 export function EmployeesPage() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState<Profile[]>([]);
   const [total, setTotal] = useState(0);
+  const [regions, setRegions] = useState<AddressLibrary[]>([]);
+  const [regionsLoading, setRegionsLoading] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<Profile | null>(null);
   const [createForm] = Form.useForm<CreateForm>();
   const [editForm] = Form.useForm<EditForm>();
+  const createRole = Form.useWatch("role", createForm);
+  const editRole = Form.useWatch("role", editForm);
+
+  const regionOptions = useMemo(
+    () =>
+      regions.map((region) => {
+        const parts = [
+          region.name,
+          region.dial_code ? `+${region.dial_code}` : null,
+          region.remark || null,
+        ].filter(Boolean);
+        return {
+          value: region.id,
+          label:
+            parts.length > 1
+              ? `${parts[0]}（${parts.slice(1).join(" · ")}）`
+              : parts[0],
+        };
+      }),
+    [regions],
+  );
+
+  const loadRegions = useCallback(async () => {
+    setRegionsLoading(true);
+    try {
+      const res = await apiFetch<{ data: AddressLibrary[] }>(
+        "/api/address-libraries",
+      );
+      setRegions(res.data);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "加载地区失败");
+    } finally {
+      setRegionsLoading(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,7 +107,8 @@ export function EmployeesPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadRegions();
+  }, [load, loadRegions]);
 
   const openCreate = () => {
     createForm.resetFields();
@@ -70,6 +122,7 @@ export function EmployeesPage() {
       display_name: row.display_name ?? "",
       role: row.role,
       is_active: row.is_active,
+      region_ids: row.region_ids ?? [],
       password: "",
     });
     setEditOpen(true);
@@ -97,6 +150,26 @@ export function EmployeesPage() {
           {USER_ROLE_LABELS[role] ?? role}
         </Tag>
       ),
+    },
+    {
+      title: "地区权限",
+      dataIndex: "region_ids",
+      width: 220,
+      render: (ids: string[] | undefined, row) => {
+        if (row.role === "super_admin") {
+          return <Tag color="gold">全部地区</Tag>;
+        }
+        if (!ids?.length) {
+          return <Tag color="warning">未分配</Tag>;
+        }
+        return (
+          <Space size={[0, 4]} wrap>
+            {ids.map((id) => (
+              <Tag key={id}>{regionLabel(id, regions)}</Tag>
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: "状态",
@@ -159,7 +232,7 @@ export function EmployeesPage() {
         columns={columns}
         dataSource={data}
         pagination={false}
-        scroll={{ x: 700 }}
+        scroll={{ x: 920 }}
       />
 
       <Modal
@@ -173,7 +246,7 @@ export function EmployeesPage() {
         afterOpenChange={(open) => {
           if (open) {
             createForm.resetFields();
-            createForm.setFieldsValue({ role: "employee" });
+            createForm.setFieldsValue({ role: "employee", region_ids: [] });
           }
         }}
         onOk={async () => {
@@ -187,6 +260,10 @@ export function EmployeesPage() {
                 password: values.password,
                 display_name: values.display_name?.trim() || null,
                 role: values.role ?? "employee",
+                region_ids:
+                  values.role === "super_admin"
+                    ? []
+                    : values.region_ids ?? [],
               }),
             });
             message.success("已创建");
@@ -206,7 +283,7 @@ export function EmployeesPage() {
           key={createOpen ? "create-open" : "create-closed"}
           form={createForm}
           layout="vertical"
-          initialValues={{ role: "employee" }}
+          initialValues={{ role: "employee", region_ids: [] }}
           autoComplete="off"
         >
           <Form.Item
@@ -254,6 +331,30 @@ export function EmployeesPage() {
               ]}
             />
           </Form.Item>
+          {createRole !== "super_admin" ? (
+            <Form.Item
+              name="region_ids"
+              label="地区权限"
+              rules={[
+                {
+                  required: true,
+                  type: "array",
+                  min: 1,
+                  message: "请至少选择一个地区",
+                },
+              ]}
+              extra="员工仅能查看与操作已分配地区的商品和订单"
+            >
+              <Select
+                mode="multiple"
+                showSearch
+                optionFilterProp="label"
+                loading={regionsLoading}
+                placeholder="请选择可操作的地区"
+                options={regionOptions}
+              />
+            </Form.Item>
+          ) : null}
         </Form>
       </Modal>
 
@@ -272,6 +373,11 @@ export function EmployeesPage() {
               role: values.role,
               is_active: values.is_active,
             };
+            if (values.role !== "super_admin") {
+              payload.region_ids = values.region_ids ?? [];
+            } else {
+              payload.region_ids = [];
+            }
             if (values.password?.trim()) {
               payload.password = values.password.trim();
             }
@@ -307,6 +413,30 @@ export function EmployeesPage() {
               ]}
             />
           </Form.Item>
+          {editRole !== "super_admin" ? (
+            <Form.Item
+              name="region_ids"
+              label="地区权限"
+              rules={[
+                {
+                  required: true,
+                  type: "array",
+                  min: 1,
+                  message: "请至少选择一个地区",
+                },
+              ]}
+              extra="员工仅能查看与操作已分配地区的商品和订单"
+            >
+              <Select
+                mode="multiple"
+                showSearch
+                optionFilterProp="label"
+                loading={regionsLoading}
+                placeholder="请选择可操作的地区"
+                options={regionOptions}
+              />
+            </Form.Item>
+          ) : null}
           <Form.Item
             name="is_active"
             label="启用账号"

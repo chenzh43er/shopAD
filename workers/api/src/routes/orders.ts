@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import {
   canAdvanceCodOrder,
+  canRevertCodOrder,
   canTransitionOrder,
+  COD_REVERT_FALLBACK,
+  isCodForceStatus,
   ORDER_STATUS_LABELS,
   ORDER_STATUSES,
   PAYMENT_TYPE_LABELS,
@@ -15,19 +18,23 @@ import {
   attachActorsOne,
   listAuditLogs,
   writeAuditLog,
+  writeAuditLogs,
+  type WriteAuditInput,
 } from "../lib/audit";
 import {
   applyOrderOwnerScope,
   assertOrderAccess,
   assertProductAccess,
+  createOrderAccessChecker,
   isSuperAdmin,
-  listOwnedProductIds,
+  listAccessibleProductIds,
   scopeProductsByOwner,
 } from "../lib/access";
 import {
   attachOrderCurrency,
   attachOrderCurrencyOne,
 } from "../lib/orderCurrency";
+import { requireSuperAdmin } from "../middleware/auth";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -42,7 +49,7 @@ const FULL_EXPORT_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
 /** 列表页所需列（避免 select * 拖大 payload / IO） */
 const ORDER_LIST_SELECT =
-  "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at";
 
 function parseCsvIds(raw: unknown, max = 500): string[] {
   const parts: string[] = [];
@@ -156,6 +163,8 @@ type ExportListFilters = {
   orderNos: string[];
   customerPhone: string;
   customerPhones: string[];
+  shippingOrderNo: string;
+  shippingOrderNos: string[];
 };
 
 function parseExportListFilters(body: {
@@ -165,6 +174,8 @@ function parseExportListFilters(body: {
   order_nos?: unknown;
   customer_phone?: unknown;
   customer_phones?: unknown;
+  shipping_order_no?: unknown;
+  shipping_order_nos?: unknown;
 }): { ok: true; filters: ExportListFilters } | { ok: false; error: string } {
   const from = parseOptionalDateBound(body.date_from, "开始日期");
   if (!from.ok) return from;
@@ -185,15 +196,27 @@ function parseExportListFilters(body: {
         typeof body.customer_phone === "string" ? body.customer_phone : "",
       ),
       customerPhones: parsePhonesInput(body.customer_phones),
+      shippingOrderNo:
+        typeof body.shipping_order_no === "string"
+          ? body.shipping_order_no.trim()
+          : "",
+      shippingOrderNos: parseCsvIds(
+        body.shipping_order_nos,
+        MAX_BATCH_ORDER_NOS,
+      ),
     },
   };
 }
 
-/** 与列表页一致：批量订单号/手机号、单号/电话搜索、可选创建时间区间 */
+/** 与列表页一致：批量订单号/手机号/运单号、单号/电话/运单搜索、可选创建时间区间 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyExportListFilters(query: any, filters: ExportListFilters) {
   const batchByOrderNo = filters.orderNos.length > 0;
   const batchByPhone = !batchByOrderNo && filters.customerPhones.length > 0;
+  const batchByShipping =
+    !batchByOrderNo &&
+    !batchByPhone &&
+    filters.shippingOrderNos.length > 0;
   if (batchByOrderNo) {
     query = query.in("order_no", filters.orderNos);
   } else if (batchByPhone) {
@@ -202,10 +225,17 @@ function applyExportListFilters(query: any, filters: ExportListFilters) {
         .map((p) => `customer_phone.ilike.%${p}%`)
         .join(","),
     );
+  } else if (batchByShipping) {
+    query = query.in("shipping_order_no", filters.shippingOrderNos);
   } else if (filters.orderNo) {
     query = query.ilike("order_no", `${filters.orderNo}%`);
   } else if (filters.customerPhone) {
     query = query.ilike("customer_phone", `%${filters.customerPhone}%`);
+  } else if (filters.shippingOrderNo) {
+    query = query.ilike(
+      "shipping_order_no",
+      `${filters.shippingOrderNo}%`,
+    );
   }
   if (filters.dateFrom) {
     query = query.gte("created_at", filters.dateFrom);
@@ -214,6 +244,100 @@ function applyExportListFilters(query: any, filters: ExportListFilters) {
     query = query.lte("created_at", filters.dateTo);
   }
   return query;
+}
+
+/** 筛选未关联地区库的商品 */
+const REGION_UNSET = "__none__";
+
+type ServiceClient = ReturnType<
+  typeof import("../lib/supabase").createServiceClient
+>;
+type AppContext = import("hono").Context<{
+  Bindings: import("../types").Env;
+  Variables: import("../types").Variables;
+}>;
+
+/**
+ * 按商品地区库 id 解析可筛选的商品 id 列表（含所属人权限）。
+ * @returns `"empty"` 表示无匹配商品
+ */
+async function listProductIdsByRegion(
+  supabase: ServiceClient,
+  c: AppContext,
+  regionId: string,
+): Promise<string[] | "empty"> {
+  let productQuery = supabase.from("products").select("id");
+  if (regionId === REGION_UNSET) {
+    productQuery = productQuery.is("region_id", null);
+  } else {
+    productQuery = productQuery.eq("region_id", regionId);
+  }
+
+  const scoped = await scopeProductsByOwner(productQuery, supabase, c);
+  if (!scoped.ok) return "empty";
+  productQuery = scoped.query;
+
+  const { data, error } = await productQuery;
+  if (error) throw new Error(error.message);
+
+  const ids = (data ?? []).map((row) => row.id as string);
+  return ids.length === 0 ? "empty" : ids;
+}
+
+/** 将地区筛选与已有商品 id 范围取交集 */
+function intersectProductIds(
+  base: string[] | null,
+  regionIds: string[],
+): string[] {
+  if (base === null) return regionIds;
+  const allowed = new Set(regionIds);
+  return base.filter((id) => allowed.has(id));
+}
+
+/**
+ * 解析导出/列表用的商品 id 范围：所属人权限 × 弹窗所选商品 × 地区筛选。
+ * @returns `"empty"` 表示无匹配商品；`null` 表示不限制商品
+ */
+async function resolveFilterProductIds(
+  supabase: ServiceClient,
+  c: AppContext,
+  opts: { productIds: string[]; regionId?: string },
+): Promise<string[] | null | "empty"> {
+  let allowedProductIds: string[] | "all";
+  try {
+    allowedProductIds = await listAccessibleProductIds(supabase, c);
+  } catch (e) {
+    throw e instanceof Error ? e : new Error("权限校验失败");
+  }
+  if (allowedProductIds !== "all" && allowedProductIds.length === 0) {
+    return "empty";
+  }
+
+  let filterProductIds: string[] | null = null;
+  if (opts.productIds.length > 0) {
+    if (allowedProductIds === "all") {
+      filterProductIds = opts.productIds;
+    } else {
+      const owned = new Set(allowedProductIds);
+      filterProductIds = opts.productIds.filter((id) => owned.has(id));
+      if (filterProductIds.length === 0) return "empty";
+    }
+  } else if (allowedProductIds !== "all") {
+    filterProductIds = allowedProductIds;
+  }
+
+  if (opts.regionId) {
+    const regionProductIds = await listProductIdsByRegion(
+      supabase,
+      c,
+      opts.regionId,
+    );
+    if (regionProductIds === "empty") return "empty";
+    filterProductIds = intersectProductIds(filterProductIds, regionProductIds);
+    if (filterProductIds.length === 0) return "empty";
+  }
+
+  return filterProductIds;
 }
 
 function isOrderStatus(value: unknown): value is OrderStatus {
@@ -232,7 +356,6 @@ function actorFrom(c: { get: (k: keyof Variables) => string }) {
 }
 
 type Actor = ReturnType<typeof actorFrom>;
-type ServiceClient = ReturnType<typeof createServiceClient>;
 
 /** COD 待审核订单：通过 → 待确认；拒绝 → 已取消 */
 async function applyCodPendingReview(
@@ -424,6 +547,172 @@ async function resolveStatusBeforeInvalid(
   return "awaiting_review";
 }
 
+const REVERT_TARGET_STATUSES = new Set<OrderStatus>([
+  "awaiting_review",
+  "awaiting_confirm",
+  "awaiting_shipment",
+  "cod_shipped",
+]);
+
+function isValidRevertTarget(
+  currentStatus: OrderStatus,
+  previousStatus: OrderStatus,
+): boolean {
+  if (currentStatus === "cancelled") {
+    return REOPENABLE_STATUSES.has(previousStatus);
+  }
+  return REVERT_TARGET_STATUSES.has(previousStatus);
+}
+
+/** 从审计日志推断上一步履约状态 */
+async function resolvePreviousStatus(
+  supabase: ServiceClient,
+  orderId: string,
+  currentStatus: OrderStatus,
+): Promise<OrderStatus | null> {
+  if (!canRevertCodOrder("cod", currentStatus)) return null;
+
+  if (currentStatus === "cancelled") {
+    return resolveStatusBeforeInvalid(supabase, orderId);
+  }
+
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("from_value")
+    .eq("entity_type", "order")
+    .eq("entity_id", orderId)
+    .eq("action", "status_change")
+    .eq("to_value", currentStatus)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("resolvePreviousStatus failed:", error.message);
+  } else if (typeof data?.from_value === "string") {
+    const from = data.from_value as OrderStatus;
+    if (isValidRevertTarget(currentStatus, from)) {
+      return from;
+    }
+  }
+
+  return COD_REVERT_FALLBACK[currentStatus] ?? null;
+}
+
+function buildCodRevertPatch(
+  currentStatus: OrderStatus,
+  previousStatus: OrderStatus,
+  actor: Actor,
+): Record<string, unknown> {
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    status: previousStatus,
+    updated_by: actor.id,
+  };
+  const backToReview = previousStatus === "awaiting_review";
+
+  if (currentStatus === "cancelled") {
+    patch.review_status = backToReview ? "pending" : "approved";
+    patch.reject_reason = null;
+    patch.reviewed_by = backToReview ? null : actor.id;
+    patch.reviewed_at = backToReview ? null : now;
+  } else if (backToReview) {
+    patch.review_status = "pending";
+    patch.reviewed_by = null;
+    patch.reviewed_at = null;
+  } else {
+    patch.review_status = "approved";
+  }
+
+  if (currentStatus === "cod_shipped" && previousStatus === "awaiting_shipment") {
+    patch.shipper_id = null;
+    patch.shipper_name = null;
+    patch.shipper_phone = null;
+    patch.shipper_province = null;
+    patch.shipper_city = null;
+    patch.shipper_district = null;
+    patch.shipper_address = null;
+    patch.shipper_address_info = null;
+    patch.shipping_order_no = null;
+    patch.consignor_flag = null;
+    patch.consignor_name = null;
+    patch.consignor_phone = null;
+  }
+
+  return patch;
+}
+
+/** COD 订单恢复上一步状态 */
+async function applyCodRevertStep(
+  supabase: ServiceClient,
+  order: {
+    id: string;
+    status: string;
+    payment_type: string;
+    review_status: string;
+  },
+  actor: Actor,
+  remark?: string | null,
+): Promise<
+  { ok: true; previousStatus: OrderStatus } | { ok: false; error: string }
+> {
+  if (order.payment_type !== "cod") {
+    return { ok: false, error: "非货到付款订单不支持恢复上一步" };
+  }
+
+  const currentStatus = order.status as OrderStatus;
+  if (!canRevertCodOrder("cod", currentStatus)) {
+    return { ok: false, error: "当前状态不可恢复上一步" };
+  }
+
+  const previousStatus = await resolvePreviousStatus(
+    supabase,
+    order.id,
+    currentStatus,
+  );
+  if (!previousStatus) {
+    return { ok: false, error: "无法确定上一步状态" };
+  }
+
+  const patch = buildCodRevertPatch(currentStatus, previousStatus, actor);
+  const auditRemark = remark ?? "恢复上一步状态";
+
+  const { error: updateError } = await supabase
+    .from("orders")
+    .update(patch)
+    .eq("id", order.id);
+
+  if (updateError) return { ok: false, error: updateError.message };
+
+  const prevReview = order.review_status as ReviewStatus;
+  const nextReview = patch.review_status as ReviewStatus | undefined;
+  if (nextReview && nextReview !== prevReview) {
+    await writeAuditLog(supabase, {
+      entityType: "order",
+      entityId: order.id,
+      action: "review",
+      actor,
+      fromValue: prevReview,
+      toValue: nextReview,
+      remark: auditRemark,
+    });
+  }
+
+  if (currentStatus !== previousStatus) {
+    await writeAuditLog(supabase, {
+      entityType: "order",
+      entityId: order.id,
+      action: "status_change",
+      actor,
+      fromValue: currentStatus,
+      toValue: previousStatus,
+      remark: auditRemark,
+    });
+  }
+
+  return { ok: true, previousStatus };
+}
+
 /** COD 无效订单 → 恢复作废前状态 */
 async function applyCodReopen(
   supabase: ServiceClient,
@@ -443,48 +732,14 @@ async function applyCodReopen(
     return { ok: false, error: "仅无效订单可恢复" };
   }
 
-  const restoredStatus = await resolveStatusBeforeInvalid(supabase, order.id);
-  const nextReview: ReviewStatus =
-    restoredStatus === "awaiting_review" ? "pending" : "approved";
-  const now = new Date().toISOString();
-
-  const { error: updateError } = await supabase
-    .from("orders")
-    .update({
-      status: restoredStatus,
-      review_status: nextReview,
-      reject_reason: null,
-      reviewed_by: nextReview === "approved" ? actor.id : null,
-      reviewed_at: nextReview === "approved" ? now : null,
-      updated_by: actor.id,
-    })
-    .eq("id", order.id);
-
-  if (updateError) return { ok: false, error: updateError.message };
-
-  await writeAuditLog(supabase, {
-    entityType: "order",
-    entityId: order.id,
-    action: "review",
+  const result = await applyCodRevertStep(
+    supabase,
+    order,
     actor,
-    fromValue: order.review_status,
-    toValue: nextReview,
-    remark: remark ?? "无效订单恢复原先状态",
-  });
-
-  if (order.status !== restoredStatus) {
-    await writeAuditLog(supabase, {
-      entityType: "order",
-      entityId: order.id,
-      action: "status_change",
-      actor,
-      fromValue: order.status,
-      toValue: restoredStatus,
-      remark: "COD 无效订单恢复原先状态",
-    });
-  }
-
-  return { ok: true, restoredStatus };
+    remark ?? "无效订单恢复原先状态",
+  );
+  if (!result.ok) return result;
+  return { ok: true, restoredStatus: result.previousStatus };
 }
 
 /** COD 待确认 → 待发货 */
@@ -693,6 +948,7 @@ async function applyCodShip(
     owner_member: string;
     shipper: ShipperSnapshot;
   },
+  options?: { skipAudit?: boolean },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (order.payment_type !== "cod") {
     return { ok: false, error: "非货到付款订单不可 COD 发货" };
@@ -752,17 +1008,239 @@ async function applyCodShip(
 
   if (updateError) return { ok: false, error: updateError.message };
 
-  await writeAuditLog(supabase, {
-    entityType: "order",
-    entityId: order.id,
-    action: "status_change",
-    actor,
-    fromValue: from,
-    toValue: to,
-    remark: `批量发货；运单号：${shippingOrderNo}；归属成员：${ownerMember}；寄件人：${shipper.name}`,
-  });
+  if (!options?.skipAudit) {
+    await writeAuditLog(supabase, {
+      entityType: "order",
+      entityId: order.id,
+      action: "status_change",
+      actor,
+      fromValue: from,
+      toValue: to,
+      remark: `批量发货；运单号：${shippingOrderNo}；归属成员：${ownerMember}；寄件人：${shipper.name}`,
+    });
+  }
 
   return { ok: true };
+}
+
+const BATCH_CONCURRENCY = 15;
+const MAX_BATCH_STATUS_IDS = 100;
+
+type BatchOrderRow = {
+  id: string;
+  status: string;
+  payment_type: string;
+  review_status: string;
+  product_id: string | null;
+};
+
+type BatchAccessOrder = Pick<BatchOrderRow, "id" | "product_id">;
+
+type BatchOutcome = {
+  succeeded: string[];
+  failed: Array<{ id: string; error: string }>;
+};
+
+async function runParallel<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += concurrency) {
+    await Promise.all(items.slice(i, i + concurrency).map(fn));
+  }
+}
+
+function auditStatusChange(
+  actor: Actor,
+  orderId: string,
+  fromValue: string,
+  toValue: string,
+  remark?: string | null,
+): WriteAuditInput {
+  return {
+    entityType: "order",
+    entityId: orderId,
+    action: "status_change",
+    actor,
+    fromValue,
+    toValue,
+    remark: remark ?? null,
+  };
+}
+
+function auditReviewChange(
+  actor: Actor,
+  orderId: string,
+  fromValue: string,
+  toValue: string,
+  remark?: string | null,
+): WriteAuditInput {
+  return {
+    entityType: "order",
+    entityId: orderId,
+    action: "review",
+    actor,
+    fromValue,
+    toValue,
+    remark: remark ?? null,
+  };
+}
+
+async function bulkUpdateOrders(
+  supabase: ServiceClient,
+  ids: string[],
+  patch: Record<string, unknown>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (ids.length === 0) return { ok: true };
+  const { error } = await supabase.from("orders").update(patch).in("id", ids);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/** 批量推断无效前的履约状态 */
+async function resolveStatusBeforeInvalidBatch(
+  supabase: ServiceClient,
+  orderIds: string[],
+): Promise<Map<string, OrderStatus>> {
+  const result = new Map<string, OrderStatus>();
+  for (const id of orderIds) {
+    result.set(id, "awaiting_review");
+  }
+  if (orderIds.length === 0) return result;
+
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("entity_id, from_value, created_at")
+    .eq("entity_type", "order")
+    .in("entity_id", orderIds)
+    .eq("action", "status_change")
+    .eq("to_value", "cancelled")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("resolveStatusBeforeInvalidBatch failed:", error.message);
+    return result;
+  }
+
+  for (const row of data ?? []) {
+    const entityId = row.entity_id as string;
+    if (result.get(entityId) !== "awaiting_review") continue;
+    const from = row.from_value;
+    if (
+      typeof from === "string" &&
+      REOPENABLE_STATUSES.has(from as OrderStatus)
+    ) {
+      result.set(entityId, from as OrderStatus);
+    }
+  }
+  return result;
+}
+
+/** 批量推断上一步履约状态 */
+async function resolvePreviousStatusBatch(
+  supabase: ServiceClient,
+  orders: Array<{ id: string; status: OrderStatus }>,
+): Promise<Map<string, OrderStatus | null>> {
+  const result = new Map<string, OrderStatus | null>();
+
+  for (const order of orders) {
+    if (!canRevertCodOrder("cod", order.status)) {
+      result.set(order.id, null);
+      continue;
+    }
+    result.set(order.id, COD_REVERT_FALLBACK[order.status] ?? null);
+  }
+
+  const cancelledIds = orders
+    .filter((o) => o.status === "cancelled")
+    .map((o) => o.id);
+  if (cancelledIds.length > 0) {
+    const cancelledMap = await resolveStatusBeforeInvalidBatch(
+      supabase,
+      cancelledIds,
+    );
+    for (const [id, status] of cancelledMap) {
+      result.set(id, status);
+    }
+  }
+
+  const revertibleIds = orders
+    .filter((o) => canRevertCodOrder("cod", o.status) && o.status !== "cancelled")
+    .map((o) => o.id);
+  if (revertibleIds.length === 0) return result;
+
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .select("entity_id, from_value, to_value, created_at")
+    .eq("entity_type", "order")
+    .in("entity_id", revertibleIds)
+    .eq("action", "status_change")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("resolvePreviousStatusBatch failed:", error.message);
+    return result;
+  }
+
+  const currentById = new Map(orders.map((o) => [o.id, o.status]));
+  const resolved = new Set<string>();
+
+  for (const row of data ?? []) {
+    const entityId = row.entity_id as string;
+    if (resolved.has(entityId)) continue;
+    const currentStatus = currentById.get(entityId);
+    if (!currentStatus || row.to_value !== currentStatus) continue;
+
+    const from = row.from_value;
+    if (
+      typeof from === "string" &&
+      isValidRevertTarget(currentStatus, from as OrderStatus)
+    ) {
+      result.set(entityId, from as OrderStatus);
+      resolved.add(entityId);
+    }
+  }
+
+  return result;
+}
+
+function partitionBatchOrders<T extends BatchAccessOrder>(
+  ids: string[],
+  byId: Map<string, T>,
+  accessChecker: Awaited<ReturnType<typeof createOrderAccessChecker>>,
+): {
+  eligible: T[];
+  outcome: BatchOutcome;
+} {
+  const outcome: BatchOutcome = { succeeded: [], failed: [] };
+  const eligible: T[] = [];
+
+  for (const id of ids) {
+    const order = byId.get(id);
+    if (!order) {
+      outcome.failed.push({ id, error: "订单不存在" });
+      continue;
+    }
+    const access = accessChecker.check(order);
+    if (!access.ok) {
+      outcome.failed.push({ id, error: access.error });
+      continue;
+    }
+    eligible.push(order);
+  }
+
+  return { eligible, outcome };
+}
+
+function markBulkUpdateFailure(
+  orders: BatchAccessOrder[],
+  outcome: BatchOutcome,
+  error: string,
+): void {
+  for (const order of orders) {
+    outcome.failed.push({ id: order.id, error });
+  }
 }
 
 export const ordersRoutes = new Hono<{
@@ -778,10 +1256,13 @@ ordersRoutes.get("/", async (c) => {
   const orderNos = parseOrderNos(c.req.query("order_nos"));
   const customerPhone = phoneSearchDigits(c.req.query("customer_phone") ?? "");
   const customerPhones = parsePhones(c.req.query("customer_phones"));
+  const shippingOrderNo = c.req.query("shipping_order_no")?.trim();
+  const shippingOrderNos = parseOrderNos(c.req.query("shipping_order_nos"));
   const reviewStatus = c.req.query("review_status")?.trim();
   const paymentType = c.req.query("payment_type")?.trim();
   const dateFrom = c.req.query("date_from")?.trim();
   const dateTo = c.req.query("date_to")?.trim();
+  const regionId = c.req.query("region_id")?.trim();
 
   const supabase = createServiceClient(c.env);
   let query = supabase
@@ -803,10 +1284,12 @@ ordersRoutes.get("/", async (c) => {
     );
   }
 
-  // 批量订单号 / 手机号匹配时，不按子状态收窄，便于跨 Tab 查出结果
+  // 批量订单号 / 手机号 / 运单号匹配时，不按子状态收窄，便于跨 Tab 查出结果
   const batchByOrderNo = orderNos.length > 0;
   const batchByPhone = !batchByOrderNo && customerPhones.length > 0;
-  const isBatchLookup = batchByOrderNo || batchByPhone;
+  const batchByShipping =
+    !batchByOrderNo && !batchByPhone && shippingOrderNos.length > 0;
+  const isBatchLookup = batchByOrderNo || batchByPhone || batchByShipping;
   if (!isBatchLookup && status) {
     if (!isOrderStatus(status)) {
       return c.json({ error: `无效的订单状态：${status}` }, 400);
@@ -822,11 +1305,15 @@ ordersRoutes.get("/", async (c) => {
         .map((p) => `customer_phone.ilike.%${p}%`)
         .join(","),
     );
+  } else if (batchByShipping) {
+    query = query.in("shipping_order_no", shippingOrderNos);
   } else if (orderNo) {
     // 前缀匹配可走 order_no btree；中间模糊会全表扫描
     query = query.ilike("order_no", `${orderNo}%`);
   } else if (customerPhone) {
     query = query.ilike("customer_phone", `%${customerPhone}%`);
+  } else if (shippingOrderNo) {
+    query = query.ilike("shipping_order_no", `${shippingOrderNo}%`);
   }
   if (!isBatchLookup && reviewStatus) {
     if (
@@ -856,6 +1343,24 @@ ordersRoutes.get("/", async (c) => {
       return c.json({ error: "结束日期无效" }, 400);
     }
     query = query.lte("created_at", to.toISOString());
+  }
+  if (regionId) {
+    try {
+      const regionProductIds = await listProductIdsByRegion(
+        supabase,
+        c,
+        regionId,
+      );
+      if (regionProductIds === "empty") {
+        return c.json({ data: [], total: 0, page, pageSize });
+      }
+      query = query.in("product_id", regionProductIds);
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "地区筛选失败" },
+        500,
+      );
+    }
   }
 
   const { data, error, count } = await query;
@@ -890,6 +1395,7 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
     statusRaw === "awaiting_confirm"
       ? statusRaw
       : "cod_shipped";
+  const regionId = c.req.query("region_id")?.trim();
 
   const supabase = createServiceClient(c.env);
 
@@ -906,6 +1412,13 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
       return c.json({ products: [], owner_members: [] as string[] });
     }
     productQuery = scoped.query;
+    if (regionId) {
+      if (regionId === REGION_UNSET) {
+        productQuery = productQuery.is("region_id", null);
+      } else {
+        productQuery = productQuery.eq("region_id", regionId);
+      }
+    }
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "权限校验失败" },
@@ -957,10 +1470,13 @@ ordersRoutes.post("/finance-export", async (c) => {
     date_to?: unknown;
     product_ids?: unknown;
     owner_members?: unknown;
+    region_id?: unknown;
     order_no?: unknown;
     order_nos?: unknown;
     customer_phone?: unknown;
     customer_phones?: unknown;
+    shipping_order_no?: unknown;
+    shipping_order_nos?: unknown;
   };
 
   const listFilters = parseExportListFilters(body);
@@ -968,6 +1484,8 @@ ordersRoutes.post("/finance-export", async (c) => {
 
   const productIds = parseCsvIds(body.product_ids);
   const ownerMembers = parseCsvIds(body.owner_members, 200);
+  const regionId =
+    typeof body.region_id === "string" ? body.region_id.trim() : "";
 
   if (ownerMembers.length > 0 && !isSuperAdmin(c)) {
     return c.json({ error: "仅管理员可按归属成员筛选导出" }, 403);
@@ -975,32 +1493,20 @@ ordersRoutes.post("/finance-export", async (c) => {
 
   const supabase = createServiceClient(c.env);
 
-  let allowedProductIds: string[] | "all";
+  let filterProductIds: string[] | null | "empty";
   try {
-    allowedProductIds = await listOwnedProductIds(supabase, c);
+    filterProductIds = await resolveFilterProductIds(supabase, c, {
+      productIds,
+      regionId: regionId || undefined,
+    });
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "权限校验失败" },
       500,
     );
   }
-  if (allowedProductIds !== "all" && allowedProductIds.length === 0) {
+  if (filterProductIds === "empty") {
     return c.json({ data: [], total: 0 });
-  }
-
-  let filterProductIds: string[] | null = null;
-  if (productIds.length > 0) {
-    if (allowedProductIds === "all") {
-      filterProductIds = productIds;
-    } else {
-      const owned = new Set(allowedProductIds);
-      filterProductIds = productIds.filter((id) => owned.has(id));
-      if (filterProductIds.length === 0) {
-        return c.json({ data: [], total: 0 });
-      }
-    }
-  } else if (allowedProductIds !== "all") {
-    filterProductIds = allowedProductIds;
   }
 
   let query = supabase
@@ -1110,10 +1616,13 @@ ordersRoutes.post("/logistics-export", async (c) => {
     date_to?: unknown;
     product_ids?: unknown;
     owner_members?: unknown;
+    region_id?: unknown;
     order_no?: unknown;
     order_nos?: unknown;
     customer_phone?: unknown;
     customer_phones?: unknown;
+    shipping_order_no?: unknown;
+    shipping_order_nos?: unknown;
   };
 
   const status =
@@ -1131,6 +1640,8 @@ ordersRoutes.post("/logistics-export", async (c) => {
 
   const productIds = parseCsvIds(body.product_ids);
   const ownerMembers = parseCsvIds(body.owner_members, 200);
+  const regionId =
+    typeof body.region_id === "string" ? body.region_id.trim() : "";
 
   if (ownerMembers.length > 0 && !isSuperAdmin(c)) {
     return c.json({ error: "仅管理员可按归属成员筛选导出" }, 403);
@@ -1138,32 +1649,20 @@ ordersRoutes.post("/logistics-export", async (c) => {
 
   const supabase = createServiceClient(c.env);
 
-  let allowedProductIds: string[] | "all";
+  let filterProductIds: string[] | null | "empty";
   try {
-    allowedProductIds = await listOwnedProductIds(supabase, c);
+    filterProductIds = await resolveFilterProductIds(supabase, c, {
+      productIds,
+      regionId: regionId || undefined,
+    });
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "权限校验失败" },
       500,
     );
   }
-  if (allowedProductIds !== "all" && allowedProductIds.length === 0) {
+  if (filterProductIds === "empty") {
     return c.json({ data: [], total: 0 });
-  }
-
-  let filterProductIds: string[] | null = null;
-  if (productIds.length > 0) {
-    if (allowedProductIds === "all") {
-      filterProductIds = productIds;
-    } else {
-      const owned = new Set(allowedProductIds);
-      filterProductIds = productIds.filter((id) => owned.has(id));
-      if (filterProductIds.length === 0) {
-        return c.json({ data: [], total: 0 });
-      }
-    }
-  } else if (allowedProductIds !== "all") {
-    filterProductIds = allowedProductIds;
   }
 
   let query = supabase
@@ -1227,45 +1726,38 @@ ordersRoutes.post("/full-export", async (c) => {
     date_from?: unknown;
     date_to?: unknown;
     product_ids?: unknown;
+    region_id?: unknown;
     order_no?: unknown;
     order_nos?: unknown;
     customer_phone?: unknown;
     customer_phones?: unknown;
+    shipping_order_no?: unknown;
+    shipping_order_nos?: unknown;
   };
 
   const listFilters = parseExportListFilters(body);
   if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
 
   const productIds = parseCsvIds(body.product_ids);
+  const regionId =
+    typeof body.region_id === "string" ? body.region_id.trim() : "";
 
   const supabase = createServiceClient(c.env);
 
-  let allowedProductIds: string[] | "all";
+  let filterProductIds: string[] | null | "empty";
   try {
-    allowedProductIds = await listOwnedProductIds(supabase, c);
+    filterProductIds = await resolveFilterProductIds(supabase, c, {
+      productIds,
+      regionId: regionId || undefined,
+    });
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "权限校验失败" },
       500,
     );
   }
-  if (allowedProductIds !== "all" && allowedProductIds.length === 0) {
+  if (filterProductIds === "empty") {
     return c.json({ data: [], total: 0 });
-  }
-
-  let filterProductIds: string[] | null = null;
-  if (productIds.length > 0) {
-    if (allowedProductIds === "all") {
-      filterProductIds = productIds;
-    } else {
-      const owned = new Set(allowedProductIds);
-      filterProductIds = productIds.filter((id) => owned.has(id));
-      if (filterProductIds.length === 0) {
-        return c.json({ data: [], total: 0 });
-      }
-    }
-  } else if (allowedProductIds !== "all") {
-    filterProductIds = allowedProductIds;
   }
 
   let query = supabase
@@ -1987,57 +2479,93 @@ ordersRoutes.post("/batch-review", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要审核的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多审核 100 笔订单" }, 400);
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多审核 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
   }
 
-  const supabase = createServiceClient(c.env);
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, status, payment_type, review_status, product_id")
-    .in("id", ids);
+  const reason =
+    typeof body.remark === "string" ? body.remark.trim() : body.remark == null ? "" : "";
+  if (body.decision === "rejected" && !reason) {
+    return c.json({ error: "标记无效订单前请填写拒绝理由" }, 400);
+  }
 
+  const supabase = createServiceClient(c.env);
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase
+      .from("orders")
+      .select("id, status, payment_type, review_status, product_id")
+      .in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const toUpdate: BatchOrderRow[] = [];
+  const auditEntries: WriteAuditInput[] = [];
+  const nextReview = body.decision as ReviewStatus;
+  const nextFulfillment =
+    nextReview === "approved" ? "awaiting_confirm" : "cancelled";
+  const now = new Date().toISOString();
 
-  for (const id of ids) {
-    const order = byId.get(id);
-    if (!order) {
-      failed.push({ id, error: "订单不存在" });
+  for (const order of eligible) {
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({ id: order.id, error: "非货到付款订单无需审核" });
       continue;
     }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
-      });
+    if (order.review_status !== "pending") {
+      outcome.failed.push({ id: order.id, error: "当前订单不在待审核状态" });
       continue;
     }
-    const result = await applyCodPendingReview(
-      supabase,
-      order,
-      body.decision,
-      actor,
-      body.remark,
-    );
-    if (result.ok) succeeded.push(id);
-    else failed.push({ id, error: result.error });
+    toUpdate.push(order);
   }
 
-  return c.json({ succeeded, failed });
+  if (toUpdate.length > 0) {
+    const updateIds = toUpdate.map((o) => o.id);
+    const patch: Record<string, unknown> = {
+      review_status: nextReview,
+      status: nextFulfillment,
+      reviewed_by: actor.id,
+      reviewed_at: now,
+      updated_by: actor.id,
+    };
+    if (body.decision === "rejected") {
+      patch.reject_reason = reason;
+    }
+
+    const bulk = await bulkUpdateOrders(supabase, updateIds, patch);
+    if (!bulk.ok) {
+      markBulkUpdateFailure(toUpdate, outcome, bulk.error);
+    } else {
+      for (const order of toUpdate) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push(
+          auditReviewChange(actor, order.id, "pending", nextReview, reason || null),
+        );
+        if (order.status !== nextFulfillment) {
+          auditEntries.push(
+            auditStatusChange(
+              actor,
+              order.id,
+              order.status,
+              nextFulfillment,
+              nextReview === "approved"
+                ? "COD 审核通过，自动进入待确认"
+                : reason || "标记为无效订单",
+            ),
+          );
+        }
+      }
+      await writeAuditLogs(supabase, auditEntries);
+    }
+  }
+
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
 });
 
 /** 批量填写订单备注 */
@@ -2066,59 +2594,42 @@ ordersRoutes.post("/batch-remark", async (c) => {
   }
 
   const supabase = createServiceClient(c.env);
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, remark, product_id")
-    .in("id", ids);
-
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase.from("orders").select("id, remark, product_id").in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const auditEntries: WriteAuditInput[] = [];
 
-  for (const id of ids) {
-    const order = byId.get(id);
-    if (!order) {
-      failed.push({ id, error: "订单不存在" });
-      continue;
-    }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
-      });
-      continue;
-    }
-
-    const { error: updateError } = await supabase
-      .from("orders")
-      .update({ remark, updated_by: actor.id })
-      .eq("id", id);
-
-    if (updateError) {
-      failed.push({ id, error: updateError.message });
-      continue;
-    }
-
-    await writeAuditLog(supabase, {
-      entityType: "order",
-      entityId: id,
-      action: "remark_update",
-      actor,
-      fromValue: order.remark ?? null,
-      toValue: remark,
+  if (eligible.length > 0) {
+    const updateIds = eligible.map((o) => o.id);
+    const bulk = await bulkUpdateOrders(supabase, updateIds, {
+      remark,
+      updated_by: actor.id,
     });
-    succeeded.push(id);
+    if (!bulk.ok) {
+      markBulkUpdateFailure(eligible, outcome, bulk.error);
+    } else {
+      for (const order of eligible) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push({
+          entityType: "order",
+          entityId: order.id,
+          action: "remark_update",
+          actor,
+          fromValue: (order as { remark?: string | null }).remark ?? null,
+          toValue: remark,
+        });
+      }
+      await writeAuditLogs(supabase, auditEntries);
+    }
   }
 
-  return c.json({ succeeded, failed });
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
 });
 
 /** COD 待确认批量确认 → 待发货 */
@@ -2129,8 +2640,8 @@ ordersRoutes.post("/batch-confirm", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要确认的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多确认 100 笔订单" }, 400);
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多确认 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -2138,42 +2649,64 @@ ordersRoutes.post("/batch-confirm", async (c) => {
   }
 
   const supabase = createServiceClient(c.env);
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, status, payment_type, review_status, product_id")
-    .in("id", ids);
-
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase
+      .from("orders")
+      .select("id, status, payment_type, review_status, product_id")
+      .in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const toUpdate: BatchOrderRow[] = [];
+  const auditEntries: WriteAuditInput[] = [];
+  const to: OrderStatus = "awaiting_shipment";
 
-  for (const id of ids) {
-    const order = byId.get(id);
-    if (!order) {
-      failed.push({ id, error: "订单不存在" });
+  for (const order of eligible) {
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({ id: order.id, error: "非货到付款订单不可确认" });
       continue;
     }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
-      });
+    if (order.status !== "awaiting_confirm") {
+      outcome.failed.push({ id: order.id, error: "仅待确认订单可确认" });
       continue;
     }
-    const result = await applyCodConfirm(supabase, order, actor);
-    if (result.ok) succeeded.push(id);
-    else failed.push({ id, error: result.error });
+    if (order.review_status !== "approved") {
+      outcome.failed.push({ id: order.id, error: "订单审核未通过，无法确认" });
+      continue;
+    }
+    toUpdate.push(order);
   }
 
-  return c.json({ succeeded, failed });
+  if (toUpdate.length > 0) {
+    const bulk = await bulkUpdateOrders(
+      supabase,
+      toUpdate.map((o) => o.id),
+      { status: to, updated_by: actor.id },
+    );
+    if (!bulk.ok) {
+      markBulkUpdateFailure(toUpdate, outcome, bulk.error);
+    } else {
+      for (const order of toUpdate) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push(
+          auditStatusChange(
+            actor,
+            order.id,
+            order.status,
+            to,
+            "确认订单，进入待发货",
+          ),
+        );
+      }
+      await writeAuditLogs(supabase, auditEntries);
+    }
+  }
+
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
 });
 
 /** COD 批量转无效订单（待审核 / 待确认 / 待发货） */
@@ -2187,8 +2720,8 @@ ordersRoutes.post("/batch-invalidate", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要标记无效的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多标记 100 笔订单" }, 400);
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多标记 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -2205,47 +2738,140 @@ ordersRoutes.post("/batch-invalidate", async (c) => {
   }
 
   const supabase = createServiceClient(c.env);
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, status, payment_type, review_status, product_id")
-    .in("id", ids);
-
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase
+      .from("orders")
+      .select("id, status, payment_type, review_status, product_id")
+      .in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const pendingReview: BatchOrderRow[] = [];
+  const cancelDirect: BatchOrderRow[] = [];
+  const auditEntries: WriteAuditInput[] = [];
+  const now = new Date().toISOString();
 
-  for (const id of ids) {
-    const order = byId.get(id);
-    if (!order) {
-      failed.push({ id, error: "订单不存在" });
+  for (const order of eligible) {
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({ id: order.id, error: "非货到付款订单不可标记无效" });
       continue;
     }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
+    const from = order.status as OrderStatus;
+    if (
+      from !== "awaiting_review" &&
+      from !== "awaiting_confirm" &&
+      from !== "awaiting_shipment"
+    ) {
+      outcome.failed.push({
+        id: order.id,
+        error: "仅待审核、待确认、待发货订单可标记为无效",
       });
       continue;
     }
-    const result = await applyCodInvalidate(
-      supabase,
-      order,
-      actor,
-      rejectReason,
-    );
-    if (result.ok) succeeded.push(id);
-    else failed.push({ id, error: result.error });
+    if (from === "awaiting_review" || order.review_status === "pending") {
+      pendingReview.push(order);
+      continue;
+    }
+    const to: OrderStatus = "cancelled";
+    if (!canTransitionOrder(from, to)) {
+      outcome.failed.push({
+        id: order.id,
+        error: `不允许从「${from}」变更为无效订单`,
+      });
+      continue;
+    }
+    if (
+      !canAdvanceCodOrder(
+        order.payment_type as PaymentType,
+        order.review_status as ReviewStatus,
+        to,
+      )
+    ) {
+      outcome.failed.push({
+        id: order.id,
+        error: "当前审核状态不允许标记为无效订单",
+      });
+      continue;
+    }
+    cancelDirect.push(order);
   }
 
-  return c.json({ succeeded, failed });
+  if (pendingReview.length > 0) {
+    const updateIds = pendingReview.map((o) => o.id);
+    const bulk = await bulkUpdateOrders(supabase, updateIds, {
+      review_status: "rejected",
+      status: "cancelled",
+      reject_reason: rejectReason,
+      reviewed_by: actor.id,
+      reviewed_at: now,
+      updated_by: actor.id,
+    });
+    if (!bulk.ok) {
+      markBulkUpdateFailure(pendingReview, outcome, bulk.error);
+    } else {
+      for (const order of pendingReview) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push(
+          auditReviewChange(
+            actor,
+            order.id,
+            "pending",
+            "rejected",
+            rejectReason,
+          ),
+        );
+        if (order.status !== "cancelled") {
+          auditEntries.push(
+            auditStatusChange(
+              actor,
+              order.id,
+              order.status,
+              "cancelled",
+              rejectReason,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  if (cancelDirect.length > 0) {
+    const updateIds = cancelDirect.map((o) => o.id);
+    const bulk = await bulkUpdateOrders(supabase, updateIds, {
+      status: "cancelled",
+      review_status: "rejected",
+      reject_reason: rejectReason,
+      reviewed_by: actor.id,
+      reviewed_at: now,
+      updated_by: actor.id,
+    });
+    if (!bulk.ok) {
+      markBulkUpdateFailure(cancelDirect, outcome, bulk.error);
+    } else {
+      for (const order of cancelDirect) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push(
+          auditStatusChange(
+            actor,
+            order.id,
+            order.status,
+            "cancelled",
+            rejectReason,
+          ),
+        );
+      }
+    }
+  }
+
+  if (auditEntries.length > 0) {
+    await writeAuditLogs(supabase, auditEntries);
+  }
+
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
 });
 
 /** COD 已发货批量签收 → 已签收 */
@@ -2256,8 +2882,8 @@ ordersRoutes.post("/batch-complete", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要签收的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多签收 100 笔订单" }, 400);
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多签收 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -2265,42 +2891,58 @@ ordersRoutes.post("/batch-complete", async (c) => {
   }
 
   const supabase = createServiceClient(c.env);
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, status, payment_type, review_status, product_id")
-    .in("id", ids);
-
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase
+      .from("orders")
+      .select("id, status, payment_type, review_status, product_id")
+      .in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const toUpdate: BatchOrderRow[] = [];
+  const auditEntries: WriteAuditInput[] = [];
+  const to: OrderStatus = "cod_completed";
 
-  for (const id of ids) {
-    const order = byId.get(id);
-    if (!order) {
-      failed.push({ id, error: "订单不存在" });
+  for (const order of eligible) {
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({ id: order.id, error: "非货到付款订单不可 COD 签收" });
       continue;
     }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
-      });
+    if (order.status !== "cod_shipped") {
+      outcome.failed.push({ id: order.id, error: "仅已发货订单可签收" });
       continue;
     }
-    const result = await applyCodReceive(supabase, order, actor);
-    if (result.ok) succeeded.push(id);
-    else failed.push({ id, error: result.error });
+    if (order.review_status !== "approved") {
+      outcome.failed.push({ id: order.id, error: "订单审核未通过，无法签收" });
+      continue;
+    }
+    toUpdate.push(order);
   }
 
-  return c.json({ succeeded, failed });
+  if (toUpdate.length > 0) {
+    const bulk = await bulkUpdateOrders(
+      supabase,
+      toUpdate.map((o) => o.id),
+      { status: to, updated_by: actor.id },
+    );
+    if (!bulk.ok) {
+      markBulkUpdateFailure(toUpdate, outcome, bulk.error);
+    } else {
+      for (const order of toUpdate) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push(
+          auditStatusChange(actor, order.id, order.status, to, "批量签收"),
+        );
+      }
+      await writeAuditLogs(supabase, auditEntries);
+    }
+  }
+
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
 });
 
 /** COD 已发货批量拒绝签收 → 拒绝签收 */
@@ -2311,8 +2953,11 @@ ordersRoutes.post("/batch-refuse", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要拒绝签收的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多拒绝签收 100 笔订单" }, 400);
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json(
+      { error: `单次最多拒绝签收 ${MAX_BATCH_STATUS_IDS} 笔订单` },
+      400,
+    );
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -2320,42 +2965,70 @@ ordersRoutes.post("/batch-refuse", async (c) => {
   }
 
   const supabase = createServiceClient(c.env);
-  const { data: orders, error } = await supabase
-    .from("orders")
-    .select("id, status, payment_type, review_status, product_id")
-    .in("id", ids);
-
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase
+      .from("orders")
+      .select("id, status, payment_type, review_status, product_id")
+      .in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const toUpdate: BatchOrderRow[] = [];
+  const auditEntries: WriteAuditInput[] = [];
+  const to: OrderStatus = "cod_refused";
 
-  for (const id of ids) {
-    const order = byId.get(id);
-    if (!order) {
-      failed.push({ id, error: "订单不存在" });
-      continue;
-    }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
+  for (const order of eligible) {
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({
+        id: order.id,
+        error: "非货到付款订单不可 COD 拒绝签收",
       });
       continue;
     }
-    const result = await applyCodRefuse(supabase, order, actor);
-    if (result.ok) succeeded.push(id);
-    else failed.push({ id, error: result.error });
+    if (order.status !== "cod_shipped") {
+      outcome.failed.push({ id: order.id, error: "仅已发货订单可拒绝签收" });
+      continue;
+    }
+    if (order.review_status !== "approved") {
+      outcome.failed.push({
+        id: order.id,
+        error: "订单审核未通过，无法拒绝签收",
+      });
+      continue;
+    }
+    toUpdate.push(order);
   }
 
-  return c.json({ succeeded, failed });
+  if (toUpdate.length > 0) {
+    const bulk = await bulkUpdateOrders(
+      supabase,
+      toUpdate.map((o) => o.id),
+      { status: to, updated_by: actor.id },
+    );
+    if (!bulk.ok) {
+      markBulkUpdateFailure(toUpdate, outcome, bulk.error);
+    } else {
+      for (const order of toUpdate) {
+        outcome.succeeded.push(order.id);
+        auditEntries.push(
+          auditStatusChange(
+            actor,
+            order.id,
+            order.status,
+            to,
+            "批量拒绝签收",
+          ),
+        );
+      }
+      await writeAuditLogs(supabase, auditEntries);
+    }
+  }
+
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
 });
 
 /** COD 待发货批量发货 → 已发货 */
@@ -2406,11 +3079,11 @@ ordersRoutes.post("/batch-ship", async (c) => {
 
   const supabase = createServiceClient(c.env);
 
-  const { data: shipper, error: shipperError } = await supabase
-    .from("logistics_shipper")
-    .select("*")
-    .eq("id", shipperId)
-    .maybeSingle();
+  const [{ data: shipper, error: shipperError }, accessChecker] =
+    await Promise.all([
+      supabase.from("logistics_shipper").select("*").eq("id", shipperId).maybeSingle(),
+      createOrderAccessChecker(supabase, c),
+    ]);
 
   if (shipperError) return c.json({ error: shipperError.message }, 500);
   if (!shipper) return c.json({ error: "寄件人不存在" }, 400);
@@ -2440,6 +3113,13 @@ ordersRoutes.post("/batch-ship", async (c) => {
   const byOrderNo = new Map((orders ?? []).map((o) => [o.order_no, o]));
   const succeeded: Array<{ id: string; order_no: string }> = [];
   const failed: Array<{ order_no: string; error: string }> = [];
+  const auditEntries: WriteAuditInput[] = [];
+
+  type ShipTask = {
+    order: BatchOrderRow & { order_no: string };
+    item: { order_no: string; shipping_order_no: string };
+  };
+  const tasks: ShipTask[] = [];
 
   for (const item of items) {
     const order = byOrderNo.get(item.order_no);
@@ -2447,30 +3127,44 @@ ordersRoutes.post("/batch-ship", async (c) => {
       failed.push({ order_no: item.order_no, error: "订单不存在" });
       continue;
     }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ order_no: item.order_no, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        order_no: item.order_no,
-        error: e instanceof Error ? e.message : "权限校验失败",
-      });
+    const access = accessChecker.check(order);
+    if (!access.ok) {
+      failed.push({ order_no: item.order_no, error: access.error });
       continue;
     }
+    tasks.push({ order, item });
+  }
 
-    const result = await applyCodShip(supabase, order, actor, {
-      shipping_order_no: item.shipping_order_no,
-      owner_member: ownerMember,
-      shipper: shipperSnap,
-    });
+  await runParallel(tasks, BATCH_CONCURRENCY, async ({ order, item }) => {
+    const result = await applyCodShip(
+      supabase,
+      order,
+      actor,
+      {
+        shipping_order_no: item.shipping_order_no,
+        owner_member: ownerMember,
+        shipper: shipperSnap,
+      },
+      { skipAudit: true },
+    );
     if (result.ok) {
       succeeded.push({ id: order.id, order_no: item.order_no });
+      auditEntries.push(
+        auditStatusChange(
+          actor,
+          order.id,
+          order.status,
+          "cod_shipped",
+          `批量发货；运单号：${item.shipping_order_no}；归属成员：${ownerMember}；寄件人：${shipperSnap.name}`,
+        ),
+      );
     } else {
       failed.push({ order_no: item.order_no, error: result.error });
     }
+  });
+
+  if (auditEntries.length > 0) {
+    await writeAuditLogs(supabase, auditEntries);
   }
 
   return c.json({ succeeded, failed });
@@ -2484,13 +3178,328 @@ ordersRoutes.post("/batch-reopen", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要恢复的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多恢复 100 笔订单" }, 400);
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多恢复 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
   }
+
+  const supabase = createServiceClient(c.env);
+  const [accessChecker, ordersResult] = await Promise.all([
+    createOrderAccessChecker(supabase, c),
+    supabase
+      .from("orders")
+      .select("id, status, payment_type, review_status, product_id")
+      .in("id", ids),
+  ]);
+  const { data: orders, error } = ordersResult;
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const toReopen: BatchOrderRow[] = [];
+
+  for (const order of eligible) {
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({ id: order.id, error: "非货到付款订单无需恢复" });
+      continue;
+    }
+    if (order.review_status !== "rejected" && order.status !== "cancelled") {
+      outcome.failed.push({ id: order.id, error: "仅无效订单可恢复" });
+      continue;
+    }
+    toReopen.push(order);
+  }
+
+  const restoredById =
+    toReopen.length > 0
+      ? await resolveStatusBeforeInvalidBatch(
+          supabase,
+          toReopen.map((o) => o.id),
+        )
+      : new Map<string, OrderStatus>();
+
+  type ReopenGroup = {
+    restoredStatus: OrderStatus;
+    nextReview: ReviewStatus;
+    orders: BatchOrderRow[];
+  };
+  const groups = new Map<string, ReopenGroup>();
+  const auditEntries: WriteAuditInput[] = [];
+  const now = new Date().toISOString();
+
+  for (const order of toReopen) {
+    const restoredStatus = restoredById.get(order.id) ?? "awaiting_review";
+    const nextReview: ReviewStatus =
+      restoredStatus === "awaiting_review" ? "pending" : "approved";
+    const key = `${restoredStatus}:${nextReview}`;
+    if (!groups.has(key)) {
+      groups.set(key, { restoredStatus, nextReview, orders: [] });
+    }
+    groups.get(key)!.orders.push(order);
+  }
+
+  for (const group of groups.values()) {
+    const updateIds = group.orders.map((o) => o.id);
+    const bulk = await bulkUpdateOrders(supabase, updateIds, {
+      status: group.restoredStatus,
+      review_status: group.nextReview,
+      reject_reason: null,
+      reviewed_by: group.nextReview === "approved" ? actor.id : null,
+      reviewed_at: group.nextReview === "approved" ? now : null,
+      updated_by: actor.id,
+    });
+    if (!bulk.ok) {
+      markBulkUpdateFailure(group.orders, outcome, bulk.error);
+      continue;
+    }
+    for (const order of group.orders) {
+      outcome.succeeded.push(order.id);
+      auditEntries.push(
+        auditReviewChange(
+          actor,
+          order.id,
+          order.review_status,
+          group.nextReview,
+          "无效订单恢复原先状态",
+        ),
+      );
+      if (order.status !== group.restoredStatus) {
+        auditEntries.push(
+          auditStatusChange(
+            actor,
+            order.id,
+            order.status,
+            group.restoredStatus,
+            "COD 无效订单恢复原先状态",
+          ),
+        );
+      }
+    }
+  }
+
+  if (auditEntries.length > 0) {
+    await writeAuditLogs(supabase, auditEntries);
+  }
+
+  const succeeded = outcome.succeeded.map((id) => ({
+    id,
+    restored_status: restoredById.get(id) ?? ("awaiting_review" as OrderStatus),
+  }));
+
+  return c.json({ succeeded, failed: outcome.failed });
+});
+
+/** COD 订单批量恢复上一步状态 */
+ordersRoutes.post("/batch-revert", async (c) => {
+  const body = (await c.req.json()) as { ids?: unknown };
+  const actor = actorFrom(c);
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要恢复的订单" }, 400);
+  }
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多恢复 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+  const accessChecker = await createOrderAccessChecker(supabase, c);
+
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("id, status, payment_type, review_status, product_id")
+    .in("id", ids);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const { eligible, outcome } = partitionBatchOrders(ids, byId, accessChecker);
+  const previousById = await resolvePreviousStatusBatch(
+    supabase,
+    eligible.map((o) => ({
+      id: o.id,
+      status: o.status as OrderStatus,
+    })),
+  );
+
+  type RevertGroup = {
+    currentStatus: OrderStatus;
+    previousStatus: OrderStatus;
+    nextReview: ReviewStatus;
+    patch: Record<string, unknown>;
+    orders: BatchOrderRow[];
+  };
+
+  const groups = new Map<string, RevertGroup>();
+  const auditEntries: WriteAuditInput[] = [];
+
+  for (const order of eligible) {
+    const currentStatus = order.status as OrderStatus;
+    if (!canRevertCodOrder("cod", currentStatus)) {
+      outcome.failed.push({ id: order.id, error: "当前状态不可恢复上一步" });
+      continue;
+    }
+
+    const previousStatus = previousById.get(order.id);
+    if (!previousStatus) {
+      outcome.failed.push({ id: order.id, error: "无法确定上一步状态" });
+      continue;
+    }
+
+    const patch = buildCodRevertPatch(currentStatus, previousStatus, actor);
+    const nextReview = patch.review_status as ReviewStatus;
+    const key = `${currentStatus}:${previousStatus}:${nextReview}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        currentStatus,
+        previousStatus,
+        nextReview,
+        patch,
+        orders: [],
+      });
+    }
+    groups.get(key)!.orders.push(order);
+  }
+
+  for (const group of groups.values()) {
+    const updateIds = group.orders.map((o) => o.id);
+    const bulk = await bulkUpdateOrders(supabase, updateIds, group.patch);
+    if (!bulk.ok) {
+      markBulkUpdateFailure(group.orders, outcome, bulk.error);
+      continue;
+    }
+
+    for (const order of group.orders) {
+      outcome.succeeded.push(order.id);
+      const prevReview = order.review_status as ReviewStatus;
+      if (prevReview !== group.nextReview) {
+        auditEntries.push(
+          auditReviewChange(
+            actor,
+            order.id,
+            prevReview,
+            group.nextReview,
+            "恢复上一步状态",
+          ),
+        );
+      }
+      if (group.currentStatus !== group.previousStatus) {
+        auditEntries.push(
+          auditStatusChange(
+            actor,
+            order.id,
+            group.currentStatus,
+            group.previousStatus,
+            "恢复上一步状态",
+          ),
+        );
+      }
+    }
+  }
+
+  if (auditEntries.length > 0) {
+    await writeAuditLogs(supabase, auditEntries);
+  }
+
+  const succeeded = outcome.succeeded.map((id) => ({
+    id,
+    previous_status: previousById.get(id) ?? null,
+  }));
+
+  return c.json({ succeeded, failed: outcome.failed });
+});
+
+function buildCodForceStatusPatch(
+  to: OrderStatus,
+  actor: Actor,
+  opts: { rejectReason?: string },
+):
+  | { ok: true; patch: Record<string, unknown>; auditRemark: string }
+  | { ok: false; error: string } {
+  if (!isCodForceStatus(to)) {
+    return { ok: false, error: "不支持强制流转到该状态" };
+  }
+
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    status: to,
+    updated_by: actor.id,
+  };
+  const auditRemark = "管理员强制流转";
+
+  if (to === "awaiting_review") {
+    patch.review_status = "pending";
+    patch.reviewed_by = null;
+    patch.reviewed_at = null;
+    patch.reject_reason = null;
+  } else if (to === "cancelled") {
+    const reason = opts.rejectReason?.trim() ?? "";
+    if (!reason) {
+      return { ok: false, error: "流转到无效订单时请填写理由" };
+    }
+    patch.review_status = "rejected";
+    patch.reject_reason = reason;
+    patch.reviewed_by = actor.id;
+    patch.reviewed_at = now;
+  } else {
+    patch.review_status = "approved";
+    patch.reviewed_by = actor.id;
+    patch.reviewed_at = now;
+    patch.reject_reason = null;
+  }
+
+  return { ok: true, patch, auditRemark };
+}
+
+function nextReviewStatusForForceTarget(to: OrderStatus): ReviewStatus {
+  if (to === "awaiting_review") return "pending";
+  if (to === "cancelled") return "rejected";
+  return "approved";
+}
+
+/** COD 全部订单：超级管理员批量强制流转到任意 COD 状态（跳过常规流转规则） */
+ordersRoutes.post("/batch-force-status", requireSuperAdmin, async (c) => {
+  const body = (await c.req.json()) as {
+    ids?: unknown;
+    status?: unknown;
+    reject_reason?: unknown;
+    remark?: unknown;
+  };
+  const actor = actorFrom(c);
+
+  if (!isCodForceStatus(body.status)) {
+    return c.json({ error: "目标状态无效" }, 400);
+  }
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要流转的订单" }, 400);
+  }
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json(
+      { error: `单次最多流转 ${MAX_BATCH_STATUS_IDS} 笔订单` },
+      400,
+    );
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  const to = body.status;
+  const rejectReason =
+    typeof body.reject_reason === "string" ? body.reject_reason.trim() : "";
+  const remark =
+    typeof body.remark === "string" ? body.remark.trim() : "";
+  const built = buildCodForceStatusPatch(to, actor, { rejectReason });
+  if (!built.ok) return c.json({ error: built.error }, 400);
+
+  const auditRemark = remark || built.auditRemark;
+  const nextReview = nextReviewStatusForForceTarget(to);
 
   const supabase = createServiceClient(c.env);
   const { data: orders, error } = await supabase
@@ -2501,8 +3510,94 @@ ordersRoutes.post("/batch-reopen", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
 
   const byId = new Map((orders ?? []).map((o) => [o.id, o]));
-  const succeeded: Array<{ id: string; restored_status: OrderStatus }> = [];
+  const outcome: BatchOutcome = { succeeded: [], failed: [] };
+  const toUpdate: BatchOrderRow[] = [];
+  const auditEntries: WriteAuditInput[] = [];
+
+  for (const id of ids) {
+    const order = byId.get(id);
+    if (!order) {
+      outcome.failed.push({ id, error: "订单不存在" });
+      continue;
+    }
+    if (order.payment_type !== "cod") {
+      outcome.failed.push({ id, error: "仅支持货到付款订单" });
+      continue;
+    }
+    if (order.status === to) {
+      outcome.failed.push({ id, error: "订单已是该状态" });
+      continue;
+    }
+    toUpdate.push(order);
+  }
+
+  if (toUpdate.length > 0) {
+    const bulk = await bulkUpdateOrders(
+      supabase,
+      toUpdate.map((o) => o.id),
+      built.patch,
+    );
+    if (!bulk.ok) {
+      markBulkUpdateFailure(toUpdate, outcome, bulk.error);
+    } else {
+      for (const order of toUpdate) {
+        outcome.succeeded.push(order.id);
+        const prevReview = order.review_status;
+        if (prevReview !== nextReview) {
+          auditEntries.push(
+            auditReviewChange(
+              actor,
+              order.id,
+              prevReview,
+              nextReview,
+              auditRemark,
+            ),
+          );
+        }
+        auditEntries.push(
+          auditStatusChange(
+            actor,
+            order.id,
+            order.status,
+            to,
+            auditRemark,
+          ),
+        );
+      }
+      await writeAuditLogs(supabase, auditEntries);
+    }
+  }
+
+  return c.json({ succeeded: outcome.succeeded, failed: outcome.failed });
+});
+
+/** COD 无效订单批量永久删除（仅超级管理员） */
+ordersRoutes.post("/batch-delete", requireSuperAdmin, async (c) => {
+  const body = (await c.req.json()) as { ids?: unknown };
+
+  if (!Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ error: "请选择要删除的订单" }, 400);
+  }
+  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
+    return c.json({ error: `单次最多删除 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
+  }
+  const ids = body.ids.filter((id): id is string => typeof id === "string");
+  if (ids.length !== body.ids.length) {
+    return c.json({ error: "订单 ID 格式无效" }, 400);
+  }
+
+  const supabase = createServiceClient(c.env);
+  const { data: orders, error } = await supabase
+    .from("orders")
+    .select("id, status, payment_type, review_status")
+    .in("id", ids);
+
+  if (error) return c.json({ error: error.message }, 500);
+
+  const byId = new Map((orders ?? []).map((o) => [o.id, o]));
+  const succeeded: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
+  const toDelete: string[] = [];
 
   for (const id of ids) {
     const order = byId.get(id);
@@ -2510,25 +3605,34 @@ ordersRoutes.post("/batch-reopen", async (c) => {
       failed.push({ id, error: "订单不存在" });
       continue;
     }
-    try {
-      const access = await assertOrderAccess(supabase, order, c);
-      if (!access.ok) {
-        failed.push({ id, error: access.error });
-        continue;
-      }
-    } catch (e) {
-      failed.push({
-        id,
-        error: e instanceof Error ? e.message : "权限校验失败",
-      });
+    if (order.payment_type !== "cod") {
+      failed.push({ id, error: "仅支持删除货到付款订单" });
       continue;
     }
-    const result = await applyCodReopen(supabase, order, actor);
-    if (result.ok) {
-      succeeded.push({ id, restored_status: result.restoredStatus });
-    } else {
-      failed.push({ id, error: result.error });
+    if (order.review_status !== "rejected" && order.status !== "cancelled") {
+      failed.push({ id, error: "仅无效订单可删除" });
+      continue;
     }
+    toDelete.push(id);
+  }
+
+  if (toDelete.length > 0) {
+    const { error: auditError } = await supabase
+      .from("audit_logs")
+      .delete()
+      .eq("entity_type", "order")
+      .in("entity_id", toDelete);
+
+    if (auditError) return c.json({ error: auditError.message }, 500);
+
+    const { error: deleteError } = await supabase
+      .from("orders")
+      .delete()
+      .in("id", toDelete);
+
+    if (deleteError) return c.json({ error: deleteError.message }, 500);
+
+    succeeded.push(...toDelete);
   }
 
   return c.json({ succeeded, failed });
@@ -2619,6 +3723,57 @@ ordersRoutes.patch("/:id/review", async (c) => {
     .single();
 
   if (reloadError) return c.json({ error: reloadError.message }, 500);
+  return c.json(
+    await attachOrderCurrencyOne(
+      supabase,
+      await attachActorsOne(supabase, data),
+    ),
+  );
+});
+
+ordersRoutes.patch("/:id/revert", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) as {
+    remark?: string | null;
+  };
+  const actor = actorFrom(c);
+
+  const supabase = createServiceClient(c.env);
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select("id, status, payment_type, review_status, product_id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) return c.json({ error: error.message }, 500);
+  if (!order) return c.json({ error: "订单不存在" }, 404);
+
+  try {
+    const access = await assertOrderAccess(supabase, order, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+
+  const result = await applyCodRevertStep(
+    supabase,
+    order,
+    actor,
+    body.remark ?? null,
+  );
+  if (!result.ok) return c.json({ error: result.error }, 400);
+
+  const { data, error: reloadError } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (reloadError) return c.json({ error: reloadError.message }, 500);
+
   return c.json(
     await attachOrderCurrencyOne(
       supabase,

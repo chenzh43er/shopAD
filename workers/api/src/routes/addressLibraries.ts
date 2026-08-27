@@ -6,6 +6,7 @@ import type {
   UpdateAddressLibraryInput,
 } from "@shopad/shared";
 import { createServiceClient } from "../lib/supabase";
+import { isSuperAdmin, listAllowedRegionIds } from "../lib/access";
 import { requireSuperAdmin } from "../middleware/auth";
 import type { Env, Variables } from "../types";
 
@@ -44,6 +45,20 @@ function trimName(value: unknown, field: string, max: number): string | null {
     throw new Error(`${field}不能超过 ${max} 个字符`);
   }
   return t;
+}
+
+async function assertLibraryAccess(
+  supabase: ReturnType<typeof createServiceClient>,
+  c: import("hono").Context<{ Bindings: import("../types").Env; Variables: import("../types").Variables }>,
+  libraryId: string,
+): Promise<{ ok: true } | { ok: false; status: 403 | 404; error: string }> {
+  if (isSuperAdmin(c)) return { ok: true };
+  const allowed = await listAllowedRegionIds(supabase, c);
+  if (allowed === "all") return { ok: true };
+  if (!allowed.includes(libraryId)) {
+    return { ok: false, status: 403, error: "无权查看该地区" };
+  }
+  return { ok: true };
 }
 
 /** 解析国际电话区号（不含 +），如 62 */
@@ -289,10 +304,29 @@ export const addressLibrariesRoutes = new Hono<{
 
 addressLibrariesRoutes.get("/", async (c) => {
   const supabase = createServiceClient(c.env);
-  const { data, error } = await supabase
+  let query = supabase
     .from("address_libraries")
     .select("*")
     .order("updated_at", { ascending: false });
+
+  if (!isSuperAdmin(c)) {
+    try {
+      const allowed = await listAllowedRegionIds(supabase, c);
+      if (allowed !== "all") {
+        if (allowed.length === 0) {
+          return c.json({ data: [], total: 0 });
+        }
+        query = query.in("id", allowed);
+      }
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "权限校验失败" },
+        500,
+      );
+    }
+  }
+
+  const { data, error } = await query;
 
   if (error) return c.json({ error: error.message }, 500);
 
@@ -499,6 +533,15 @@ addressLibrariesRoutes.post("/import", requireSuperAdmin, async (c) => {
 addressLibrariesRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
   const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertLibraryAccess(supabase, c, id);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
   const { data, error } = await supabase
     .from("address_libraries")
     .select("*")
@@ -590,6 +633,15 @@ addressLibrariesRoutes.get("/:id/regions", async (c) => {
   );
 
   const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertLibraryAccess(supabase, c, id);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
   const { data: library, error: libError } = await supabase
     .from("address_libraries")
     .select("id")
