@@ -11,6 +11,7 @@ import {
   listAuditLogs,
   writeAuditLog,
 } from "../lib/audit";
+import { buildFieldDiffs, summarizeFieldDiffs } from "../lib/auditDiff";
 import {
   assertProductAccess,
   assertRegionAccess,
@@ -1199,7 +1200,13 @@ productsRoutes.put("/:id", async (c) => {
   }
   if (!data) return c.json({ error: "商品不存在" }, 404);
 
+  let previousOwnerIds: string[] | undefined;
   if (pendingOwnerIds) {
+    const { data: oldOwners } = await supabase
+      .from("product_owners")
+      .select("user_id")
+      .eq("product_id", id);
+    previousOwnerIds = (oldOwners ?? []).map((r) => r.user_id as string);
     const synced = await syncProductOwners(
       supabase,
       id,
@@ -1211,22 +1218,39 @@ productsRoutes.put("/:id", async (c) => {
     }
   }
 
-  const action =
-    body.status !== undefined && before && body.status !== before.status
-      ? "status_change"
-      : "update";
+  const statusChanged =
+    body.status !== undefined && before && body.status !== before.status;
+  const action = statusChanged ? "status_change" : "update";
+
+  const auditPatch: Record<string, unknown> = { ...patch };
+  delete auditPatch.updated_by;
+  if (pendingOwnerIds) {
+    auditPatch.owner_ids = pendingOwnerIds;
+  }
+  const beforeForDiff: Record<string, unknown> = {
+    ...(before as Record<string, unknown>),
+  };
+  if (pendingOwnerIds && previousOwnerIds) {
+    beforeForDiff.owner_ids = previousOwnerIds;
+  }
+  const fieldDiffs = buildFieldDiffs(beforeForDiff, auditPatch);
 
   await writeAuditLog(supabase, {
     entityType: "product",
     entityId: id,
     action,
     actor,
-    fromValue: before?.status ?? null,
-    toValue: data.status,
+    fromValue: statusChanged ? (before?.status ?? null) : null,
+    toValue: statusChanged ? data.status : null,
     changes: {
-      ...patch,
-      ...(pendingOwnerIds ? { owner_ids: pendingOwnerIds } : {}),
+      fields: fieldDiffs,
     },
+    remark:
+      fieldDiffs.length > 0
+        ? summarizeFieldDiffs(fieldDiffs)
+        : statusChanged
+          ? `状态: ${before?.status ?? "—"} → ${data.status}`
+          : "保存商品（无字段差异）",
   });
 
   return c.json(await withProductExtras(supabase, data));
@@ -1288,6 +1312,16 @@ productsRoutes.patch("/:id/status", async (c) => {
     actor,
     fromValue: before.status ?? null,
     toValue: body.status,
+    changes: {
+      fields: [
+        {
+          field: "status",
+          from: before.status ?? null,
+          to: body.status,
+        },
+      ],
+    },
+    remark: `状态: ${before.status ?? "—"} → ${body.status}`,
   });
 
   return c.json(await withProductExtras(supabase, data));

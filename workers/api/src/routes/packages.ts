@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import type { UpsertProductPackageInput } from "@shopad/shared";
 import { writeAuditLog } from "../lib/audit";
+import {
+  buildPackageUpdateDiffs,
+  packageSnapshot,
+} from "../lib/auditDiff";
 import { assertProductAccess } from "../lib/access";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
@@ -141,6 +145,43 @@ packagesRoutes.put("/:productId/packages", async (c) => {
   if (productError) return c.json({ error: productError.message }, 500);
   if (!product) return c.json({ error: "商品不存在" }, 404);
 
+  const { data: beforePackages, error: beforePkgError } = await supabase
+    .from("product_packages")
+    .select("*")
+    .eq("product_id", productId)
+    .order("sort_order", { ascending: true });
+  if (beforePkgError) return c.json({ error: beforePkgError.message }, 500);
+
+  const beforePackageIds = (beforePackages ?? []).map((p) => p.id as string);
+  let beforeItems: Array<{
+    package_id: string;
+    ref_product_id: string | null;
+    quantity: number | null;
+    independent_attrs: boolean | null;
+  }> = [];
+  if (beforePackageIds.length > 0) {
+    const { data: items, error: beforeItemsError } = await supabase
+      .from("product_package_items")
+      .select("package_id, ref_product_id, quantity, independent_attrs")
+      .in("package_id", beforePackageIds);
+    if (beforeItemsError) {
+      return c.json({ error: beforeItemsError.message }, 500);
+    }
+    beforeItems = (items ?? []) as typeof beforeItems;
+  }
+  const beforeItemsByPackage = new Map<string, typeof beforeItems>();
+  for (const item of beforeItems) {
+    const rows = beforeItemsByPackage.get(item.package_id) ?? [];
+    rows.push(item);
+    beforeItemsByPackage.set(item.package_id, rows);
+  }
+  const beforeSnapshots = (beforePackages ?? []).map((pkg) =>
+    packageSnapshot({
+      ...pkg,
+      items: beforeItemsByPackage.get(pkg.id as string) ?? [],
+    }),
+  );
+
   // Replace-all strategy for simplicity (matches admin form save)
   const { error: deleteError } = await supabase
     .from("product_packages")
@@ -149,6 +190,17 @@ packagesRoutes.put("/:productId/packages", async (c) => {
   if (deleteError) return c.json({ error: deleteError.message }, 500);
 
   if (list.length === 0) {
+    const emptyDiff = buildPackageUpdateDiffs(beforeSnapshots, []);
+    await writeAuditLog(supabase, {
+      entityType: "product",
+      entityId: productId,
+      action: "packages_update",
+      actor,
+      fromValue: String(beforeSnapshots.length),
+      toValue: "0",
+      changes: { fields: emptyDiff.diffs },
+      remark: emptyDiff.summary,
+    });
     return c.json({ data: [] });
   }
 
@@ -229,13 +281,29 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     .update({ updated_by: actor.id })
     .eq("id", productId);
 
+  const afterSnapshots = list.map((pkg, index) =>
+    packageSnapshot({
+      name: pkg.name,
+      name_external: pkg.name_external,
+      original_price: pkg.original_price,
+      discount_price: pkg.discount_price,
+      summary: pkg.summary,
+      is_visible: pkg.is_visible,
+      sort_order: pkg.sort_order ?? index,
+      items: pkg.items ?? [],
+    }),
+  );
+  const packageDiff = buildPackageUpdateDiffs(beforeSnapshots, afterSnapshots);
+
   await writeAuditLog(supabase, {
     entityType: "product",
     entityId: productId,
     action: "packages_update",
     actor,
+    fromValue: String(beforeSnapshots.length),
     toValue: String(list.length),
-    changes: { package_count: list.length },
+    changes: { fields: packageDiff.diffs },
+    remark: packageDiff.summary,
   });
 
   return c.json({ data: refreshed.data ?? [] });
