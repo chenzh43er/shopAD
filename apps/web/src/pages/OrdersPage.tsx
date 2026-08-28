@@ -50,9 +50,6 @@ import { setOrdersListFrom } from "../lib/listNav";
 import { useAuth } from "../auth/AuthContext";
 import dayjs from "dayjs";
 
-const MAX_BATCH_ORDER_NOS = 500;
-const MAX_BATCH_PHONES = 500;
-
 /** 解析粘贴的订单号：换行 / 逗号 / 空白 / 分号均可 */
 function parseBatchOrderNos(raw: string): string[] {
   const seen = new Set<string>();
@@ -60,7 +57,6 @@ function parseBatchOrderNos(raw: string): string[] {
   for (const part of raw.split(/[\s,，;；]+/)) {
     const no = part.trim();
     if (!no || seen.has(no)) continue;
-    if (result.length >= MAX_BATCH_ORDER_NOS) break;
     seen.add(no);
     result.push(no);
   }
@@ -84,7 +80,6 @@ function parseBatchPhones(raw: string): string[] {
   for (const part of raw.split(/[\n\r,，;；]+/)) {
     const digits = phoneSearchDigits(part);
     if (!digits || seen.has(digits)) continue;
-    if (result.length >= MAX_BATCH_PHONES) break;
     seen.add(digits);
     result.push(digits);
   }
@@ -317,7 +312,6 @@ export function OrdersPage() {
   const [shippers, setShippers] = useState<LogisticsShipper[]>([]);
   const [selectedShipperId, setSelectedShipperId] = useState<string>();
   const [shipForm] = Form.useForm<{ owner_member: string }>();
-  const shipTextTruncWarned = useRef(false);
 
   const [exportOpen, setExportOpen] = useState(false);
   const [exportKind, setExportKind] = useState<
@@ -342,8 +336,9 @@ export function OrdersPage() {
   const isRefusedTab = activeCodTab === "refused";
   const isInvalidTab = activeCodTab === "invalid";
   const showRevertButton = activeCodTab !== "pending_review";
-  /** 待发货及之后状态支持运单号查询 */
+  /** 全部订单、待发货及之后状态支持运单号查询 */
   const showWaybillSearch =
+    isAllTab ||
     isAwaitingShipmentTab ||
     isShippedTab ||
     isCompletedTab ||
@@ -589,15 +584,6 @@ export function OrdersPage() {
       message.warning("请粘贴至少一个订单号");
       return;
     }
-    const rawCount = batchDraft
-      .split(/[\s,，;；]+/)
-      .map((s) => s.trim())
-      .filter(Boolean).length;
-    if (rawCount > MAX_BATCH_ORDER_NOS) {
-      message.warning(
-        `单次最多查询 ${MAX_BATCH_ORDER_NOS} 个订单号，已截取前 ${MAX_BATCH_ORDER_NOS} 个`,
-      );
-    }
     pendingBatchNotify.current = "order_no";
     setOrderNo("");
     setCustomerPhone("");
@@ -608,7 +594,7 @@ export function OrdersPage() {
     setBatchShippingDraft("");
     setBatchOrderNos(nos);
     setPage(1);
-    setPageSize(Math.min(500, Math.max(nos.length, 20)));
+    setPageSize(Math.max(nos.length, 20));
     setBatchModalOpen(false);
   };
 
@@ -625,15 +611,6 @@ export function OrdersPage() {
       message.warning("请粘贴至少一个手机号");
       return;
     }
-    const rawCount = batchPhoneDraft
-      .split(/[\n\r,，;；]+/)
-      .map((s) => s.trim())
-      .filter(Boolean).length;
-    if (rawCount > MAX_BATCH_PHONES) {
-      message.warning(
-        `单次最多查询 ${MAX_BATCH_PHONES} 个手机号，已截取前 ${MAX_BATCH_PHONES} 个`,
-      );
-    }
     pendingBatchNotify.current = "phone";
     setOrderNo("");
     setCustomerPhone("");
@@ -644,7 +621,7 @@ export function OrdersPage() {
     setBatchShippingDraft("");
     setBatchPhones(phones);
     setPage(1);
-    setPageSize(Math.min(500, Math.max(phones.length, 20)));
+    setPageSize(Math.max(phones.length, 20));
     setBatchPhoneModalOpen(false);
   };
 
@@ -661,15 +638,6 @@ export function OrdersPage() {
       message.warning("请粘贴至少一个运单号");
       return;
     }
-    const rawCount = batchShippingDraft
-      .split(/[\s,，;；]+/)
-      .map((s) => s.trim())
-      .filter(Boolean).length;
-    if (rawCount > MAX_BATCH_ORDER_NOS) {
-      message.warning(
-        `单次最多查询 ${MAX_BATCH_ORDER_NOS} 个运单号，已截取前 ${MAX_BATCH_ORDER_NOS} 个`,
-      );
-    }
     pendingBatchNotify.current = "shipping_order_no";
     setOrderNo("");
     setCustomerPhone("");
@@ -680,7 +648,7 @@ export function OrdersPage() {
     setBatchPhoneDraft("");
     setBatchShippingOrderNos(nos);
     setPage(1);
-    setPageSize(Math.min(500, Math.max(nos.length, 20)));
+    setPageSize(Math.max(nos.length, 20));
     setBatchShippingModalOpen(false);
   };
 
@@ -1094,7 +1062,6 @@ export function OrdersPage() {
     setShipFileName("");
     setShipTextDraft("");
     setShipTextError(null);
-    shipTextTruncWarned.current = false;
     setSelectedShipperId(undefined);
     shipForm.resetFields();
   };
@@ -1288,7 +1255,6 @@ export function OrdersPage() {
     const raw = shipTextDraft;
     if (!raw.trim()) {
       setShipTextError(null);
-      shipTextTruncWarned.current = false;
       // 空文本时保留 Excel 解析结果
       if (!shipFileName) setShipRows([]);
       return;
@@ -1297,16 +1263,7 @@ export function OrdersPage() {
     const timer = window.setTimeout(() => {
       try {
         const parsed = parseShipText(raw);
-        if (parsed.rows.length > 200) {
-          if (!shipTextTruncWarned.current) {
-            message.warning("单次最多发货 200 笔，已截取前 200 行");
-            shipTextTruncWarned.current = true;
-          }
-          setShipRows(parsed.rows.slice(0, 200));
-        } else {
-          shipTextTruncWarned.current = false;
-          setShipRows(parsed.rows);
-        }
+        setShipRows(parsed.rows);
         setShipFileName("");
         setShipTextError(null);
       } catch (e) {
@@ -1337,19 +1294,11 @@ export function OrdersPage() {
       const buffer = await file.arrayBuffer();
       const { parseShipExcel } = await import("../lib/parseShipExcel");
       const parsed = parseShipExcel(buffer);
-      const rows =
-        parsed.rows.length > 200
-          ? parsed.rows.slice(0, 200)
-          : parsed.rows;
-      if (parsed.rows.length > 200) {
-        message.warning("单次最多发货 200 笔，已截取前 200 行");
-      }
       setShipFileName(file.name);
       setShipTextDraft("");
       setShipTextError(null);
-      shipTextTruncWarned.current = false;
-      setShipRows(rows);
-      message.success(`已解析 ${rows.length} 行（${file.name}）`);
+      setShipRows(parsed.rows);
+      message.success(`已解析 ${parsed.rows.length} 行（${file.name}）`);
     } catch (e) {
       setShipRows([]);
       setShipFileName("");
@@ -2094,9 +2043,7 @@ export function OrdersPage() {
         destroyOnClose
       >
         <p style={{ color: "#666", marginBottom: 8 }}>
-          粘贴订单号，支持换行、逗号或空格分隔；单次最多{" "}
-          {MAX_BATCH_ORDER_NOS}{" "}
-          个。结果仍按当前列表状态筛选。
+          粘贴订单号，支持换行、逗号或空格分隔。结果仍按当前列表状态筛选。
         </p>
         <Input.TextArea
           value={batchDraft}
@@ -2116,9 +2063,8 @@ export function OrdersPage() {
         destroyOnClose
       >
         <p style={{ color: "#666", marginBottom: 8 }}>
-          粘贴手机号，支持换行、逗号或分号分隔；单次最多{" "}
-          {MAX_BATCH_PHONES}{" "}
-          个。支持国际号格式（如 +62 81218331371 → 6281218331371）；可带或不带区号、前导
+          粘贴手机号，支持换行、逗号或分号分隔。支持国际号格式（如 +62
+          81218331371 → 6281218331371）；可带或不带区号、前导
           0；结果仍按当前列表状态筛选。
         </p>
         <Input.TextArea
@@ -2141,9 +2087,7 @@ export function OrdersPage() {
         destroyOnClose
       >
         <p style={{ color: "#666", marginBottom: 8 }}>
-          粘贴运单号，支持换行、逗号或空格分隔；单次最多{" "}
-          {MAX_BATCH_ORDER_NOS}{" "}
-          个。结果仍按当前列表状态筛选。
+          粘贴运单号，支持换行、逗号或空格分隔。结果仍按当前列表状态筛选。
         </p>
         <Input.TextArea
           value={batchShippingDraft}

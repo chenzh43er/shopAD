@@ -14,6 +14,31 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
+/** Worker isolate 内短时缓存，减轻员工列表重复的 Auth / 权限查询 */
+const SCOPE_CACHE_TTL_MS = 60_000;
+
+type ScopeCacheEntry<T> = { value: T; expiresAt: number };
+
+const regionIdsCache = new Map<string, ScopeCacheEntry<string[] | "all">>();
+const accessibleProductsCache = new Map<string, ScopeCacheEntry<string[] | "all">>();
+
+function readScopeCache<T>(
+  cache: Map<string, ScopeCacheEntry<T>>,
+  key: string,
+): T | null {
+  const hit = cache.get(key);
+  if (!hit || hit.expiresAt <= Date.now()) return null;
+  return hit.value;
+}
+
+function writeScopeCache<T>(
+  cache: Map<string, ScopeCacheEntry<T>>,
+  key: string,
+  value: T,
+): void {
+  cache.set(key, { value, expiresAt: Date.now() + SCOPE_CACHE_TTL_MS });
+}
+
 export function parseRegionIdsFromMetadata(meta: unknown): string[] {
   if (!meta || typeof meta !== "object") return [];
   const raw = (meta as Record<string, unknown>).region_ids;
@@ -57,11 +82,17 @@ export async function listAllowedRegionIds(
 
   if (isSuperAdmin(c)) return "all";
 
-  const { data, error } = await supabase.auth.admin.getUserById(c.get("userId"));
+  const userId = c.get("userId");
+  const cached = readScopeCache(regionIdsCache, userId);
+  if (cached !== null) return cached;
+
+  const { data, error } = await supabase.auth.admin.getUserById(userId);
 
   if (error) throw new Error(error.message);
 
-  return parseRegionIdsFromMetadata(data.user?.user_metadata);
+  const regions = parseRegionIdsFromMetadata(data.user?.user_metadata);
+  writeScopeCache(regionIdsCache, userId, regions);
+  return regions;
 
 }
 
@@ -149,6 +180,14 @@ export async function listAccessibleProductIds(
 
 
 
+  const userId = c.get("userId");
+
+  const cached = readScopeCache(accessibleProductsCache, userId);
+
+  if (cached !== null) return cached;
+
+
+
   const [allowedRegions, owned] = await Promise.all([
 
     listAllowedRegionIds(supabase, c),
@@ -159,13 +198,37 @@ export async function listAccessibleProductIds(
 
 
 
-  if (allowedRegions === "all") return owned;
+  if (allowedRegions === "all") {
 
-  if (allowedRegions.length === 0) return [];
+    writeScopeCache(accessibleProductsCache, userId, owned);
 
-  if (owned === "all") return "all";
+    return owned;
 
-  if (owned.length === 0) return [];
+  }
+
+  if (allowedRegions.length === 0) {
+
+    writeScopeCache(accessibleProductsCache, userId, []);
+
+    return [];
+
+  }
+
+  if (owned === "all") {
+
+    writeScopeCache(accessibleProductsCache, userId, "all");
+
+    return "all";
+
+  }
+
+  if (owned.length === 0) {
+
+    writeScopeCache(accessibleProductsCache, userId, []);
+
+    return [];
+
+  }
 
 
 
@@ -181,7 +244,17 @@ export async function listAccessibleProductIds(
 
   if (error) throw new Error(error.message);
 
-  return [...new Set((data ?? []).map((row) => row.id as string))];
+
+
+  const accessible = [
+
+    ...new Set((data ?? []).map((row) => row.id as string)),
+
+  ];
+
+  writeScopeCache(accessibleProductsCache, userId, accessible);
+
+  return accessible;
 
 }
 

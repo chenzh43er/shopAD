@@ -22,7 +22,6 @@ import {
   type WriteAuditInput,
 } from "../lib/audit";
 import {
-  applyOrderOwnerScope,
   assertOrderAccess,
   assertProductAccess,
   createOrderAccessChecker,
@@ -47,11 +46,11 @@ const LOGISTICS_EXPORT_SELECT =
 /** 全部订单导出：业务可读字段（不含内部 UUID） */
 const FULL_EXPORT_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
-/** 列表页所需列（避免 select * 拖大 payload / IO） */
+/** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
-function parseCsvIds(raw: unknown, max = 500): string[] {
+function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
   if (Array.isArray(raw)) {
     for (const item of raw) {
@@ -68,7 +67,6 @@ function parseCsvIds(raw: unknown, max = 500): string[] {
     if (seen.has(id)) continue;
     seen.add(id);
     result.push(id);
-    if (result.length >= max) break;
   }
   return result;
 }
@@ -81,11 +79,8 @@ function parsePage(raw: string | undefined, fallback = 1): number {
 function parsePageSize(raw: string | undefined, fallback = 20): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), 500);
+  return Math.floor(n);
 }
-
-const MAX_BATCH_ORDER_NOS = 500;
-const MAX_BATCH_PHONES = 500;
 
 /** 解析批量订单号：支持逗号 / 空白 / 换行分隔 */
 function parseOrderNos(raw: string | undefined): string[] {
@@ -95,7 +90,6 @@ function parseOrderNos(raw: string | undefined): string[] {
   for (const part of raw.split(/[\s,，;；]+/)) {
     const no = part.trim();
     if (!no || seen.has(no)) continue;
-    if (result.length >= MAX_BATCH_ORDER_NOS) break;
     seen.add(no);
     result.push(no);
   }
@@ -125,11 +119,50 @@ function parsePhones(raw: string | undefined): string[] {
   for (const part of raw.split(/[\n\r,，;；]+/)) {
     const digits = phoneSearchDigits(part);
     if (!digits || seen.has(digits)) continue;
-    if (result.length >= MAX_BATCH_PHONES) break;
     seen.add(digits);
     result.push(digits);
   }
   return result;
+}
+
+/** 手机号查询：精确 / 前缀 / 后缀，比单条 %…% 更易走索引 */
+function phoneLookupOrFilter(digitsList: string[]): string | null {
+  const clauses: string[] = [];
+  for (const digits of digitsList) {
+    if (!digits) continue;
+    clauses.push(`customer_phone.eq.${digits}`);
+    clauses.push(`customer_phone.ilike.${digits}%`);
+    clauses.push(`customer_phone.ilike.%${digits}`);
+  }
+  return clauses.length > 0 ? clauses.join(",") : null;
+}
+
+type OrderListEmbedRow = Record<string, unknown> & {
+  reviewer?:
+    | { id: string; display_name: string | null }
+    | Array<{ id: string; display_name: string | null }>
+    | null;
+  product?: {
+    currency?:
+      | import("../lib/orderCurrency").OrderCurrency
+      | import("../lib/orderCurrency").OrderCurrency[]
+      | null;
+  } | null;
+};
+
+function flattenOrderListRow(row: OrderListEmbedRow) {
+  const reviewerRaw = row.reviewer;
+  const reviewer = Array.isArray(reviewerRaw) ? reviewerRaw[0] : reviewerRaw;
+  const currencyRaw = row.product?.currency;
+  const currency = Array.isArray(currencyRaw) ? currencyRaw[0] : currencyRaw;
+  const { reviewer: _r, product: _p, ...rest } = row;
+  return {
+    ...rest,
+    reviewer: reviewer
+      ? { id: reviewer.id, display_name: reviewer.display_name ?? null }
+      : null,
+    currency: currency ?? null,
+  };
 }
 
 /** 可选日期：未传则不按时间筛选；传了无效值才报错 */
@@ -191,7 +224,7 @@ function parseExportListFilters(body: {
       dateTo: to.iso,
       orderNo:
         typeof body.order_no === "string" ? body.order_no.trim() : "",
-      orderNos: parseCsvIds(body.order_nos, MAX_BATCH_ORDER_NOS),
+      orderNos: parseCsvIds(body.order_nos),
       customerPhone: phoneSearchDigits(
         typeof body.customer_phone === "string" ? body.customer_phone : "",
       ),
@@ -200,10 +233,7 @@ function parseExportListFilters(body: {
         typeof body.shipping_order_no === "string"
           ? body.shipping_order_no.trim()
           : "",
-      shippingOrderNos: parseCsvIds(
-        body.shipping_order_nos,
-        MAX_BATCH_ORDER_NOS,
-      ),
+      shippingOrderNos: parseCsvIds(body.shipping_order_nos),
     },
   };
 }
@@ -220,17 +250,15 @@ function applyExportListFilters(query: any, filters: ExportListFilters) {
   if (batchByOrderNo) {
     query = query.in("order_no", filters.orderNos);
   } else if (batchByPhone) {
-    query = query.or(
-      filters.customerPhones
-        .map((p) => `customer_phone.ilike.%${p}%`)
-        .join(","),
-    );
+    const phoneFilter = phoneLookupOrFilter(filters.customerPhones);
+    if (phoneFilter) query = query.or(phoneFilter);
   } else if (batchByShipping) {
     query = query.in("shipping_order_no", filters.shippingOrderNos);
   } else if (filters.orderNo) {
     query = query.ilike("order_no", `${filters.orderNo}%`);
   } else if (filters.customerPhone) {
-    query = query.ilike("customer_phone", `%${filters.customerPhone}%`);
+    const phoneFilter = phoneLookupOrFilter([filters.customerPhone]);
+    if (phoneFilter) query = query.or(phoneFilter);
   } else if (filters.shippingOrderNo) {
     query = query.ilike(
       "shipping_order_no",
@@ -265,6 +293,7 @@ async function listProductIdsByRegion(
   supabase: ServiceClient,
   c: AppContext,
   regionId: string,
+  accessible?: string[] | "all",
 ): Promise<string[] | "empty"> {
   let productQuery = supabase.from("products").select("id");
   if (regionId === REGION_UNSET) {
@@ -273,9 +302,19 @@ async function listProductIdsByRegion(
     productQuery = productQuery.eq("region_id", regionId);
   }
 
-  const scoped = await scopeProductsByOwner(productQuery, supabase, c);
-  if (!scoped.ok) return "empty";
-  productQuery = scoped.query;
+  if (accessible !== undefined) {
+    if (accessible === "all") {
+      // super admin：不按所属人收窄
+    } else if (accessible.length === 0) {
+      return "empty";
+    } else {
+      productQuery = productQuery.in("id", accessible);
+    }
+  } else {
+    const scoped = await scopeProductsByOwner(productQuery, supabase, c);
+    if (!scoped.ok) return "empty";
+    productQuery = scoped.query;
+  }
 
   const { data, error } = await productQuery;
   if (error) throw new Error(error.message);
@@ -1024,7 +1063,6 @@ async function applyCodShip(
 }
 
 const BATCH_CONCURRENCY = 15;
-const MAX_BATCH_STATUS_IDS = 100;
 
 type BatchOrderRow = {
   id: string;
@@ -1271,17 +1309,39 @@ ordersRoutes.get("/", async (c) => {
     .order("created_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
+  let accessibleProductIds: string[] | "all";
   try {
-    const scoped = await applyOrderOwnerScope(query, supabase, c);
-    if (!scoped.ok) {
-      return c.json({ data: [], total: 0, page, pageSize });
-    }
-    query = scoped.query;
+    accessibleProductIds = await listAccessibleProductIds(supabase, c);
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "权限校验失败" },
       500,
     );
+  }
+  if (accessibleProductIds !== "all" && accessibleProductIds.length === 0) {
+    return c.json({ data: [], total: 0, page, pageSize });
+  }
+
+  if (regionId) {
+    try {
+      const regionProductIds = await listProductIdsByRegion(
+        supabase,
+        c,
+        regionId,
+        accessibleProductIds,
+      );
+      if (regionProductIds === "empty") {
+        return c.json({ data: [], total: 0, page, pageSize });
+      }
+      query = query.in("product_id", regionProductIds);
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "地区筛选失败" },
+        500,
+      );
+    }
+  } else if (accessibleProductIds !== "all") {
+    query = query.in("product_id", accessibleProductIds);
   }
 
   // 批量订单号 / 手机号 / 运单号匹配时，不按子状态收窄，便于跨 Tab 查出结果
@@ -1299,19 +1359,16 @@ ordersRoutes.get("/", async (c) => {
   if (batchByOrderNo) {
     query = query.in("order_no", orderNos);
   } else if (batchByPhone) {
-    // 包含匹配：兼容本地号与国际区号前缀差异
-    query = query.or(
-      customerPhones
-        .map((p) => `customer_phone.ilike.%${p}%`)
-        .join(","),
-    );
+    const phoneFilter = phoneLookupOrFilter(customerPhones);
+    if (phoneFilter) query = query.or(phoneFilter);
   } else if (batchByShipping) {
     query = query.in("shipping_order_no", shippingOrderNos);
   } else if (orderNo) {
     // 前缀匹配可走 order_no btree；中间模糊会全表扫描
     query = query.ilike("order_no", `${orderNo}%`);
   } else if (customerPhone) {
-    query = query.ilike("customer_phone", `%${customerPhone}%`);
+    const phoneFilter = phoneLookupOrFilter([customerPhone]);
+    if (phoneFilter) query = query.or(phoneFilter);
   } else if (shippingOrderNo) {
     query = query.ilike("shipping_order_no", `${shippingOrderNo}%`);
   }
@@ -1344,39 +1401,13 @@ ordersRoutes.get("/", async (c) => {
     }
     query = query.lte("created_at", to.toISOString());
   }
-  if (regionId) {
-    try {
-      const regionProductIds = await listProductIdsByRegion(
-        supabase,
-        c,
-        regionId,
-      );
-      if (regionProductIds === "empty") {
-        return c.json({ data: [], total: 0, page, pageSize });
-      }
-      query = query.in("product_id", regionProductIds);
-    } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "地区筛选失败" },
-        500,
-      );
-    }
-  }
 
   const { data, error, count } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
-  const rows = data ?? [];
-  // 列表仅需审核人；与币种并行，缩短串行往返
-  const [withActors, withCurrency] = await Promise.all([
-    attachActors(supabase, rows, ["reviewed_by"]),
-    attachOrderCurrency(supabase, rows),
-  ]);
-
-  const dataOut = withActors.map((row, i) => ({
-    ...row,
-    currency: withCurrency[i]?.currency ?? null,
-  }));
+  const dataOut = (data ?? []).map((row) =>
+    flattenOrderListRow(row as OrderListEmbedRow),
+  );
 
   return c.json({
     data: dataOut,
@@ -1483,7 +1514,7 @@ ordersRoutes.post("/finance-export", async (c) => {
   if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
 
   const productIds = parseCsvIds(body.product_ids);
-  const ownerMembers = parseCsvIds(body.owner_members, 200);
+  const ownerMembers = parseCsvIds(body.owner_members);
   const regionId =
     typeof body.region_id === "string" ? body.region_id.trim() : "";
 
@@ -1639,7 +1670,7 @@ ordersRoutes.post("/logistics-export", async (c) => {
   if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
 
   const productIds = parseCsvIds(body.product_ids);
-  const ownerMembers = parseCsvIds(body.owner_members, 200);
+  const ownerMembers = parseCsvIds(body.owner_members);
   const regionId =
     typeof body.region_id === "string" ? body.region_id.trim() : "";
 
@@ -2479,9 +2510,6 @@ ordersRoutes.post("/batch-review", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要审核的订单" }, 400);
   }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多审核 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
-  }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
@@ -2576,9 +2604,6 @@ ordersRoutes.post("/batch-remark", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要填写备注的订单" }, 400);
   }
-  if (body.ids.length > 100) {
-    return c.json({ error: "单次最多填写 100 笔订单备注" }, 400);
-  }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
@@ -2639,9 +2664,6 @@ ordersRoutes.post("/batch-confirm", async (c) => {
 
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要确认的订单" }, 400);
-  }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多确认 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -2719,9 +2741,6 @@ ordersRoutes.post("/batch-invalidate", async (c) => {
 
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要标记无效的订单" }, 400);
-  }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多标记 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -2882,9 +2901,6 @@ ordersRoutes.post("/batch-complete", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要签收的订单" }, 400);
   }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多签收 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
-  }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
@@ -2952,12 +2968,6 @@ ordersRoutes.post("/batch-refuse", async (c) => {
 
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要拒绝签收的订单" }, 400);
-  }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json(
-      { error: `单次最多拒绝签收 ${MAX_BATCH_STATUS_IDS} 笔订单` },
-      400,
-    );
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -3042,9 +3052,6 @@ ordersRoutes.post("/batch-ship", async (c) => {
 
   if (!Array.isArray(body.items) || body.items.length === 0) {
     return c.json({ error: "请提供要发货的订单列表" }, 400);
-  }
-  if (body.items.length > 200) {
-    return c.json({ error: "单次最多发货 200 笔订单" }, 400);
   }
 
   const ownerMember =
@@ -3178,9 +3185,6 @@ ordersRoutes.post("/batch-reopen", async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要恢复的订单" }, 400);
   }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多恢复 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
-  }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
@@ -3299,9 +3303,6 @@ ordersRoutes.post("/batch-revert", async (c) => {
 
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要恢复的订单" }, 400);
-  }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多恢复 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
@@ -3479,12 +3480,6 @@ ordersRoutes.post("/batch-force-status", requireSuperAdmin, async (c) => {
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要流转的订单" }, 400);
   }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json(
-      { error: `单次最多流转 ${MAX_BATCH_STATUS_IDS} 笔订单` },
-      400,
-    );
-  }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {
     return c.json({ error: "订单 ID 格式无效" }, 400);
@@ -3577,9 +3572,6 @@ ordersRoutes.post("/batch-delete", requireSuperAdmin, async (c) => {
 
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return c.json({ error: "请选择要删除的订单" }, 400);
-  }
-  if (body.ids.length > MAX_BATCH_STATUS_IDS) {
-    return c.json({ error: `单次最多删除 ${MAX_BATCH_STATUS_IDS} 笔订单` }, 400);
   }
   const ids = body.ids.filter((id): id is string => typeof id === "string");
   if (ids.length !== body.ids.length) {

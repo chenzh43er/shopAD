@@ -9,6 +9,7 @@
     "build": "pnpm -r --filter @shopad/shared --filter @shopad/web --filter @shopad/api build",
     "typecheck": "pnpm -r typecheck",
     "seed:saudi": "node scripts/seed-saudi-region.mjs",
+    "insert:garden-hose-ar": "node scripts/insert-garden-hose-ar.mjs",
     "generate:saudi-migration": "node scripts/generate-saudi-migration.mjs"
   },
   "engines": {
