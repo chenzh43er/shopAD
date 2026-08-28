@@ -1301,6 +1301,7 @@ ordersRoutes.get("/", async (c) => {
   const dateFrom = c.req.query("date_from")?.trim();
   const dateTo = c.req.query("date_to")?.trim();
   const regionId = c.req.query("region_id")?.trim();
+  const productIds = parseCsvIds(c.req.query("product_ids"));
 
   const supabase = createServiceClient(c.env);
   let query = supabase
@@ -1309,39 +1310,23 @@ ordersRoutes.get("/", async (c) => {
     .order("created_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
-  let accessibleProductIds: string[] | "all";
+  let filterProductIds: string[] | null | "empty";
   try {
-    accessibleProductIds = await listAccessibleProductIds(supabase, c);
+    filterProductIds = await resolveFilterProductIds(supabase, c, {
+      productIds,
+      regionId: regionId || undefined,
+    });
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "权限校验失败" },
       500,
     );
   }
-  if (accessibleProductIds !== "all" && accessibleProductIds.length === 0) {
+  if (filterProductIds === "empty") {
     return c.json({ data: [], total: 0, page, pageSize });
   }
-
-  if (regionId) {
-    try {
-      const regionProductIds = await listProductIdsByRegion(
-        supabase,
-        c,
-        regionId,
-        accessibleProductIds,
-      );
-      if (regionProductIds === "empty") {
-        return c.json({ data: [], total: 0, page, pageSize });
-      }
-      query = query.in("product_id", regionProductIds);
-    } catch (e) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "地区筛选失败" },
-        500,
-      );
-    }
-  } else if (accessibleProductIds !== "all") {
-    query = query.in("product_id", accessibleProductIds);
+  if (filterProductIds) {
+    query = query.in("product_id", filterProductIds);
   }
 
   // 批量订单号 / 手机号 / 运单号匹配时，不按子状态收窄，便于跨 Tab 查出结果
@@ -1985,7 +1970,9 @@ async function resolvePackageItemCount(
 
 /**
  * 编辑订单基础信息。
- * 更换商品/套餐时，product_name、sku_code、套餐名、单价、package_count 等一律按商品实际数据同步，不信任前端快照。
+ * 仅当商品/套餐相对订单原值真正变更时，才按商品库当前数据同步
+ * product_name、sku_code、套餐名、单价、package_count 等快照；
+ * 未更换时保留下单时的单价与套餐信息。
  */
 ordersRoutes.patch("/:id", async (c) => {
   const id = c.req.param("id");
@@ -2057,10 +2044,37 @@ ordersRoutes.patch("/:id", async (c) => {
     touched = true;
   }
 
-  const productIdChanging = body.product_id !== undefined;
-  const packageIdChanging = body.package_id !== undefined;
-  let productId =
+  // 仅当商品/套餐相对订单原值真正变更时，才用商品库当前价同步快照；
+  // 请求里带了相同的 product_id/package_id 不算更换（避免编辑地址等操作覆盖下单价）。
+  const beforeProductId =
     typeof before.product_id === "string" ? before.product_id : null;
+  const beforePackageId =
+    typeof before.package_id === "string" ? before.package_id : null;
+
+  let requestedProductId: string | undefined;
+  if (body.product_id !== undefined) {
+    const nextProductId = requiredTrimmedString(body.product_id);
+    if (!nextProductId) return c.json({ error: "请选择商品" }, 400);
+    requestedProductId = nextProductId;
+  }
+
+  let requestedPackageId: string | null | undefined;
+  if (body.package_id !== undefined) {
+    if (body.package_id === null || body.package_id === "") {
+      requestedPackageId = null;
+    } else {
+      const nextPackageId = requiredTrimmedString(body.package_id);
+      if (!nextPackageId) return c.json({ error: "套餐无效" }, 400);
+      requestedPackageId = nextPackageId;
+    }
+  }
+
+  const productIdChanging =
+    requestedProductId !== undefined && requestedProductId !== beforeProductId;
+  const packageIdChanging =
+    requestedPackageId !== undefined && requestedPackageId !== beforePackageId;
+
+  let productId = beforeProductId;
   let unitPrice =
     typeof before.unit_price === "number"
       ? before.unit_price
@@ -2073,9 +2087,7 @@ ordersRoutes.patch("/:id", async (c) => {
 
   if (productIdChanging || packageIdChanging) {
     if (productIdChanging) {
-      const nextProductId = requiredTrimmedString(body.product_id);
-      if (!nextProductId) return c.json({ error: "请选择商品" }, 400);
-      productId = nextProductId;
+      productId = requestedProductId ?? null;
     }
     if (!productId) {
       return c.json({ error: "订单未关联商品，无法更换套餐" }, 400);
@@ -2129,19 +2141,13 @@ ordersRoutes.patch("/:id", async (c) => {
       Boolean(product.packages_enabled) && (packages ?? []).length > 0;
 
     let nextPackageId: string | null = null;
-    if (packageIdChanging) {
-      if (body.package_id === null || body.package_id === "") {
-        nextPackageId = null;
-      } else {
-        nextPackageId = requiredTrimmedString(body.package_id);
-        if (!nextPackageId) return c.json({ error: "套餐无效" }, 400);
-      }
+    if (requestedPackageId !== undefined) {
+      nextPackageId = requestedPackageId;
     } else if (productIdChanging) {
       // 换商品且未指定套餐：有套餐则要求显式选择
       nextPackageId = null;
     } else {
-      nextPackageId =
-        typeof before.package_id === "string" ? before.package_id : null;
+      nextPackageId = beforePackageId;
     }
 
     if (usePackages) {

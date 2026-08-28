@@ -283,6 +283,11 @@ export function OrdersPage() {
   const [regionId, setRegionId] = useState<string | undefined>();
   const [regions, setRegions] = useState<AddressLibrary[]>([]);
   const [regionsLoading, setRegionsLoading] = useState(false);
+  const [productIds, setProductIds] = useState<string[]>([]);
+  const [filterProducts, setFilterProducts] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [filterProductsLoading, setFilterProductsLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [total, setTotal] = useState(0);
@@ -418,6 +423,9 @@ export function OrdersPage() {
       if (regionId) {
         params.set("region_id", regionId);
       }
+      if (productIds.length > 0) {
+        params.set("product_ids", productIds.join(","));
+      }
 
       const res = await apiFetch<Paginated<Order>>(
         `/api/orders?${params.toString()}`,
@@ -519,6 +527,7 @@ export function OrdersPage() {
     showWaybillSearch,
     dateRange,
     regionId,
+    productIds,
   ]);
 
   useEffect(() => {
@@ -556,6 +565,45 @@ export function OrdersPage() {
     };
   }, []);
 
+  /** 商品筛选项：有权限的商品；选了地区时按地区收窄 */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setFilterProductsLoading(true);
+      try {
+        const params = new URLSearchParams({
+          page: "1",
+          pageSize: "500",
+        });
+        if (regionId) params.set("region_id", regionId);
+        const res = await apiFetch<Paginated<{ id: string; name: string }>>(
+          `/api/products?${params.toString()}`,
+        );
+        if (cancelled) return;
+        const list = (res.data ?? []).map((p) => ({
+          id: p.id,
+          name: p.name || p.id,
+        }));
+        setFilterProducts(list);
+        setProductIds((prev) => {
+          if (prev.length === 0) return prev;
+          const allowed = new Set(list.map((p) => p.id));
+          const next = prev.filter((id) => allowed.has(id));
+          return next.length === prev.length ? prev : next;
+        });
+      } catch (e) {
+        if (!cancelled) {
+          message.error(e instanceof Error ? e.message : "加载商品失败");
+        }
+      } finally {
+        if (!cancelled) setFilterProductsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [regionId]);
+
   // 进入无效 COD 子路径时纠正到默认项
   useEffect(() => {
     if (!routeTab || !COD_TABS.some((t) => t.key === routeTab)) {
@@ -576,6 +624,8 @@ export function OrdersPage() {
     batchPhones,
     batchShippingOrderNos,
     dateRange,
+    regionId,
+    productIds,
   ]);
 
   const applyBatchQuery = () => {
@@ -1081,7 +1131,7 @@ export function OrdersPage() {
 
     setExportKind(kind);
     setExportOpen(true);
-    setExportProductIds([]);
+    setExportProductIds(productIds);
     setExportColumnKeys(ALL_ORDER_EXPORT_COLUMN_KEYS);
     setExportMetaLoading(true);
     try {
@@ -1568,25 +1618,46 @@ export function OrdersPage() {
           <h1>COD订单</h1>
           <span className="list-count">共 {total} 条</span>
         </div>
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="全部地区"
-          loading={regionsLoading}
-          style={{ width: 200 }}
-          value={regionId}
-          onChange={(v) => {
-            setPage(1);
-            setRegionId(v);
-          }}
-          options={regions.map((r) => ({ value: r.id, label: r.name }))}
-        />
+        <Space wrap>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部地区"
+            loading={regionsLoading}
+            style={{ width: 200 }}
+            value={regionId}
+            onChange={(v) => {
+              setPage(1);
+              setRegionId(v);
+            }}
+            options={regions.map((r) => ({ value: r.id, label: r.name }))}
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部商品"
+            loading={filterProductsLoading}
+            maxTagCount="responsive"
+            style={{ minWidth: 240, maxWidth: 420 }}
+            value={productIds}
+            onChange={(ids: string[]) => {
+              setPage(1);
+              setProductIds(ids);
+            }}
+            options={filterProducts.map((p) => ({
+              value: p.id,
+              label: p.name,
+            }))}
+          />
+        </Space>
       </div>
       <p style={{ color: "#666", marginTop: -8, marginBottom: 12 }}>
         {isAllTab
-          ? "展示全部 COD 订单。支持按订单号、手机号搜索，或批量粘贴查询。"
-          : "货到付款订单须网站管理审核通过后，方可发货。可在左侧切换 COD 子状态。"}
+          ? "展示全部 COD 订单。支持按地区、商品、订单号、手机号筛选，或批量粘贴查询。"
+          : "货到付款订单须网站管理审核通过后，方可发货。可在左侧切换 COD 子状态，并按地区、商品筛选。"}
       </p>
       <Tabs
         activeKey={activeCodTab}
@@ -2242,7 +2313,11 @@ export function OrdersPage() {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="不选则导出有权限的全部商品"
+            placeholder={
+              productIds.length > 0
+                ? "默认沿用列表已选商品，可再收窄或清空"
+                : "不选则导出有权限的全部商品"
+            }
             loading={exportMetaLoading}
             value={exportProductIds}
             onChange={setExportProductIds}

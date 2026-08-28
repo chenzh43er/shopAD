@@ -239,30 +239,57 @@ export function OrderEditModal({
       const product =
         list.find((p) => p.id === data.product_id) ??
         (await apiFetch<Product>(`/api/products/${data.product_id}`));
-      setSkuCode(product.sku_code ?? data.sku_code ?? null);
       const usePackages =
         Boolean(product.packages_enabled) && pkgList.length > 0;
       setPackagesEnabled(usePackages);
+      // 打开编辑时一律用订单下单快照；仅用户更换商品/套餐后才切到当前目录价
+      const snapshotUnit = Number(data.unit_price);
+      const snapshotCount = Number(data.package_count);
+      setSkuCode(data.sku_code ?? product.sku_code ?? null);
       if (usePackages) {
         const selected =
           pkgList.find((p) => p.id === data.package_id) ?? pkgList[0];
         setPackageCount(
-          Math.max(1, Number(data.package_count) || packageItemCount(selected)),
+          Number.isFinite(snapshotCount) && snapshotCount > 0
+            ? Math.floor(snapshotCount)
+            : packageItemCount(selected),
         );
         setUnitPrice(
-          Number(data.unit_price) || packageUnitPrice(selected),
+          Number.isFinite(snapshotUnit) && snapshotUnit >= 0
+            ? snapshotUnit
+            : packageUnitPrice(selected),
         );
-        form.setFieldsValue({ package_id: selected.id });
+        if (data.package_id && pkgList.some((p) => p.id === data.package_id)) {
+          form.setFieldsValue({ package_id: data.package_id });
+        } else if (selected) {
+          form.setFieldsValue({ package_id: selected.id });
+        }
       } else {
-        setPackageCount(Math.max(1, Number(data.package_count) || 1));
-        setUnitPrice(Number(data.unit_price) || Number(product.price) || 0);
+        setPackageCount(
+          Number.isFinite(snapshotCount) && snapshotCount > 0
+            ? Math.floor(snapshotCount)
+            : 1,
+        );
+        setUnitPrice(
+          Number.isFinite(snapshotUnit) && snapshotUnit >= 0
+            ? snapshotUnit
+            : Number(product.price) || 0,
+        );
         form.setFieldsValue({ package_id: undefined });
       }
     } else {
       setPackages([]);
       setSkuCode(data.sku_code);
-      setUnitPrice(Number(data.unit_price) || 0);
-      setPackageCount(Math.max(1, Number(data.package_count) || 1));
+      const snapshotUnit = Number(data.unit_price);
+      const snapshotCount = Number(data.package_count);
+      setUnitPrice(
+        Number.isFinite(snapshotUnit) && snapshotUnit >= 0 ? snapshotUnit : 0,
+      );
+      setPackageCount(
+        Number.isFinite(snapshotCount) && snapshotCount > 0
+          ? Math.floor(snapshotCount)
+          : 1,
+      );
       setPackagesEnabled(false);
     }
   };
@@ -315,9 +342,18 @@ export function OrderEditModal({
         shipping_order_no: values.shipping_order_no?.trim() || null,
       };
 
-      if (values.product_id) {
-        payload.product_id = values.product_id;
-        payload.package_id = packagesEnabled ? values.package_id || null : null;
+      const nextProductId = values.product_id;
+      const nextPackageId = packagesEnabled
+        ? values.package_id || null
+        : null;
+      const prevProductId = order.product_id ?? null;
+      const prevPackageId = order.package_id ?? null;
+      // 未更换商品/套餐时不传，避免服务端用当前目录价覆盖下单快照
+      if (nextProductId && nextProductId !== prevProductId) {
+        payload.product_id = nextProductId;
+        payload.package_id = nextPackageId;
+      } else if (nextProductId && nextPackageId !== prevPackageId) {
+        payload.package_id = nextPackageId;
       }
 
       const updated = await apiFetch<Order>(`/api/orders/${order.id}`, {
@@ -411,7 +447,10 @@ export function OrderEditModal({
               placeholder="选择商品"
               options={products.map((p) => ({
                 value: p.id,
-                label: p.name || p.id,
+                label:
+                  order?.product_id === p.id && order.product_name
+                    ? order.product_name
+                    : p.name || p.id,
               }))}
               onChange={(productId: string) => {
                 void applyProductSync(productId);
@@ -428,12 +467,23 @@ export function OrderEditModal({
                 showSearch
                 optionFilterProp="label"
                 placeholder="选择套餐"
-                options={packages.map((p) => ({
-                  value: p.id,
-                  label: p.name_external
-                    ? `${p.name}（${p.name_external}）`
-                    : p.name,
-                }))}
+                options={packages.map((p) => {
+                  if (
+                    order?.package_id === p.id &&
+                    (order.package_name || order.package_name_external)
+                  ) {
+                    const snap = order.package_name_external
+                      ? `${order.package_name ?? p.name}（${order.package_name_external}）`
+                      : (order.package_name ?? p.name);
+                    return { value: p.id, label: snap };
+                  }
+                  return {
+                    value: p.id,
+                    label: p.name_external
+                      ? `${p.name}（${p.name_external}）`
+                      : p.name,
+                  };
+                })}
                 onChange={(packageId: string) => {
                   applyPackageSync(packageId);
                 }}

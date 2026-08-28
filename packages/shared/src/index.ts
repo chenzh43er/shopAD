@@ -706,7 +706,7 @@ export interface UpdateProductInput {
   owner_ids?: string[];
 }
 
-/** 后台编辑订单（商品/套餐变更时服务端按实际数据同步快照） */
+/** 后台编辑订单（仅商品/套餐真正变更时服务端才按当前目录价同步快照） */
 export interface UpdateOrderInput {
   customer_name?: string;
   customer_phone?: string | null;
