@@ -31,6 +31,7 @@ type EditOrderFormValues = {
   product_id: string;
   package_id?: string;
   quantity: number;
+  total_amount: number;
   owner_member?: string;
   shipping_order_no?: string;
 };
@@ -79,12 +80,35 @@ export function OrderEditModal({
   const [packageCount, setPackageCount] = useState(1);
   const [packagesEnabled, setPackagesEnabled] = useState(false);
   const [form] = Form.useForm<EditOrderFormValues>();
-  const quantity = Form.useWatch("quantity", form) ?? 1;
-  const previewTotal = useMemo(
-    () =>
-      Number((unitPrice * Math.max(1, Number(quantity) || 1)).toFixed(2)),
-    [unitPrice, quantity],
-  );
+  const totalAmount = Form.useWatch("total_amount", form);
+  const totalAmountFieldWidth = useMemo(() => {
+    const amountText = Number.isFinite(Number(totalAmount))
+      ? Number(totalAmount).toFixed(2)
+      : "0.00";
+    const prefixText = order?.currency?.symbol_suffix
+      ? ""
+      : order?.currency?.symbol?.trim() || "¥";
+    const suffixText = order?.currency?.symbol_suffix
+      ? order?.currency?.symbol?.trim() || ""
+      : order?.currency?.code && order.currency.code !== "CNY"
+        ? order.currency.code
+        : "";
+    const contentWidth =
+      amountText.length * 10 +
+      prefixText.length * 12 +
+      suffixText.length * 12 +
+      72;
+    return Math.max(260, Math.min(420, contentWidth));
+  }, [totalAmount, order?.currency]);
+  const syncTotalAmount = (price: number, qty?: number) => {
+    const quantityValue = Math.max(
+      1,
+      Number(qty ?? form.getFieldValue("quantity")) || 1,
+    );
+    form.setFieldsValue({
+      total_amount: Number((price * quantityValue).toFixed(2)),
+    });
+  };
 
   const loadProducts = async () => {
     const res = await apiFetch<
@@ -129,28 +153,34 @@ export function OrderEditModal({
     if (usePackages) {
       const selected =
         pkgList.find((p) => p.id === preferredPackageId) ?? pkgList[0];
+      const nextUnitPrice = packageUnitPrice(selected);
       setPackageCount(packageItemCount(selected));
-      setUnitPrice(packageUnitPrice(selected));
+      setUnitPrice(nextUnitPrice);
       form.setFieldsValue({
         product_id: productId,
         package_id: selected.id,
       });
+      syncTotalAmount(nextUnitPrice);
     } else {
+      const nextUnitPrice = Number(product.price) || 0;
       setPackageCount(1);
-      setUnitPrice(Number(product.price) || 0);
+      setUnitPrice(nextUnitPrice);
       form.setFieldsValue({
         product_id: productId,
         package_id: undefined,
       });
+      syncTotalAmount(nextUnitPrice);
     }
   };
 
   const applyPackageSync = (packageId: string) => {
     const pkg = packages.find((p) => p.id === packageId);
     if (!pkg) return;
+    const nextUnitPrice = packageUnitPrice(pkg);
     setPackageCount(packageItemCount(pkg));
-    setUnitPrice(packageUnitPrice(pkg));
+    setUnitPrice(nextUnitPrice);
     form.setFieldsValue({ package_id: packageId });
+    syncTotalAmount(nextUnitPrice);
   };
 
   const initFromOrder = async (data: Order) => {
@@ -198,6 +228,7 @@ export function OrderEditModal({
       product_id: data.product_id ?? undefined,
       package_id: data.package_id ?? undefined,
       quantity: Math.max(1, Number(data.quantity) || 1),
+      total_amount: Number(data.total_amount) || 0,
       owner_member: data.owner_member ?? "",
       shipping_order_no: data.shipping_order_no ?? "",
     });
@@ -215,12 +246,16 @@ export function OrderEditModal({
       if (usePackages) {
         const selected =
           pkgList.find((p) => p.id === data.package_id) ?? pkgList[0];
-        setPackageCount(packageItemCount(selected));
-        setUnitPrice(packageUnitPrice(selected));
+        setPackageCount(
+          Math.max(1, Number(data.package_count) || packageItemCount(selected)),
+        );
+        setUnitPrice(
+          Number(data.unit_price) || packageUnitPrice(selected),
+        );
         form.setFieldsValue({ package_id: selected.id });
       } else {
-        setPackageCount(1);
-        setUnitPrice(Number(product.price) || Number(data.unit_price) || 0);
+        setPackageCount(Math.max(1, Number(data.package_count) || 1));
+        setUnitPrice(Number(data.unit_price) || Number(product.price) || 0);
         form.setFieldsValue({ package_id: undefined });
       }
     } else {
@@ -275,6 +310,7 @@ export function OrderEditModal({
         shipping_detail: values.shipping_detail?.trim() || null,
         shipping_address: values.shipping_address?.trim() || null,
         quantity: values.quantity,
+        total_amount: values.total_amount,
         owner_member: values.owner_member?.trim() || null,
         shipping_order_no: values.shipping_order_no?.trim() || null,
       };
@@ -315,7 +351,7 @@ export function OrderEditModal({
     >
       <Spin spinning={loading}>
         <p style={{ color: "#666", marginBottom: 12 }}>
-          更换商品或套餐时，中文属性、单价、套餐件数会按商品实际数据自动同步。
+          打开时单价、件数、预估总金额均按订单快照展示；更换商品或套餐后，单价与件数会按商品实际数据同步并重算金额。
         </p>
         <Form form={form} layout="vertical" disabled={loading || !order}>
           <Space wrap style={{ width: "100%" }} size="middle">
@@ -427,12 +463,39 @@ export function OrderEditModal({
               rules={[{ required: true, message: "请填写购买数量" }]}
               style={{ width: 140 }}
             >
-              <InputNumber min={1} precision={0} style={{ width: "100%" }} />
+              <InputNumber
+                min={1}
+                precision={0}
+                style={{ width: "100%" }}
+                onChange={(value) => {
+                  syncTotalAmount(unitPrice, Number(value) || 1);
+                }}
+              />
             </Form.Item>
-            <Form.Item label="预估总金额" style={{ width: 180 }}>
-              <Input
-                value={formatMoney(previewTotal, order?.currency)}
-                disabled
+            <Form.Item
+              name="total_amount"
+              label="预估总金额"
+              rules={[{ required: true, message: "请填写预估总金额" }]}
+              style={{ width: totalAmountFieldWidth, minWidth: 260, flex: "1 1 auto" }}
+            >
+              <InputNumber
+                min={0}
+                precision={2}
+                controls={false}
+                style={{ width: "100%" }}
+                addonBefore={
+                  order?.currency?.symbol_suffix
+                    ? undefined
+                    : order?.currency?.symbol?.trim() || "¥"
+                }
+                addonAfter={
+                  order?.currency?.symbol_suffix
+                    ? order?.currency?.symbol?.trim() || undefined
+                    : order?.currency?.code &&
+                        order.currency.code !== "CNY"
+                      ? order.currency.code
+                      : undefined
+                }
               />
             </Form.Item>
           </Space>

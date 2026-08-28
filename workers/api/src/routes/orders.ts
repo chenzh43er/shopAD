@@ -2194,19 +2194,30 @@ ordersRoutes.patch("/:id", async (c) => {
     patch.weight = Number((productWeight * packageCount).toFixed(2));
   }
 
-  // 数量或商品/套餐变更时重算金额
-  if (
-    body.quantity !== undefined ||
-    productIdChanging ||
-    packageIdChanging
-  ) {
-    const totalAmount = Number((unitPrice * quantity).toFixed(2));
+  const applyTotalAmount = (totalAmount: number) => {
     patch.total_amount = totalAmount;
     patch.item_value = totalAmount;
     if (before.payment_type === "cod") {
       patch.cod_amount = totalAmount;
     }
     touched = true;
+  };
+
+  if (body.total_amount !== undefined) {
+    const totalAmount =
+      typeof body.total_amount === "number"
+        ? body.total_amount
+        : Number(body.total_amount);
+    if (!Number.isFinite(totalAmount) || totalAmount < 0) {
+      return c.json({ error: "预估总金额须为非负数" }, 400);
+    }
+    applyTotalAmount(Number(totalAmount.toFixed(2)));
+  } else if (
+    body.quantity !== undefined ||
+    productIdChanging ||
+    packageIdChanging
+  ) {
+    applyTotalAmount(Number((unitPrice * quantity).toFixed(2)));
   }
 
   // 结构化地址变更且未显式传 shipping_address 时自动拼接

@@ -724,4 +724,6 @@ export interface UpdateOrderInput {
   owner_member?: string | null;
   shipping_order_no?: string | null;
   remark?: string | null;
+  /** 手动调整预估总金额；未传时数量/商品/套餐变更仍按单价×数量重算 */
+  total_amount?: number;
 }
