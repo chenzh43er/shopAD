@@ -13,8 +13,6 @@ const ALLOWED_TYPES = new Set([
 ]);
 
 const MAX_SIZE = 5 * 1024 * 1024;
-/** GIF 无法在 Worker 内有效压缩，限制体积以免拖垮落地页 */
-const MAX_GIF_SIZE = 500 * 1024;
 
 export const uploadsRoutes = new Hono<{
   Bindings: Env;
@@ -24,7 +22,7 @@ export const uploadsRoutes = new Hono<{
 uploadsRoutes.post("/product-image", async (c) => {
   const contentType = c.req.header("content-type") ?? "";
   if (!contentType.includes("multipart/form-data")) {
-    return c.json({ error: "请使用 multipart/form-data 上传" }, 400);
+    return c.json({ error: "璇蜂娇鐢?multipart/form-data 涓婁紶" }, 400);
   }
 
   const form = await c.req.formData();
@@ -35,7 +33,7 @@ uploadsRoutes.post("/product-image", async (c) => {
     typeof file === "string" ||
     typeof (file as Blob).arrayBuffer !== "function"
   ) {
-    return c.json({ error: "缺少文件字段 file" }, 400);
+    return c.json({ error: "缂哄皯鏂囦欢瀛楁 file" }, 400);
   }
 
   const blob = file as File;
@@ -43,21 +41,11 @@ uploadsRoutes.post("/product-image", async (c) => {
   const fileSize = blob.size;
 
   if (!ALLOWED_TYPES.has(fileType)) {
-    return c.json({ error: "仅支持 JPEG/PNG/WebP/GIF" }, 400);
+    return c.json({ error: "浠呮敮鎸?JPEG/PNG/WebP/GIF" }, 400);
   }
 
   if (fileSize > MAX_SIZE) {
-    return c.json({ error: "图片不能超过 5MB" }, 400);
-  }
-
-  if (fileType === "image/gif" && fileSize > MAX_GIF_SIZE) {
-    return c.json(
-      {
-        error:
-          "GIF 不能超过 500KB（动画无法压缩）。请改用短视频，或导出为 WebP/JPEG 静图后再上传。",
-      },
-      400,
-    );
+    return c.json({ error: "鍥剧墖涓嶈兘瓒呰繃 5MB" }, 400);
   }
 
   const original = await blob.arrayBuffer();
@@ -72,7 +60,7 @@ uploadsRoutes.post("/product-image", async (c) => {
           ? "gif"
           : "jpg";
 
-  // GIF 保留动画；其余统一压缩并转 WebP
+  // GIF 淇濈暀鍔ㄧ敾锛涘叾浣欑粺涓€鍘嬬缉骞惰浆 WebP
   if (fileType !== "image/gif") {
     try {
       const optimized = await optimizeProductImage(original, fileType);
@@ -111,7 +99,7 @@ uploadsRoutes.post("/product-image", async (c) => {
 });
 
 /**
- * 将单个商品的存量图片重编码为 WebP 并回写 URL（超级管理员）。
+ * 灏嗗崟涓晢鍝佺殑瀛橀噺鍥剧墖閲嶇紪鐮佷负 WebP 骞跺洖鍐?URL锛堣秴绾х鐞嗗憳锛夈€?
  * POST /api/uploads/reoptimize-product/:productId
  */
 uploadsRoutes.post(
@@ -120,7 +108,7 @@ uploadsRoutes.post(
   async (c) => {
     const productId = c.req.param("productId");
     if (!productId) {
-      return c.json({ error: "缺少 productId" }, 400);
+      return c.json({ error: "缂哄皯 productId" }, 400);
     }
     try {
       const result = await reoptimizeProductImages(c.env, productId);
@@ -139,7 +127,7 @@ uploadsRoutes.post(
       console.error("reoptimize-product failed:", error);
       return c.json(
         {
-          error: error instanceof Error ? error.message : "重编码失败",
+          error: error instanceof Error ? error.message : "閲嶇紪鐮佸け璐?,
         },
         500,
       );
@@ -148,7 +136,7 @@ uploadsRoutes.post(
 );
 
 /**
- * 批量重编码存量商品图（超级管理员）。
+ * 鎵归噺閲嶇紪鐮佸瓨閲忓晢鍝佸浘锛堣秴绾х鐞嗗憳锛夈€?
  * POST /api/uploads/reoptimize-existing
  * body: { limit?: number, offset?: number }
  */
