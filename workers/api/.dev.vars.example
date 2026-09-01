@@ -7,3 +7,9 @@ SUPABASE_ANON_KEY=sb_publishable_...
 SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 # Optional (legacy HS256 verify); not required when using auth.getUser
 SUPABASE_JWT_SECRET=
+
+# Optional Upstash Redis（Free 测试即可）。关掉：REDIS_ENABLED=false 或不填 URL/TOKEN
+# REDIS_ENABLED 也可在 wrangler.toml [vars] 里设；这里覆盖本地
+REDIS_ENABLED=false
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=

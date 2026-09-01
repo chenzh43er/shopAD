@@ -13,7 +13,7 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   PRODUCT_STATUS_LABELS,
   type AddressLibrary,
@@ -22,7 +22,9 @@ import {
   type ProductStatus,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
+import { pickDefaultRegionId } from "../lib/defaultRegion";
 import { INPUT_LIMITS } from "../lib/inputLimits";
+import { productNewPath } from "../lib/productsPaths";
 import { formatActor } from "../components/AuditLogPanel";
 
 const statusColor: Record<ProductStatus, string> = {
@@ -51,11 +53,14 @@ function buildProductUrl(product: Product): string | null {
 
 export function ProductsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<ListTab>("active");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<ProductStatus | undefined>();
-  const [regionId, setRegionId] = useState<string | undefined>();
+  const [regionId, setRegionId] = useState<string | undefined>(
+    () => searchParams.get("region_id") ?? undefined,
+  );
   const [regions, setRegions] = useState<AddressLibrary[]>([]);
   const [regionsLoading, setRegionsLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -66,20 +71,24 @@ export function ProductsPage() {
   const isDeletedTab = tab === "deleted";
 
   const load = useCallback(async () => {
+    // 必须先选定地区再拉列表（默认 ID / 无权限则其他）
+    if (!regionId) {
+      setData([]);
+      setTotal(0);
+      return;
+    }
     setLoading(true);
     try {
       const params = new URLSearchParams({
         page: String(page),
         pageSize: String(pageSize),
+        region_id: regionId,
       });
       if (q.trim()) params.set("q", q.trim());
       if (isDeletedTab) {
         params.set("status", "off_sale");
       } else if (status) {
         params.set("status", status);
-      }
-      if (regionId) {
-        params.set("region_id", regionId);
       }
 
       const res = await apiFetch<Paginated<Product>>(
@@ -106,7 +115,15 @@ export function ProductsPage() {
         const res = await apiFetch<{ data: AddressLibrary[] }>(
           "/api/address-libraries",
         );
-        if (!cancelled) setRegions(res.data);
+        if (cancelled) return;
+        const list = res.data ?? [];
+        setRegions(list);
+        setRegionId((prev) => {
+          if (prev && (prev === REGION_UNSET || list.some((r) => r.id === prev))) {
+            return prev;
+          }
+          return pickDefaultRegionId(list);
+        });
       } catch (e) {
         if (!cancelled) {
           message.error(e instanceof Error ? e.message : "加载地区失败");
@@ -271,7 +288,16 @@ export function ProductsPage() {
           <span className="list-count">共 {total} 条</span>
         </div>
         {!isDeletedTab && (
-          <Button type="primary" onClick={() => navigate("/products/new")}>
+          <Button
+            type="primary"
+            onClick={() =>
+              navigate(
+                productNewPath(
+                  regionId && regionId !== REGION_UNSET ? regionId : undefined,
+                ),
+              )
+            }
+          >
             新建商品
           </Button>
         )}
@@ -282,7 +308,6 @@ export function ProductsPage() {
           setTab(key as ListTab);
           setPage(1);
           setStatus(undefined);
-          setRegionId(undefined);
           setQ("");
         }}
         items={[
@@ -317,7 +342,6 @@ export function ProductsPage() {
           />
         )}
         <Select
-          allowClear
           showSearch
           optionFilterProp="label"
           placeholder="地区"
@@ -327,6 +351,15 @@ export function ProductsPage() {
           onChange={(v) => {
             setPage(1);
             setRegionId(v);
+            setSearchParams(
+              (prev) => {
+                const next = new URLSearchParams(prev);
+                if (v) next.set("region_id", v);
+                else next.delete("region_id");
+                return next;
+              },
+              { replace: true },
+            );
           }}
           options={[
             ...regions.map((r) => ({ value: r.id, label: r.name })),

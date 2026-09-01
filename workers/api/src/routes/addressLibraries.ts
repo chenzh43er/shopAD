@@ -16,6 +16,7 @@ const MAX_LEVELS = 12;
 const MAX_PATHS = 50000;
 const INSERT_CHUNK = 400;
 const DIAL_CODE_RE = /^[1-9][0-9]{0,3}$/;
+/** 地区树不走 Redis：大 value + REST 往返会拖慢；仅鉴权/权限/限流用 Redis */
 
 type RegionRow = {
   id: string;
@@ -148,32 +149,78 @@ async function summarizeLibrary(
   supabase: ReturnType<typeof createServiceClient>,
   library: LibraryRow,
 ): Promise<AddressLibrary> {
-  const { count, error: countError } = await supabase
-    .from("address_regions")
-    .select("id", { count: "exact", head: true })
-    .eq("library_id", library.id);
+  const [countRes, levelRes] = await Promise.all([
+    supabase
+      .from("address_regions")
+      .select("id", { count: "exact", head: true })
+      .eq("library_id", library.id),
+    supabase
+      .from("address_regions")
+      .select("level")
+      .eq("library_id", library.id)
+      .order("level", { ascending: false })
+      .limit(1),
+  ]);
 
-  if (countError) throw new Error(countError.message);
-
-  const { data: levelRows, error: levelError } = await supabase
-    .from("address_regions")
-    .select("level")
-    .eq("library_id", library.id)
-    .order("level", { ascending: false })
-    .limit(1);
-
-  if (levelError) throw new Error(levelError.message);
+  if (countRes.error) throw new Error(countRes.error.message);
+  if (levelRes.error) throw new Error(levelRes.error.message);
 
   return {
     id: library.id,
     name: library.name,
     dial_code: library.dial_code ?? null,
     remark: library.remark ?? null,
-    max_level: levelRows?.[0]?.level ?? 0,
-    region_count: count ?? 0,
+    max_level: levelRes.data?.[0]?.level ?? 0,
+    region_count: countRes.count ?? 0,
     created_at: library.created_at,
     updated_at: library.updated_at,
   };
+}
+
+/** 批量汇总：优先 RPC 一次聚合；失败则并行逐库统计 */
+async function summarizeLibraries(
+  supabase: ReturnType<typeof createServiceClient>,
+  libraries: LibraryRow[],
+): Promise<AddressLibrary[]> {
+  if (libraries.length === 0) return [];
+
+  const ids = libraries.map((l) => l.id);
+  const { data: stats, error: rpcError } = await supabase.rpc(
+    "address_library_stats",
+    { p_library_ids: ids },
+  );
+
+  if (!rpcError && Array.isArray(stats)) {
+    const byId = new Map<
+      string,
+      { region_count: number; max_level: number }
+    >();
+    for (const row of stats as Array<{
+      library_id: string;
+      region_count: number | string;
+      max_level: number | string;
+    }>) {
+      byId.set(row.library_id, {
+        region_count: Number(row.region_count) || 0,
+        max_level: Number(row.max_level) || 0,
+      });
+    }
+    return libraries.map((library) => {
+      const s = byId.get(library.id);
+      return {
+        id: library.id,
+        name: library.name,
+        dial_code: library.dial_code ?? null,
+        remark: library.remark ?? null,
+        max_level: s?.max_level ?? 0,
+        region_count: s?.region_count ?? 0,
+        created_at: library.created_at,
+        updated_at: library.updated_at,
+      };
+    });
+  }
+
+  return Promise.all(libraries.map((row) => summarizeLibrary(supabase, row)));
 }
 
 async function insertRegionsTree(
@@ -330,9 +377,14 @@ addressLibrariesRoutes.get("/", async (c) => {
 
   if (error) return c.json({ error: error.message }, 500);
 
-  const libraries: AddressLibrary[] = [];
-  for (const row of (data ?? []) as LibraryRow[]) {
-    libraries.push(await summarizeLibrary(supabase, row));
+  let libraries: AddressLibrary[];
+  try {
+    libraries = await summarizeLibraries(supabase, (data ?? []) as LibraryRow[]);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "加载地区失败" },
+      500,
+    );
   }
 
   return c.json({ data: libraries, total: libraries.length });
@@ -651,13 +703,16 @@ addressLibrariesRoutes.get("/:id/regions", async (c) => {
   if (libError) return c.json({ error: libError.message }, 500);
   if (!library) return c.json({ error: "地区不存在" }, 404);
 
-  // PostgREST 默认有行数上限；分页拉取全部节点
+  // PostgREST 默认有行数上限；分页拉取建树所需列（不含无用大字段）
+  // 刻意不走 Redis：整树体积大，REST 缓存往往比直打同区 Postgres 更慢
   const all: RegionRow[] = [];
   const fetchSize = 1000;
   for (let from = 0; ; from += fetchSize) {
     const { data, error } = await supabase
       .from("address_regions")
-      .select("*")
+      .select(
+        "id, library_id, parent_id, name, level, sort_order, created_at, updated_at",
+      )
       .eq("library_id", id)
       .order("level", { ascending: true })
       .order("sort_order", { ascending: true })

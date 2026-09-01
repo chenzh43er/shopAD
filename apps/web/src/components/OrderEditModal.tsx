@@ -34,6 +34,7 @@ type EditOrderFormValues = {
   total_amount: number;
   owner_member?: string;
   shipping_order_no?: string;
+  remark?: string;
 };
 
 function packageItemCount(pkg: ProductPackageWithItems): number {
@@ -123,7 +124,7 @@ export function OrderEditModal({
           | "weight"
         >
       >
-    >("/api/products?page=1&pageSize=500");
+    >("/api/products?page=1&pageSize=200&fields=list");
     return res.data ?? [];
   };
 
@@ -185,7 +186,10 @@ export function OrderEditModal({
 
   const initFromOrder = async (data: Order) => {
     setOrder(data);
-    const productList = await loadProducts();
+    const [productList, initialPackages] = await Promise.all([
+      loadProducts(),
+      data.product_id ? loadPackages(data.product_id) : Promise.resolve([]),
+    ]);
     let list = productList;
     if (data.product_id && !list.some((p) => p.id === data.product_id)) {
       try {
@@ -231,10 +235,11 @@ export function OrderEditModal({
       total_amount: Number(data.total_amount) || 0,
       owner_member: data.owner_member ?? "",
       shipping_order_no: data.shipping_order_no ?? "",
+      remark: data.remark ?? "",
     });
 
     if (data.product_id) {
-      const pkgList = await loadPackages(data.product_id);
+      const pkgList = initialPackages;
       setPackages(pkgList);
       const product =
         list.find((p) => p.id === data.product_id) ??
@@ -340,6 +345,7 @@ export function OrderEditModal({
         total_amount: values.total_amount,
         owner_member: values.owner_member?.trim() || null,
         shipping_order_no: values.shipping_order_no?.trim() || null,
+        remark: values.remark?.trim() || null,
       };
 
       const nextProductId = values.product_id;
@@ -565,6 +571,14 @@ export function OrderEditModal({
               <Input maxLength={INPUT_LIMITS.shippingMeta} />
             </Form.Item>
           </Space>
+          <Form.Item name="remark" label="备注">
+            <Input.TextArea
+              rows={3}
+              placeholder="可选，填写订单备注"
+              maxLength={INPUT_LIMITS.remark}
+              showCount
+            />
+          </Form.Item>
         </Form>
       </Spin>
     </Modal>

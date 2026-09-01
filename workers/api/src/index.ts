@@ -12,6 +12,7 @@ import { addressLibrariesRoutes } from "./routes/addressLibraries";
 import { currenciesRoutes } from "./routes/currencies";
 import { domainsRoutes } from "./routes/domains";
 import { employeesRoutes, meRoutes } from "./routes/employees";
+import { isRedisEnabled } from "./lib/redis";
 import type { Env, Variables } from "./types";
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -58,7 +59,13 @@ app.use("*", async (c, next) => {
 });
 
 app.get("/api/health", (c) =>
-  c.json({ ok: true, service: "shopad-api", ts: new Date().toISOString() }),
+  c.json({
+    ok: true,
+    service: "shopad-api",
+    redis: isRedisEnabled(c.env) ? "on" : "off",
+    redis_flag: String(c.env.REDIS_ENABLED ?? ""),
+    ts: new Date().toISOString(),
+  }),
 );
 
 // 公开查单：无需员工 Token（须挂在鉴权 /api 之前）

@@ -133,6 +133,55 @@ async function updateProfileCompat(
   return { error: basic.error.message };
 }
 
+async function loadAuthUsersById(
+  supabase: ServiceClient,
+  profileIds: string[],
+): Promise<Map<string, { email: string | null; user_metadata: unknown }>> {
+  const result = new Map<
+    string,
+    { email: string | null; user_metadata: unknown }
+  >();
+  if (profileIds.length === 0) return result;
+
+  const wanted = new Set(profileIds);
+  // listUsers 一次拉一页，避免对每个 profile 调 getUserById（N+1）
+  const perPage = 200;
+  for (let page = 1; page <= 50; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage,
+    });
+    if (error) throw new Error(error.message);
+    const users = data.users ?? [];
+    for (const user of users) {
+      if (!wanted.has(user.id)) continue;
+      result.set(user.id, {
+        email: user.email ?? null,
+        user_metadata: user.user_metadata,
+      });
+      wanted.delete(user.id);
+    }
+    if (users.length < perPage || wanted.size === 0) break;
+  }
+
+  // 未出现在 listUsers 中的（极少）：单独补齐
+  if (wanted.size > 0) {
+    await Promise.all(
+      [...wanted].map(async (id) => {
+        const { data } = await supabase.auth.admin.getUserById(id);
+        if (data.user) {
+          result.set(id, {
+            email: data.user.email ?? null,
+            user_metadata: data.user.user_metadata,
+          });
+        }
+      }),
+    );
+  }
+
+  return result;
+}
+
 async function loadProfilesWithEmail(
   supabase: ServiceClient,
 ): Promise<Profile[]> {
@@ -160,21 +209,25 @@ async function loadProfilesWithEmail(
     list = full.data ?? [];
   }
 
-  const result: Profile[] = [];
+  const authById = await loadAuthUsersById(
+    supabase,
+    list.map((row) => row.id),
+  );
 
+  const result: Profile[] = [];
   for (const row of list) {
     const role = normalizeUserRole(row.role);
     if (!role) continue;
-    const { data: userData } = await supabase.auth.admin.getUserById(row.id);
+    const auth = authById.get(row.id);
     result.push({
       id: row.id,
-      email: userData.user?.email ?? null,
+      email: auth?.email ?? null,
       role,
       display_name: row.display_name,
       is_active: row.is_active !== false,
       created_by: row.created_by ?? null,
       created_at: row.created_at,
-      region_ids: parseRegionIdsFromMetadata(userData.user?.user_metadata),
+      region_ids: parseRegionIdsFromMetadata(auth?.user_metadata),
     });
   }
 
@@ -304,6 +357,7 @@ employeesRoutes.post("/", async (c) => {
       created.user.id,
       regionIds,
       c.get("userId"),
+      c.env,
     );
     if (!synced.ok) {
       await supabase.auth.admin.deleteUser(created.user.id);
@@ -417,11 +471,18 @@ employeesRoutes.patch("/:id", async (c) => {
       id,
       toSync,
       c.get("userId"),
+      c.env,
     );
     if (!synced.ok) return c.json({ error: synced.error }, 400);
     savedRegionIds = toSync;
   } else if (nextRole === "super_admin") {
-    const synced = await syncProfileRegions(supabase, id, [], c.get("userId"));
+    const synced = await syncProfileRegions(
+      supabase,
+      id,
+      [],
+      c.get("userId"),
+      c.env,
+    );
     if (!synced.ok) return c.json({ error: synced.error }, 400);
     savedRegionIds = [];
   } else {

@@ -16,6 +16,7 @@
     "@jsquash/webp": "^1.5.0",
     "@shopad/shared": "workspace:*",
     "@supabase/supabase-js": "^2.49.1",
+    "@upstash/redis": "^1.38.3",
     "hono": "^4.7.5"
   },
   "devDependencies": {

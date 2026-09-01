@@ -22,7 +22,7 @@ import {
   PlusOutlined,
   DeleteOutlined,
 } from "@ant-design/icons";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   type AddressLibrary,
   type Currency,
@@ -32,6 +32,7 @@ import {
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import { INPUT_LIMITS } from "../lib/inputLimits";
+import { productsListPath } from "../lib/productsPaths";
 import { useAuth } from "../auth/AuthContext";
 import { ProductPackageSettings } from "../components/ProductPackageSettings";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
@@ -99,6 +100,7 @@ export function ProductFormPage() {
   const { id } = useParams<{ id: string }>();
   const isEdit = Boolean(id);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isSuperAdmin, profile } = useAuth();
   const [form] = Form.useForm<FormValues>();
   const [copyForm] = Form.useForm<{ link_suffix: string }>();
@@ -123,6 +125,10 @@ export function ProductFormPage() {
   const [owners, setOwners] = useState<Profile[]>([]);
   const [ownersLoading, setOwnersLoading] = useState(false);
   const packagesEnabled = Form.useWatch("packages_enabled", form) ?? false;
+  const watchedRegionId = Form.useWatch("region_id", form) as
+    | string
+    | null
+    | undefined;
   const watchedCurrencyId = Form.useWatch("currency_id", form) as
     | string
     | null
@@ -133,6 +139,11 @@ export function ProductFormPage() {
     currencies.find((c) => c.id === watchedCurrencyId) ??
     product?.currency ??
     null;
+  const listRegionId =
+    watchedRegionId || product?.region_id || searchParams.get("region_id");
+  const goToProductsList = (regionId?: string | null) => {
+    navigate(productsListPath(regionId ?? listRegionId));
+  };
 
   useEffect(() => {
     if ((!packagesEnabled || !canEditPackages) && activeTab === "packages") {
@@ -149,6 +160,12 @@ export function ProductFormPage() {
           "/api/address-libraries",
         );
         if (!cancelled) setRegions(res.data);
+        if (!cancelled && !id) {
+          const fromUrl = searchParams.get("region_id");
+          if (fromUrl && res.data.some((r) => r.id === fromUrl)) {
+            form.setFieldValue("region_id", fromUrl);
+          }
+        }
       } catch (e) {
         if (!cancelled) {
           message.error(e instanceof Error ? e.message : "加载地区失败");
@@ -160,7 +177,7 @@ export function ProductFormPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [form, id, searchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -467,7 +484,7 @@ export function ProductFormPage() {
         });
       }
       if (opts?.afterSave === "list") {
-        navigate("/products");
+        navigate(productsListPath(payload.region_id));
         return updated;
       }
       setProduct(updated);
@@ -490,7 +507,7 @@ export function ProductFormPage() {
       body: JSON.stringify(payload),
     });
     if (opts?.afterSave === "list") {
-      navigate("/products");
+      navigate(productsListPath(payload.region_id));
       return created;
     }
     navigate(`/products/${created.id}/edit`, { replace: true });
@@ -867,7 +884,7 @@ export function ProductFormPage() {
       </Form.Item>
       <Form.Item
         label="商品描述条目"
-        extra={`落地页「Yang Anda Dapatkan」卖点列表，最多 ${MAX_DESCRIPTION_ENTRIES} 条`}
+        extra={`落地页卖点列表（印尼语 Yang Anda Dapatkan / 阿语 ما ستحصل عليه），最多 ${MAX_DESCRIPTION_ENTRIES} 条`}
       >
         <Form.List name="description_entries">
           {(fields, { add, remove }) => (
@@ -1066,7 +1083,7 @@ export function ProductFormPage() {
         <Button type="primary" htmlType="submit" loading={saving}>
           保存并上架
         </Button>
-        <Button onClick={() => navigate("/products")}>取消</Button>
+        <Button onClick={() => goToProductsList()}>取消</Button>
       </Space>
       {!canEditPackages ? (
         <div style={{ marginTop: 12, color: "#999", fontSize: 13 }}>
@@ -1087,7 +1104,7 @@ export function ProductFormPage() {
             </Button>
           ) : null}
           <Button>
-            <Link to="/products">返回列表</Link>
+            <Link to={productsListPath(listRegionId)}>返回列表</Link>
           </Button>
         </Space>
       </div>

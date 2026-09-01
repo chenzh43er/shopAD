@@ -49,6 +49,9 @@ const FULL_EXPORT_SELECT =
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+/** 带地区筛选时用 !inner，避免把地区展开成超大 product_id IN (...) */
+const ORDER_LIST_SELECT_REGION =
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
 function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
@@ -76,10 +79,12 @@ function parsePage(raw: string | undefined, fallback = 1): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
+const ORDER_LIST_MAX_PAGE_SIZE = 500;
+
 function parsePageSize(raw: string | undefined, fallback = 20): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.floor(n);
+  return Math.min(Math.floor(n), ORDER_LIST_MAX_PAGE_SIZE);
 }
 
 /** 解析批量订单号：支持逗号 / 空白 / 换行分隔 */
@@ -125,14 +130,16 @@ function parsePhones(raw: string | undefined): string[] {
   return result;
 }
 
-/** 手机号查询：精确 / 前缀 / 后缀，比单条 %…% 更易走索引 */
+/**
+ * 手机号查询：精确 + 前缀（可走 btree / text_pattern_ops）。
+ * 避免前导 % 后缀匹配导致全表扫描；入库应为国际号数字（不含 +）。
+ */
 function phoneLookupOrFilter(digitsList: string[]): string | null {
   const clauses: string[] = [];
   for (const digits of digitsList) {
     if (!digits) continue;
     clauses.push(`customer_phone.eq.${digits}`);
     clauses.push(`customer_phone.ilike.${digits}%`);
-    clauses.push(`customer_phone.ilike.%${digits}`);
   }
   return clauses.length > 0 ? clauses.join(",") : null;
 }
@@ -334,13 +341,18 @@ function intersectProductIds(
 }
 
 /**
- * 解析导出/列表用的商品 id 范围：所属人权限 × 弹窗所选商品 × 地区筛选。
+ * 解析导出/列表用的商品 id 范围：所属人权限 × 弹窗所选商品 ×（可选）地区筛选。
+ * @param opts.expandRegion 为 false 时不把地区展开成商品 id（列表请用 products!inner 过滤）
  * @returns `"empty"` 表示无匹配商品；`null` 表示不限制商品
  */
 async function resolveFilterProductIds(
   supabase: ServiceClient,
   c: AppContext,
-  opts: { productIds: string[]; regionId?: string },
+  opts: {
+    productIds: string[];
+    regionId?: string;
+    expandRegion?: boolean;
+  },
 ): Promise<string[] | null | "empty"> {
   let allowedProductIds: string[] | "all";
   try {
@@ -365,11 +377,12 @@ async function resolveFilterProductIds(
     filterProductIds = allowedProductIds;
   }
 
-  if (opts.regionId) {
+  if (opts.regionId && opts.expandRegion !== false) {
     const regionProductIds = await listProductIdsByRegion(
       supabase,
       c,
       opts.regionId,
+      allowedProductIds,
     );
     if (regionProductIds === "empty") return "empty";
     filterProductIds = intersectProductIds(filterProductIds, regionProductIds);
@@ -1154,7 +1167,8 @@ async function resolveStatusBeforeInvalidBatch(
     .in("entity_id", orderIds)
     .eq("action", "status_change")
     .eq("to_value", "cancelled")
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(Math.max(orderIds.length * 3, 50));
 
   if (error) {
     console.error("resolveStatusBeforeInvalidBatch failed:", error.message);
@@ -1214,7 +1228,8 @@ async function resolvePreviousStatusBatch(
     .eq("entity_type", "order")
     .in("entity_id", revertibleIds)
     .eq("action", "status_change")
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(Math.max(revertibleIds.length * 5, 100));
 
   if (error) {
     console.error("resolvePreviousStatusBatch failed:", error.message);
@@ -1304,17 +1319,20 @@ ordersRoutes.get("/", async (c) => {
   const productIds = parseCsvIds(c.req.query("product_ids"));
 
   const supabase = createServiceClient(c.env);
+  const listSelect = regionId ? ORDER_LIST_SELECT_REGION : ORDER_LIST_SELECT;
   let query = supabase
     .from("orders")
-    .select(ORDER_LIST_SELECT, { count: "estimated" })
+    .select(listSelect, { count: "estimated" })
     .order("created_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
   let filterProductIds: string[] | null | "empty";
   try {
+    // 地区不走超大 IN：下面用 products!inner + region_id 过滤
     filterProductIds = await resolveFilterProductIds(supabase, c, {
       productIds,
       regionId: regionId || undefined,
+      expandRegion: false,
     });
   } catch (e) {
     return c.json(
@@ -1326,7 +1344,23 @@ ordersRoutes.get("/", async (c) => {
     return c.json({ data: [], total: 0, page, pageSize });
   }
   if (filterProductIds) {
+    // PostgREST URL 过长保护：所属人商品过多时分批不现实，仍用 IN，但已去掉地区展开
+    if (filterProductIds.length > 800) {
+      return c.json(
+        {
+          error:
+            "可访问商品过多，请再选具体商品或收窄权限后再查询订单",
+        },
+        400,
+      );
+    }
     query = query.in("product_id", filterProductIds);
+  }
+
+  if (regionId === REGION_UNSET) {
+    query = query.is("product.region_id", null);
+  } else if (regionId) {
+    query = query.eq("product.region_id", regionId);
   }
 
   // 批量订单号 / 手机号 / 运单号匹配时，不按子状态收窄，便于跨 Tab 查出结果
@@ -1447,24 +1481,38 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
 
   let ownerMembers: string[] = [];
   if (isSuperAdmin(c)) {
-    const { data: rows, error: ownerError } = await supabase
-      .from("orders")
-      .select("owner_member")
-      .eq("payment_type", "cod")
-      .eq("status", status)
-      .not("owner_member", "is", null)
-      .neq("owner_member", "")
-      .limit(5000);
-    if (ownerError) return c.json({ error: ownerError.message }, 500);
-    ownerMembers = [
-      ...new Set(
-        (rows ?? [])
-          .map((r) =>
-            typeof r.owner_member === "string" ? r.owner_member.trim() : "",
-          )
-          .filter(Boolean),
-      ),
-    ].sort((a, b) => a.localeCompare(b, "zh-CN"));
+    // 去重下推到库端，避免拉 5000 行再在内存 Set
+    const { data: rows, error: ownerError } = await supabase.rpc(
+      "distinct_order_owner_members",
+      { p_status: status },
+    );
+    if (!ownerError && Array.isArray(rows)) {
+      ownerMembers = (rows as Array<{ owner_member: string }>)
+        .map((r) =>
+          typeof r.owner_member === "string" ? r.owner_member.trim() : "",
+        )
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b, "zh-CN"));
+    } else {
+      const { data: fallbackRows, error: fallbackError } = await supabase
+        .from("orders")
+        .select("owner_member")
+        .eq("payment_type", "cod")
+        .eq("status", status)
+        .not("owner_member", "is", null)
+        .neq("owner_member", "")
+        .limit(1000);
+      if (fallbackError) return c.json({ error: fallbackError.message }, 500);
+      ownerMembers = [
+        ...new Set(
+          (fallbackRows ?? [])
+            .map((r) =>
+              typeof r.owner_member === "string" ? r.owner_member.trim() : "",
+            )
+            .filter(Boolean),
+        ),
+      ].sort((a, b) => a.localeCompare(b, "zh-CN"));
+    }
   }
 
   return c.json({

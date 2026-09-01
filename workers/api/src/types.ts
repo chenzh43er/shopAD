@@ -7,6 +7,13 @@ export interface Env {
   /** Optional legacy JWT secret; auth now uses supabase.auth.getUser */
   SUPABASE_JWT_SECRET?: string;
   CORS_ORIGINS: string;
+  /**
+   * 可选 Redis（Upstash）。仅当为 "true" 且配置了 UPSTASH_* 时启用。
+   * 设为 "false" 或留空即回退内存缓存 / 直打 DB。
+   */
+  REDIS_ENABLED?: string;
+  UPSTASH_REDIS_REST_URL?: string;
+  UPSTASH_REDIS_REST_TOKEN?: string;
 }
 
 export type Variables = {

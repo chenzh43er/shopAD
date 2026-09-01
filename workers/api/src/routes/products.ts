@@ -6,7 +6,6 @@ import type {
 } from "@shopad/shared";
 import { PRODUCT_STATUSES, normalizeUserRole } from "@shopad/shared";
 import {
-  attachActors,
   attachActorsOne,
   listAuditLogs,
   writeAuditLog,
@@ -15,7 +14,6 @@ import { buildFieldDiffs, summarizeFieldDiffs } from "../lib/auditDiff";
 import {
   assertProductAccess,
   assertRegionAccess,
-  attachProductOwners,
   attachProductOwnersOne,
   isSuperAdmin,
   listAllowedRegionIds,
@@ -33,7 +31,7 @@ function parsePage(raw: string | undefined, fallback = 1): number {
 function parsePageSize(raw: string | undefined, fallback = 20): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), 100);
+  return Math.min(Math.floor(n), 200);
 }
 
 function isProductStatus(value: unknown): value is ProductStatus {
@@ -134,6 +132,13 @@ function actorFrom(c: { get: (k: keyof Variables) => string }) {
 
 const PRODUCT_SELECT =
   "*, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix), domain:domains!products_domain_id_fkey(id, host, name, remark)";
+
+/** 列表页：排除 description / gallery / detail / extra_html 等大字段 */
+const PRODUCT_LIST_SELECT =
+  "id, name, price, currency_id, domain_id, cover_url, status, link_suffix, title_external, facebook_pixel_id, google_conversion_id, google_label, sku_code, sku_display, packages_enabled, sales_count, weight, region_id, created_by, updated_by, created_at, updated_at, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix), domain:domains!products_domain_id_fkey(id, host, name, remark)";
+
+/** 下拉/筛选项：仅 id + name */
+const PRODUCT_OPTIONS_SELECT = "id, name";
 
 type ProductAppContext = import("hono").Context<{
   Bindings: import("../types").Env;
@@ -373,24 +378,6 @@ async function withProductExtras(
     : withOwners;
 }
 
-async function withProductExtrasList(
-  supabase: ReturnType<typeof createServiceClient>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  rows: any[],
-) {
-  const withActors = await attachActors(supabase, rows, [
-    "created_by",
-    "updated_by",
-  ]);
-  const withOwners = await attachProductOwners(
-    supabase,
-    withActors as Array<Record<string, unknown> & { id: string }>,
-  );
-  return withOwners.map((row) =>
-    coerceProductListFields(row as Record<string, unknown>),
-  );
-}
-
 export const productsRoutes = new Hono<{
   Bindings: Env;
   Variables: Variables;
@@ -402,12 +389,21 @@ productsRoutes.get("/", async (c) => {
   const q = c.req.query("q")?.trim();
   const status = c.req.query("status");
   const regionId = c.req.query("region_id")?.trim();
+  const fields = (c.req.query("fields") ?? "list").trim().toLowerCase();
+  const optionsOnly = fields === "options";
+  const selectCols = optionsOnly
+    ? PRODUCT_OPTIONS_SELECT
+    : fields === "full"
+      ? PRODUCT_SELECT
+      : PRODUCT_LIST_SELECT;
 
   const supabase = createServiceClient(c.env);
   // status 字母序降序：on_sale → off_sale → draft，已上架优先
+  // select 列按 fields 动态切换；as any 避开 supabase-js 对长 embed 字符串的 ParserError
   let query = supabase
     .from("products")
-    .select(PRODUCT_SELECT, { count: "exact" })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .select(selectCols as any, { count: "estimated" })
     .order("status", { ascending: false })
     .order("updated_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
@@ -459,8 +455,30 @@ productsRoutes.get("/", async (c) => {
     return c.json({ error: error.message }, 500);
   }
 
+  if (optionsOnly) {
+    return c.json({
+      data: data ?? [],
+      total: count ?? 0,
+      page,
+      pageSize,
+    });
+  }
+
+  // 列表默认不二次补全 actors/owners（详情接口仍会附带）
+  const listRows =
+    (data as unknown as Record<string, unknown>[] | null) ?? [];
+  const rows = listRows.map((row) =>
+    coerceProductListFields({
+      ...row,
+      extra_html: [],
+      description_entries: [],
+      gallery_urls: [],
+      detail_image_urls: [],
+    }),
+  );
+
   return c.json({
-    data: await withProductExtrasList(supabase, data ?? []),
+    data: rows,
     total: count ?? 0,
     page,
     pageSize,
@@ -637,6 +655,7 @@ productsRoutes.post("/:id/copy", async (c) => {
     created.id,
     ownerIds,
     actor.id,
+    c.env,
   );
   if (!synced.ok) {
     return c.json({ error: synced.error }, 500);
@@ -903,7 +922,13 @@ productsRoutes.post("/", async (c) => {
     return c.json({ error: error.message }, 500);
   }
 
-  const synced = await syncProductOwners(supabase, data.id, ownerIds, actor.id);
+  const synced = await syncProductOwners(
+    supabase,
+    data.id,
+    ownerIds,
+    actor.id,
+    c.env,
+  );
   if (!synced.ok) {
     return c.json({ error: synced.error }, 500);
   }
@@ -1212,6 +1237,7 @@ productsRoutes.put("/:id", async (c) => {
       id,
       pendingOwnerIds,
       actor.id,
+      c.env,
     );
     if (!synced.ok) {
       return c.json({ error: synced.error }, 500);

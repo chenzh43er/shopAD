@@ -1,4 +1,7 @@
-/** Isolate 内简易限流（多 isolate 不共享；仍能挡住单节点暴力扫库） */
+import type { Env } from "../types";
+import { RedisKeys, redisIncrWindow } from "./redis";
+
+/** Isolate 内简易限流；Redis 开启时跨 isolate 共享 */
 
 type Bucket = { count: number; resetAt: number };
 
@@ -9,7 +12,7 @@ export type RateLimitResult =
   | { ok: true; remaining: number; resetAt: number }
   | { ok: false; remaining: 0; resetAt: number; retryAfterSec: number };
 
-export function rateLimit(
+function rateLimitMemory(
   key: string,
   limit: number,
   windowMs: number,
@@ -20,7 +23,6 @@ export function rateLimit(
   if (!bucket || bucket.resetAt <= now) {
     bucket = { count: 0, resetAt: now + windowMs };
     if (buckets.size >= MAX_KEYS) {
-      // 简单淘汰：删掉已过期或最早一条，避免 Map 无限涨
       for (const [k, v] of buckets) {
         if (v.resetAt <= now) buckets.delete(k);
         if (buckets.size < MAX_KEYS) break;
@@ -47,6 +49,36 @@ export function rateLimit(
     ok: true,
     remaining: Math.max(0, limit - bucket.count),
     resetAt: bucket.resetAt,
+  };
+}
+
+export async function rateLimit(
+  env: Env,
+  key: string,
+  limit: number,
+  windowMs: number,
+): Promise<RateLimitResult> {
+  const redisKey = RedisKeys.rateLimit(key);
+  const remote = await redisIncrWindow(env, redisKey, windowMs);
+  if (!remote) {
+    return rateLimitMemory(key, limit, windowMs);
+  }
+
+  const now = Date.now();
+  const resetAt = now + Math.max(1, remote.ttlMs);
+  if (remote.count > limit) {
+    return {
+      ok: false,
+      remaining: 0,
+      resetAt,
+      retryAfterSec: Math.max(1, Math.ceil(remote.ttlMs / 1000)),
+    };
+  }
+
+  return {
+    ok: true,
+    remaining: Math.max(0, limit - remote.count),
+    resetAt,
   };
 }
 

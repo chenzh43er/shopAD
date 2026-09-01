@@ -47,6 +47,7 @@ import { INPUT_LIMITS } from "../lib/inputLimits";
 import { formatActor } from "../components/AuditLogPanel";
 import { OrderEditModal } from "../components/OrderEditModal";
 import { setOrdersListFrom } from "../lib/listNav";
+import { pickDefaultRegionId } from "../lib/defaultRegion";
 import { useAuth } from "../auth/AuthContext";
 import dayjs from "dayjs";
 
@@ -387,12 +388,19 @@ export function OrdersPage() {
   }, [activeCodTab]);
 
   const load = useCallback(async () => {
+    // 必须先选定地区再拉列表（默认 ID / 无权限则其他）
+    if (!regionId) {
+      setData([]);
+      setTotal(0);
+      return;
+    }
     setLoading(true);
     try {
       const params = new URLSearchParams({
         page: String(page),
         pageSize: String(pageSize),
         payment_type: filters.paymentType,
+        region_id: regionId,
       });
 
       // 批量查询仍沿用当前 Tab 的 status / review_status，不跳转到全部订单
@@ -419,9 +427,6 @@ export function OrdersPage() {
       if (dateRange?.[0] && dateRange?.[1]) {
         params.set("date_from", dateRange[0].startOf("day").toISOString());
         params.set("date_to", dateRange[1].endOf("day").toISOString());
-      }
-      if (regionId) {
-        params.set("region_id", regionId);
       }
       if (productIds.length > 0) {
         params.set("product_ids", productIds.join(","));
@@ -551,7 +556,13 @@ export function OrdersPage() {
         const res = await apiFetch<{ data: AddressLibrary[] }>(
           "/api/address-libraries",
         );
-        if (!cancelled) setRegions(res.data);
+        if (cancelled) return;
+        const list = res.data ?? [];
+        setRegions(list);
+        setRegionId((prev) => {
+          if (prev && list.some((r) => r.id === prev)) return prev;
+          return pickDefaultRegionId(list);
+        });
       } catch (e) {
         if (!cancelled) {
           message.error(e instanceof Error ? e.message : "加载地区失败");
@@ -565,17 +576,23 @@ export function OrdersPage() {
     };
   }, []);
 
-  /** 商品筛选项：有权限的商品；选了地区时按地区收窄 */
+  /** 商品筛选项：有权限的商品；按当前地区收窄 */
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (!regionId) {
+        setFilterProducts([]);
+        setFilterProductsLoading(false);
+        return;
+      }
       setFilterProductsLoading(true);
       try {
         const params = new URLSearchParams({
           page: "1",
-          pageSize: "500",
+          pageSize: "200",
+          fields: "options",
+          region_id: regionId,
         });
-        if (regionId) params.set("region_id", regionId);
         const res = await apiFetch<Paginated<{ id: string; name: string }>>(
           `/api/products?${params.toString()}`,
         );
@@ -644,7 +661,7 @@ export function OrdersPage() {
     setBatchShippingDraft("");
     setBatchOrderNos(nos);
     setPage(1);
-    setPageSize(Math.max(nos.length, 20));
+    setPageSize(Math.min(Math.max(nos.length, 20), 500));
     setBatchModalOpen(false);
   };
 
@@ -671,7 +688,7 @@ export function OrdersPage() {
     setBatchShippingDraft("");
     setBatchPhones(phones);
     setPage(1);
-    setPageSize(Math.max(phones.length, 20));
+    setPageSize(Math.min(Math.max(phones.length, 20), 500));
     setBatchPhoneModalOpen(false);
   };
 
@@ -698,7 +715,7 @@ export function OrdersPage() {
     setBatchPhoneDraft("");
     setBatchShippingOrderNos(nos);
     setPage(1);
-    setPageSize(Math.max(nos.length, 20));
+    setPageSize(Math.min(Math.max(nos.length, 20), 500));
     setBatchShippingModalOpen(false);
   };
 
@@ -1620,10 +1637,9 @@ export function OrdersPage() {
         </div>
         <Space wrap>
           <Select
-            allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="全部地区"
+            placeholder="地区"
             loading={regionsLoading}
             style={{ width: 200 }}
             value={regionId}
@@ -2412,11 +2428,11 @@ export function OrdersPage() {
           pageSize,
           total,
           showSizeChanger: true,
-          pageSizeOptions: ["10", "20", "50", "100", "500"],
+          pageSizeOptions: ["10", "20", "50", "100", "200", "500"],
           showTotal: (n) => `共 ${n} 条`,
           onChange: (p, ps) => {
             setPage(p);
-            setPageSize(ps);
+            setPageSize(Math.min(ps, 500));
           },
         }}
       />

@@ -6,37 +6,120 @@ import { isSuperAdmin as checkSuper } from "@shopad/shared";
 
 import type { Env, Variables } from "../types";
 
+import {
+  RedisKeys,
+  cacheDel,
+  cacheGetJson,
+  cacheSetJson,
+} from "./redis";
 import { createServiceClient } from "./supabase";
-
-
 
 type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
-/** Worker isolate 内短时缓存，减轻员工列表重复的 Auth / 权限查询 */
+/** Worker isolate 内短时缓存；Redis 开启时跨 isolate 共享 */
 const SCOPE_CACHE_TTL_MS = 60_000;
+const SCOPE_CACHE_TTL_SEC = 60;
 
 type ScopeCacheEntry<T> = { value: T; expiresAt: number };
+type ScopeValue = string[] | "all";
 
-const regionIdsCache = new Map<string, ScopeCacheEntry<string[] | "all">>();
-const accessibleProductsCache = new Map<string, ScopeCacheEntry<string[] | "all">>();
+const regionIdsCache = new Map<string, ScopeCacheEntry<ScopeValue>>();
+const accessibleProductsCache = new Map<string, ScopeCacheEntry<ScopeValue>>();
 
-function readScopeCache<T>(
-  cache: Map<string, ScopeCacheEntry<T>>,
+function readScopeCacheMemory(
+  cache: Map<string, ScopeCacheEntry<ScopeValue>>,
   key: string,
-): T | null {
+): ScopeValue | null {
   const hit = cache.get(key);
   if (!hit || hit.expiresAt <= Date.now()) return null;
   return hit.value;
 }
 
-function writeScopeCache<T>(
-  cache: Map<string, ScopeCacheEntry<T>>,
+function writeScopeCacheMemory(
+  cache: Map<string, ScopeCacheEntry<ScopeValue>>,
   key: string,
-  value: T,
+  value: ScopeValue,
 ): void {
   cache.set(key, { value, expiresAt: Date.now() + SCOPE_CACHE_TTL_MS });
+}
+
+async function readRegionScope(
+  env: Env,
+  userId: string,
+): Promise<ScopeValue | null> {
+  const mem = readScopeCacheMemory(regionIdsCache, userId);
+  if (mem !== null) return mem;
+  const remote = await cacheGetJson<ScopeValue>(
+    env,
+    RedisKeys.scopeRegions(userId),
+  );
+  if (remote === null) return null;
+  writeScopeCacheMemory(regionIdsCache, userId, remote);
+  return remote;
+}
+
+async function writeRegionScope(
+  env: Env,
+  userId: string,
+  value: ScopeValue,
+): Promise<void> {
+  writeScopeCacheMemory(regionIdsCache, userId, value);
+  await cacheSetJson(
+    env,
+    RedisKeys.scopeRegions(userId),
+    value,
+    SCOPE_CACHE_TTL_SEC,
+  );
+}
+
+async function readProductScope(
+  env: Env,
+  userId: string,
+): Promise<ScopeValue | null> {
+  const mem = readScopeCacheMemory(accessibleProductsCache, userId);
+  if (mem !== null) return mem;
+  const remote = await cacheGetJson<ScopeValue>(
+    env,
+    RedisKeys.scopeProducts(userId),
+  );
+  if (remote === null) return null;
+  writeScopeCacheMemory(accessibleProductsCache, userId, remote);
+  return remote;
+}
+
+async function writeProductScope(
+  env: Env,
+  userId: string,
+  value: ScopeValue,
+): Promise<void> {
+  writeScopeCacheMemory(accessibleProductsCache, userId, value);
+  await cacheSetJson(
+    env,
+    RedisKeys.scopeProducts(userId),
+    value,
+    SCOPE_CACHE_TTL_SEC,
+  );
+}
+
+/** 权限变更后主动失效（内存 + Redis） */
+export async function invalidateUserScopeCache(
+  env: Env,
+  ...userIds: string[]
+): Promise<void> {
+  const unique = [...new Set(userIds.filter(Boolean))];
+  if (unique.length === 0) return;
+  const keys: string[] = [];
+  for (const userId of unique) {
+    regionIdsCache.delete(userId);
+    accessibleProductsCache.delete(userId);
+    keys.push(
+      RedisKeys.scopeRegions(userId),
+      RedisKeys.scopeProducts(userId),
+    );
+  }
+  await cacheDel(env, ...keys);
 }
 
 export function parseRegionIdsFromMetadata(meta: unknown): string[] {
@@ -83,7 +166,7 @@ export async function listAllowedRegionIds(
   if (isSuperAdmin(c)) return "all";
 
   const userId = c.get("userId");
-  const cached = readScopeCache(regionIdsCache, userId);
+  const cached = await readRegionScope(c.env, userId);
   if (cached !== null) return cached;
 
   const { data, error } = await supabase.auth.admin.getUserById(userId);
@@ -91,7 +174,7 @@ export async function listAllowedRegionIds(
   if (error) throw new Error(error.message);
 
   const regions = parseRegionIdsFromMetadata(data.user?.user_metadata);
-  writeScopeCache(regionIdsCache, userId, regions);
+  await writeRegionScope(c.env, userId, regions);
   return regions;
 
 }
@@ -182,7 +265,7 @@ export async function listAccessibleProductIds(
 
   const userId = c.get("userId");
 
-  const cached = readScopeCache(accessibleProductsCache, userId);
+  const cached = await readProductScope(c.env, userId);
 
   if (cached !== null) return cached;
 
@@ -200,7 +283,7 @@ export async function listAccessibleProductIds(
 
   if (allowedRegions === "all") {
 
-    writeScopeCache(accessibleProductsCache, userId, owned);
+    await writeProductScope(c.env, userId, owned);
 
     return owned;
 
@@ -208,7 +291,7 @@ export async function listAccessibleProductIds(
 
   if (allowedRegions.length === 0) {
 
-    writeScopeCache(accessibleProductsCache, userId, []);
+    await writeProductScope(c.env, userId, []);
 
     return [];
 
@@ -216,7 +299,7 @@ export async function listAccessibleProductIds(
 
   if (owned === "all") {
 
-    writeScopeCache(accessibleProductsCache, userId, "all");
+    await writeProductScope(c.env, userId, "all");
 
     return "all";
 
@@ -224,7 +307,7 @@ export async function listAccessibleProductIds(
 
   if (owned.length === 0) {
 
-    writeScopeCache(accessibleProductsCache, userId, []);
+    await writeProductScope(c.env, userId, []);
 
     return [];
 
@@ -252,7 +335,7 @@ export async function listAccessibleProductIds(
 
   ];
 
-  writeScopeCache(accessibleProductsCache, userId, accessible);
+  await writeProductScope(c.env, userId, accessible);
 
   return accessible;
 
@@ -662,9 +745,19 @@ export async function syncProductOwners(
 
   actorId: string,
 
+  env?: Env,
+
 ): Promise<{ ok: true } | { ok: false; error: string }> {
 
   const unique = [...new Set(ownerIds.filter(Boolean))];
+
+  const { data: previousOwners } = await supabase
+
+    .from("product_owners")
+
+    .select("profile_id")
+
+    .eq("product_id", productId);
 
   const { error: delErr } = await supabase
 
@@ -678,25 +771,32 @@ export async function syncProductOwners(
 
 
 
-  if (unique.length === 0) return { ok: true };
+  if (unique.length > 0) {
 
+    const { error: insErr } = await supabase.from("product_owners").insert(
 
+      unique.map((profile_id) => ({
 
-  const { error: insErr } = await supabase.from("product_owners").insert(
+        product_id: productId,
 
-    unique.map((profile_id) => ({
+        profile_id,
 
-      product_id: productId,
+        created_by: actorId,
 
-      profile_id,
+      })),
 
-      created_by: actorId,
+    );
 
-    })),
+    if (insErr) return { ok: false, error: insErr.message };
+  }
 
-  );
-
-  if (insErr) return { ok: false, error: insErr.message };
+  if (env) {
+    const affected = [
+      ...unique,
+      ...((previousOwners ?? []).map((row) => row.profile_id as string)),
+    ];
+    await invalidateUserScopeCache(env, ...affected);
+  }
 
   return { ok: true };
 
@@ -712,10 +812,34 @@ export async function loadProfileRegionIds(
   const result = new Map<string, string[]>();
   if (profileIds.length === 0) return result;
 
-  for (const profileId of profileIds) {
-    const { data, error } = await supabase.auth.admin.getUserById(profileId);
+  const wanted = new Set(profileIds);
+  const perPage = 200;
+  for (let page = 1; page <= 50; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage,
+    });
     if (error) throw new Error(error.message);
-    result.set(profileId, parseRegionIdsFromMetadata(data.user?.user_metadata));
+    const users = data.users ?? [];
+    for (const user of users) {
+      if (!wanted.has(user.id)) continue;
+      result.set(user.id, parseRegionIdsFromMetadata(user.user_metadata));
+      wanted.delete(user.id);
+    }
+    if (users.length < perPage || wanted.size === 0) break;
+  }
+
+  if (wanted.size > 0) {
+    await Promise.all(
+      [...wanted].map(async (profileId) => {
+        const { data, error } = await supabase.auth.admin.getUserById(profileId);
+        if (error) throw new Error(error.message);
+        result.set(
+          profileId,
+          parseRegionIdsFromMetadata(data.user?.user_metadata),
+        );
+      }),
+    );
   }
 
   return result;
@@ -727,6 +851,7 @@ export async function syncProfileRegions(
   profileId: string,
   regionIds: string[],
   _actorId: string,
+  env?: Env,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const unique = [...new Set(regionIds.filter(Boolean))];
 
@@ -761,6 +886,9 @@ export async function syncProfileRegions(
     },
   );
   if (updErr) return { ok: false, error: updErr.message };
+  if (env) {
+    await invalidateUserScopeCache(env, profileId);
+  }
   return { ok: true };
 }
 

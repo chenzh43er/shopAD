@@ -26,9 +26,10 @@ function phoneSearchDigits(raw: string): string {
   return n.replace(/^0+/, "");
 }
 
-function enforcePublicRateLimit(c: AppContext) {
+async function enforcePublicRateLimit(c: AppContext) {
   const ip = clientIp(c);
-  const result = rateLimit(
+  const result = await rateLimit(
+    c.env,
     `public-orders:${ip}`,
     PUBLIC_RATE_LIMIT,
     PUBLIC_RATE_WINDOW_MS,
@@ -47,7 +48,7 @@ function enforcePublicRateLimit(c: AppContext) {
 export function registerPublicOrderRoutes(app: App) {
   /** GET /api/orders/by-order-no?order_no= */
   app.get("/api/orders/by-order-no", async (c) => {
-    const limited = enforcePublicRateLimit(c);
+    const limited = await enforcePublicRateLimit(c);
     if (limited) return limited;
 
     const orderNo =
@@ -79,7 +80,7 @@ export function registerPublicOrderRoutes(app: App) {
 
   /** GET /api/orders/by-phone?phone= — 仅返回该手机号最近一单 */
   app.get("/api/orders/by-phone", async (c) => {
-    const limited = enforcePublicRateLimit(c);
+    const limited = await enforcePublicRateLimit(c);
     if (limited) return limited;
 
     const phone = phoneSearchDigits(
@@ -93,11 +94,11 @@ export function registerPublicOrderRoutes(app: App) {
     }
 
     const supabase = createServiceClient(c.env);
-    // 后缀匹配（兼容本地号/国际号前缀差异），禁止中间子串扫库
+    // 精确 + 前缀（可走索引）；避免前导 % 全表扫描
     const { data: rows, error } = await supabase
       .from("orders")
       .select(PUBLIC_ORDER_SELECT)
-      .ilike("customer_phone", `%${phone}`)
+      .or(`customer_phone.eq.${phone},customer_phone.ilike.${phone}%`)
       .order("updated_at", { ascending: false })
       .limit(1);
 

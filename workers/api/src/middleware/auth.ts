@@ -1,5 +1,11 @@
 import { createMiddleware } from "hono/factory";
 import { normalizeUserRole, type UserRole } from "@shopad/shared";
+import {
+  RedisKeys,
+  cacheGetJson,
+  cacheSetJson,
+  sha256Hex,
+} from "../lib/redis";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -18,12 +24,13 @@ type CachedAuth = {
   expiresAt: number;
 };
 
-/** Isolate 内短缓存，降低同一用户连续请求的 auth.getUser + profiles 往返 */
+/** Isolate 内短缓存；Redis 开启时跨 isolate 共享（JWT 仅存 hash） */
 const AUTH_CACHE_TTL_MS = 30_000;
+const AUTH_CACHE_TTL_SEC = 30;
 const AUTH_CACHE_MAX = 200;
 const authCache = new Map<string, CachedAuth>();
 
-function getCachedAuth(token: string): CachedAuth | null {
+function getCachedAuthMemory(token: string): CachedAuth | null {
   const hit = authCache.get(token);
   if (!hit) return null;
   if (hit.expiresAt <= Date.now()) {
@@ -33,12 +40,49 @@ function getCachedAuth(token: string): CachedAuth | null {
   return hit;
 }
 
-function setCachedAuth(token: string, value: Omit<CachedAuth, "expiresAt">) {
+function setCachedAuthMemory(
+  token: string,
+  value: Omit<CachedAuth, "expiresAt">,
+) {
   if (authCache.size >= AUTH_CACHE_MAX) {
     const oldest = authCache.keys().next().value;
     if (oldest) authCache.delete(oldest);
   }
   authCache.set(token, { ...value, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+}
+
+async function getCachedAuth(
+  env: Env,
+  token: string,
+): Promise<Omit<CachedAuth, "expiresAt"> | null> {
+  const mem = getCachedAuthMemory(token);
+  if (mem) {
+    return {
+      userId: mem.userId,
+      userEmail: mem.userEmail,
+      userName: mem.userName,
+      userRole: mem.userRole,
+    };
+  }
+
+  const tokenHash = await sha256Hex(token);
+  const remote = await cacheGetJson<Omit<CachedAuth, "expiresAt">>(
+    env,
+    RedisKeys.auth(tokenHash),
+  );
+  if (!remote) return null;
+  setCachedAuthMemory(token, remote);
+  return remote;
+}
+
+async function setCachedAuth(
+  env: Env,
+  token: string,
+  value: Omit<CachedAuth, "expiresAt">,
+) {
+  setCachedAuthMemory(token, value);
+  const tokenHash = await sha256Hex(token);
+  await cacheSetJson(env, RedisKeys.auth(tokenHash), value, AUTH_CACHE_TTL_SEC);
 }
 
 /** Authenticated staff: super_admin or employee */
@@ -52,7 +96,7 @@ export const requireStaff = createMiddleware<{
   }
 
   const token = header.slice(7);
-  const cached = getCachedAuth(token);
+  const cached = await getCachedAuth(c.env, token);
   if (cached) {
     c.set("userId", cached.userId);
     c.set("userEmail", cached.userEmail);
@@ -134,7 +178,7 @@ export const requireStaff = createMiddleware<{
   c.set("userName", userName);
   c.set("userRole", userRole);
 
-  setCachedAuth(token, {
+  await setCachedAuth(c.env, token, {
     userId: user.id,
     userEmail,
     userName,
