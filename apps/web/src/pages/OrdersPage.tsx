@@ -1142,7 +1142,6 @@ export function OrdersPage() {
   const openExportModal = async (
     kind: "finance" | "logistics" | "orders",
   ) => {
-    if (kind === "finance" && !isShippedTab) return;
     if (kind === "logistics" && !exportOrderStatus) return;
     if (kind === "orders" && !isAllTab) return;
 
@@ -1154,11 +1153,12 @@ export function OrdersPage() {
     try {
       const status =
         kind === "finance"
-          ? "cod_shipped"
+          ? (filters.status ?? "")
           : kind === "logistics"
             ? (exportOrderStatus ?? "cod_shipped")
             : "cod_shipped";
-      const metaParams = new URLSearchParams({ status });
+      const metaParams = new URLSearchParams();
+      if (status) metaParams.set("status", status);
       if (regionId) metaParams.set("region_id", regionId);
       const res = await apiFetch<{
         products: Array<{ id: string; name: string }>;
@@ -1216,6 +1216,8 @@ export function OrdersPage() {
       }
 
       if (exportKind === "finance") {
+        if (filters.status) payload.status = filters.status;
+        if (filters.reviewStatus) payload.review_status = filters.reviewStatus;
         const res = await apiFetch<{
           data: FinanceExportRow[];
           total: number;
@@ -1225,7 +1227,7 @@ export function OrdersPage() {
           body: JSON.stringify(payload),
         });
         if (!res.data.length) {
-          message.warning("没有符合条件的已发货订单");
+          message.warning("没有符合条件的订单");
           return;
         }
         const { buildFinanceExcel, financeExportFilename } = await import(
@@ -1818,6 +1820,12 @@ export function OrdersPage() {
           </Tag>
         ) : null}
         <Button onClick={() => void load()}>刷新</Button>
+        <Button
+          icon={<DownloadOutlined />}
+          onClick={() => void openExportModal("finance")}
+        >
+          导出财务 Excel
+        </Button>
         {isSuperAdmin ? (
           <Button
             danger
@@ -1928,12 +1936,6 @@ export function OrdersPage() {
             >
               批量拒绝签收
               {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
-            </Button>
-            <Button
-              icon={<DownloadOutlined />}
-              onClick={() => void openExportModal("finance")}
-            >
-              导出财务 Excel
             </Button>
             <Button
               icon={<DownloadOutlined />}
@@ -2317,7 +2319,7 @@ export function OrdersPage() {
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
           {exportKind === "finance"
-            ? "按当前列表筛选条件导出已发货订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
+            ? "按当前列表筛选条件导出订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
             : exportKind === "logistics"
               ? "按当前列表筛选条件导出，对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。可再按商品收窄。"
               : "按当前列表筛选条件导出 COD 订单；勾选需要导出的数据列，未勾选的列不会出现在 Excel 中。可再按商品收窄。"}

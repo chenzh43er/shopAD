@@ -9,6 +9,7 @@ import {
   ORDER_STATUSES,
   PAYMENT_TYPE_LABELS,
   REVIEW_STATUS_LABELS,
+  REVIEW_STATUSES,
   type OrderStatus,
   type PaymentType,
   type ReviewStatus,
@@ -1438,13 +1439,10 @@ ordersRoutes.get("/", async (c) => {
 
 /** 财务导出筛选项：有权限的商品 +（管理员）已出现的归属成员 */
 ordersRoutes.get("/finance-export/meta", async (c) => {
-  const statusRaw = c.req.query("status")?.trim();
-  const status =
-    statusRaw === "cod_shipped" ||
-    statusRaw === "cod_completed" ||
-    statusRaw === "awaiting_confirm"
-      ? statusRaw
-      : "cod_shipped";
+  const statusRaw = c.req.query("status")?.trim() ?? "";
+  const status = (ORDER_STATUSES as readonly string[]).includes(statusRaw)
+    ? statusRaw
+    : "";
   const regionId = c.req.query("region_id")?.trim();
 
   const supabase = createServiceClient(c.env);
@@ -1481,27 +1479,31 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
 
   let ownerMembers: string[] = [];
   if (isSuperAdmin(c)) {
-    // 去重下推到库端，避免拉 5000 行再在内存 Set
-    const { data: rows, error: ownerError } = await supabase.rpc(
-      "distinct_order_owner_members",
-      { p_status: status },
-    );
-    if (!ownerError && Array.isArray(rows)) {
-      ownerMembers = (rows as Array<{ owner_member: string }>)
-        .map((r) =>
-          typeof r.owner_member === "string" ? r.owner_member.trim() : "",
-        )
-        .filter(Boolean)
-        .sort((a, b) => a.localeCompare(b, "zh-CN"));
-    } else {
-      const { data: fallbackRows, error: fallbackError } = await supabase
+    // 去重下推到库端，避免拉 5000 行再在内存 Set（有 status 时才走 RPC）
+    if (status) {
+      const { data: rows, error: ownerError } = await supabase.rpc(
+        "distinct_order_owner_members",
+        { p_status: status },
+      );
+      if (!ownerError && Array.isArray(rows)) {
+        ownerMembers = (rows as Array<{ owner_member: string }>)
+          .map((r) =>
+            typeof r.owner_member === "string" ? r.owner_member.trim() : "",
+          )
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b, "zh-CN"));
+      }
+    }
+    if (ownerMembers.length === 0) {
+      let ownerQuery = supabase
         .from("orders")
         .select("owner_member")
         .eq("payment_type", "cod")
-        .eq("status", status)
         .not("owner_member", "is", null)
         .neq("owner_member", "")
         .limit(1000);
+      if (status) ownerQuery = ownerQuery.eq("status", status);
+      const { data: fallbackRows, error: fallbackError } = await ownerQuery;
       if (fallbackError) return c.json({ error: fallbackError.message }, 500);
       ownerMembers = [
         ...new Set(
@@ -1525,11 +1527,13 @@ ordersRoutes.get("/finance-export/meta", async (c) => {
 });
 
 /**
- * 已发货订单财务导出数据（对齐财务系统导出模板列）。
- * 沿用列表页当前筛选（日期 / 订单号 / 手机号等），弹窗仅再选商品。
+ * COD 订单财务导出数据（对齐财务系统导出模板列）。
+ * 沿用列表页当前 Tab / 筛选（状态 / 审核状态 / 日期 / 订单号 / 手机号等），弹窗仅再选商品。
  */
 ordersRoutes.post("/finance-export", async (c) => {
   const body = (await c.req.json()) as {
+    status?: unknown;
+    review_status?: unknown;
     date_from?: unknown;
     date_to?: unknown;
     product_ids?: unknown;
@@ -1542,6 +1546,23 @@ ordersRoutes.post("/finance-export", async (c) => {
     shipping_order_no?: unknown;
     shipping_order_nos?: unknown;
   };
+
+  const statusRaw =
+    typeof body.status === "string" ? body.status.trim() : "";
+  const reviewStatusRaw =
+    typeof body.review_status === "string" ? body.review_status.trim() : "";
+  if (
+    statusRaw &&
+    !(ORDER_STATUSES as readonly string[]).includes(statusRaw)
+  ) {
+    return c.json({ error: "无效的订单状态" }, 400);
+  }
+  if (
+    reviewStatusRaw &&
+    !(REVIEW_STATUSES as readonly string[]).includes(reviewStatusRaw)
+  ) {
+    return c.json({ error: "无效的审核状态" }, 400);
+  }
 
   const listFilters = parseExportListFilters(body);
   if (!listFilters.ok) return c.json({ error: listFilters.error }, 400);
@@ -1577,9 +1598,10 @@ ordersRoutes.post("/finance-export", async (c) => {
     .from("orders")
     .select(FINANCE_EXPORT_SELECT)
     .eq("payment_type", "cod")
-    .eq("status", "cod_shipped")
     .order("created_at", { ascending: false })
     .limit(FINANCE_EXPORT_MAX_ROWS);
+  if (statusRaw) query = query.eq("status", statusRaw);
+  if (reviewStatusRaw) query = query.eq("review_status", reviewStatusRaw);
 
   query = applyExportListFilters(query, listFilters.filters);
 

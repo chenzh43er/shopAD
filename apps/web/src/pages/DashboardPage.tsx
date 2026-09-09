@@ -335,8 +335,9 @@ export function DashboardPage() {
                           <Link to="/cod/shipped">已发货</Link>{" "}
                           确认客户结果：批量签收进入{" "}
                           <Link to="/cod/completed">已签收</Link>，或标记{" "}
-                          <Link to="/cod/refused">拒绝签收</Link>。同页可按时间范围导出物流/财务
-                          Excel；「已签收」列表也可导出物流 Excel。
+                          <Link to="/cod/refused">拒绝签收</Link>。各 COD Tab
+                          均可导出财务 Excel；「待确认 / 已发货 / 已签收」还可导出物流
+                          Excel。
                         </Paragraph>
                       </>
                     ),
@@ -408,7 +409,8 @@ export function DashboardPage() {
                 </li>
                 <li>
                   <Text strong>财务 Excel</Text>
-                  ：在「已发货」使用「导出财务 Excel」，按订单创建日期筛选，可按归属成员与商品过滤。
+                  ：各 COD 订单 Tab 均可使用「导出财务 Excel」，按当前 Tab
+                  状态与列表筛选条件导出，可再按商品收窄。
                 </li>
                 <li>若提示达到导出上限，请缩小时间范围或筛选条件后重试。</li>
               </ol>
