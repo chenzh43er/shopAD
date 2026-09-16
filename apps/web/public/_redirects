@@ -1,6 +1,7 @@
-# 缺失的哈希资源必须 404，禁止回退成 SPA HTML（否则动态 import 会报
-# “error loading dynamically imported module”）
-/assets/*  /404.html  404
+# Cloudflare Pages：没有顶层 404.html 时默认按 SPA 处理（未知路径回退到 /）。
+# 缺失的哈希资源：用 public/assets/404.html（目录级 404），避免回退成 index.html
+# 导致动态 import 报 “error loading dynamically imported module”。
+# 注意：Pages 的 _redirects 不支持 `... 404` 重写，勿再写 /assets/* → 404.html。
 
-# SPA fallback；/api/* 由 Pages Functions 处理（见 functions/ + _routes.json）
+# 显式 SPA fallback（与默认行为一致；/api/* 由 Pages Functions 处理）
 /*    /index.html   200
