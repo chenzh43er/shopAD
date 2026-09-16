@@ -1,2 +1,6 @@
+# 缺失的哈希资源必须 404，禁止回退成 SPA HTML（否则动态 import 会报
+# “error loading dynamically imported module”）
+/assets/*  /404.html  404
+
 # SPA fallback；/api/* 由 Pages Functions 处理（见 functions/ + _routes.json）
 /*    /index.html   200

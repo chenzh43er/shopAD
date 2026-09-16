@@ -1267,7 +1267,16 @@ export function OrdersPage() {
       }
       resetExportModal();
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "导出失败");
+      const msg = e instanceof Error ? e.message : "导出失败";
+      if (
+        /dynamically imported module|Failed to fetch dynamically|Loading chunk|Importing a module script failed/i.test(
+          msg,
+        )
+      ) {
+        message.error("页面资源已更新，请刷新页面后再导出");
+      } else {
+        message.error(msg);
+      }
     } finally {
       setExporting(false);
     }
