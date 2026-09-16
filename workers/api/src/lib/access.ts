@@ -844,6 +844,20 @@ export async function syncProductOwners(
     if (insErr) return { ok: false, error: insErr.message };
   }
 
+  // 商品所属人变更后，同步刷新该商品下订单的归属成员
+  const labels = await mapProductOwnerMemberLabels(supabase, [productId]);
+  const ownerMember = labels.get(productId) ?? "";
+  const { error: orderErr } = await supabase
+    .from("orders")
+    .update({ owner_member: ownerMember || null })
+    .eq("product_id", productId);
+  if (orderErr) {
+    console.error(
+      "syncProductOwners: update orders.owner_member failed:",
+      orderErr.message,
+    );
+  }
+
   if (env) {
     const affected = [
       ...unique,
