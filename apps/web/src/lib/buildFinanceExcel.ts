@@ -10,6 +10,7 @@ export type FinanceExportRow = {
   owner_member: string;
   sku_quantity: string;
   quantity: number;
+  status_label: string;
 };
 
 const HEADERS = [
@@ -21,6 +22,7 @@ const HEADERS = [
   "归属成员",
   "中文属性*数量",
   "购买数量",
+  "状态",
 ] as const;
 
 /** 显示宽度：中日韩等全角按 2，其余按 1 */
@@ -53,6 +55,7 @@ export function buildFinanceExcel(rows: FinanceExportRow[]): Blob {
     r.owner_member,
     r.sku_quantity,
     r.quantity,
+    r.status_label ?? "",
   ]);
 
   const sheetRows: (string | number)[][] = [[...HEADERS], ...dataRows];

@@ -41,7 +41,7 @@ import type { Env, Variables } from "../types";
 
 const FINANCE_EXPORT_MAX_ROWS = 5000;
 const FINANCE_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count";
+  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count, status";
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
   "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, remark, cod_amount, total_amount";
@@ -1659,6 +1659,8 @@ ordersRoutes.post("/finance-export", async (c) => {
       : "";
     const stored =
       typeof row.owner_member === "string" ? row.owner_member : "";
+    const status =
+      typeof row.status === "string" ? (row.status as OrderStatus) : null;
     return {
       order_no: typeof row.order_no === "string" ? row.order_no : "",
       shipping_order_no:
@@ -1673,6 +1675,7 @@ ordersRoutes.post("/finance-export", async (c) => {
       owner_member: fromProduct || stored,
       sku_quantity: formatSkuQuantity(row),
       quantity: qty,
+      status_label: status ? (ORDER_STATUS_LABELS[status] ?? status) : "",
     };
   });
 
