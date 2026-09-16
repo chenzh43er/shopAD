@@ -28,6 +28,7 @@ import {
   createOrderAccessChecker,
   isSuperAdmin,
   listAccessibleProductIds,
+  mapProductOwnerMemberLabels,
   scopeProductsByOwner,
 } from "../lib/access";
 import {
@@ -40,7 +41,7 @@ import type { Env, Variables } from "../types";
 
 const FINANCE_EXPORT_MAX_ROWS = 5000;
 const FINANCE_EXPORT_SELECT =
-  "id, order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count";
+  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count";
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
   "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, remark, cod_amount, total_amount";
@@ -994,11 +995,15 @@ async function applyCodShip(
     status: string;
     payment_type: string;
     review_status: string;
+    product_id?: string | null;
   },
   actor: Actor,
   input: {
     shipping_order_no: string;
-    owner_member: string;
+    /** 优先使用；为空时按商品所属人自动填充 */
+    owner_member?: string;
+    /** 预解析的商品所属人映射，避免批量发货重复查询 */
+    productOwnerLabels?: Map<string, string>;
     shipper: ShipperSnapshot;
   },
   options?: { skipAudit?: boolean },
@@ -1014,12 +1019,32 @@ async function applyCodShip(
   }
 
   const shippingOrderNo = input.shipping_order_no.trim();
-  const ownerMember = input.owner_member.trim();
   if (!shippingOrderNo) {
     return { ok: false, error: "发货前请填写运单号" };
   }
+
+  let ownerMember =
+    typeof input.owner_member === "string" ? input.owner_member.trim() : "";
   if (!ownerMember) {
-    return { ok: false, error: "发货前请填写归属成员" };
+    const productId =
+      typeof order.product_id === "string" ? order.product_id : "";
+    if (productId) {
+      const cached = input.productOwnerLabels?.get(productId);
+      if (cached) {
+        ownerMember = cached;
+      } else {
+        const labels = await mapProductOwnerMemberLabels(supabase, [
+          productId,
+        ]);
+        ownerMember = labels.get(productId) ?? "";
+      }
+    }
+  }
+  if (!ownerMember) {
+    return {
+      ok: false,
+      error: "发货前请确认商品已设置所属人（归属成员按商品所属人写入）",
+    };
   }
 
   const from = order.status as OrderStatus;
@@ -1615,10 +1640,29 @@ ordersRoutes.post("/finance-export", async (c) => {
   const { data, error } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
+  const rowProductIds = (data ?? [])
+    .map((row) =>
+      typeof row.product_id === "string" ? row.product_id : "",
+    )
+    .filter(Boolean);
+  const productOwnerLabels = await mapProductOwnerMemberLabels(
+    supabase,
+    rowProductIds,
+  );
+
   const rows = (data ?? []).map((row) => {
     const qty = orderPurchaseQty(row);
+    const productId =
+      typeof row.product_id === "string" ? row.product_id : "";
+    const fromProduct = productId
+      ? productOwnerLabels.get(productId) ?? ""
+      : "";
+    const stored =
+      typeof row.owner_member === "string" ? row.owner_member : "";
     return {
       order_no: typeof row.order_no === "string" ? row.order_no : "",
+      shipping_order_no:
+        typeof row.shipping_order_no === "string" ? row.shipping_order_no : "",
       product_name:
         typeof row.product_name === "string" ? row.product_name : "",
       created_at: typeof row.created_at === "string" ? row.created_at : "",
@@ -1626,8 +1670,7 @@ ordersRoutes.post("/finance-export", async (c) => {
         typeof row.total_amount === "number"
           ? row.total_amount
           : Number(row.total_amount) || 0,
-      owner_member:
-        typeof row.owner_member === "string" ? row.owner_member : "",
+      owner_member: fromProduct || stored,
       sku_quantity: formatSkuQuantity(row),
       quantity: qty,
     };
@@ -1871,6 +1914,14 @@ ordersRoutes.post("/full-export", async (c) => {
     }
   >;
   const withCurrency = await attachOrderCurrency(supabase, rawRows);
+  const productOwnerLabels = await mapProductOwnerMemberLabels(
+    supabase,
+    withCurrency
+      .map((row) =>
+        typeof row.product_id === "string" ? row.product_id : "",
+      )
+      .filter(Boolean),
+  );
 
   const rows = withCurrency.map((row) => {
     const status = asText(row.status) as OrderStatus;
@@ -1885,6 +1936,11 @@ ordersRoutes.post("/full-export", async (c) => {
       .filter(Boolean)
       .join(" ");
     const currency = row.currency;
+    const productId =
+      typeof row.product_id === "string" ? row.product_id : "";
+    const ownerFromProduct = productId
+      ? productOwnerLabels.get(productId) ?? ""
+      : "";
 
     return {
       order_no: asText(row.order_no),
@@ -1917,7 +1973,7 @@ ordersRoutes.post("/full-export", async (c) => {
       other_fee: asNumberOrEmpty(row.other_fee),
       currency_code: asText(currency?.code),
       currency_symbol: asText(currency?.symbol),
-      owner_member: asText(row.owner_member),
+      owner_member: ownerFromProduct || asText(row.owner_member),
       remark: asText(row.remark),
       reject_reason: asText(row.reject_reason),
       weight: asNumberOrEmpty(row.weight),
@@ -2485,14 +2541,28 @@ ordersRoutes.patch("/:id/status", async (c) => {
       typeof body.shipping_order_no === "string"
         ? body.shipping_order_no.trim()
         : "";
-    const ownerMember =
+    // 归属成员按商品所属人写入；客户端传入仅作商品无所属人时的兜底
+    let ownerMember =
       typeof body.owner_member === "string" ? body.owner_member.trim() : "";
+    const productId =
+      typeof order.product_id === "string" ? order.product_id : "";
+    if (productId) {
+      const labels = await mapProductOwnerMemberLabels(supabase, [productId]);
+      const fromProduct = labels.get(productId) ?? "";
+      if (fromProduct) ownerMember = fromProduct;
+    }
 
     if (!shippingOrderNo) {
       return c.json({ error: "发货前请填写发货订单号" }, 400);
     }
     if (!ownerMember) {
-      return c.json({ error: "发货前请填写归属成员" }, 400);
+      return c.json(
+        {
+          error:
+            "发货前请确认商品已设置所属人（归属成员按商品所属人写入）",
+        },
+        400,
+      );
     }
 
     patch.shipping_order_no = shippingOrderNo;
@@ -3133,18 +3203,13 @@ ordersRoutes.post("/batch-ship", async (c) => {
   const body = (await c.req.json()) as {
     items?: unknown;
     shipper_id?: unknown;
+    /** 已废弃：归属成员按各订单商品所属人写入，忽略此字段 */
     owner_member?: unknown;
   };
   const actor = actorFrom(c);
 
   if (!Array.isArray(body.items) || body.items.length === 0) {
     return c.json({ error: "请提供要发货的订单列表" }, 400);
-  }
-
-  const ownerMember =
-    typeof body.owner_member === "string" ? body.owner_member.trim() : "";
-  if (!ownerMember) {
-    return c.json({ error: "请填写归属成员" }, 400);
   }
 
   const shipperId =
@@ -3210,7 +3275,7 @@ ordersRoutes.post("/batch-ship", async (c) => {
   const auditEntries: WriteAuditInput[] = [];
 
   type ShipTask = {
-    order: BatchOrderRow & { order_no: string };
+    order: BatchOrderRow & { order_no: string; product_id?: string | null };
     item: { order_no: string; shipping_order_no: string };
   };
   const tasks: ShipTask[] = [];
@@ -3229,7 +3294,21 @@ ordersRoutes.post("/batch-ship", async (c) => {
     tasks.push({ order, item });
   }
 
+  const productOwnerLabels = await mapProductOwnerMemberLabels(
+    supabase,
+    tasks
+      .map(({ order }) =>
+        typeof order.product_id === "string" ? order.product_id : "",
+      )
+      .filter(Boolean),
+  );
+
   await runParallel(tasks, BATCH_CONCURRENCY, async ({ order, item }) => {
+    const productId =
+      typeof order.product_id === "string" ? order.product_id : "";
+    const ownerMember = productId
+      ? productOwnerLabels.get(productId) ?? ""
+      : "";
     const result = await applyCodShip(
       supabase,
       order,
@@ -3237,6 +3316,7 @@ ordersRoutes.post("/batch-ship", async (c) => {
       {
         shipping_order_no: item.shipping_order_no,
         owner_member: ownerMember,
+        productOwnerLabels,
         shipper: shipperSnap,
       },
       { skipAudit: true },
@@ -3249,7 +3329,7 @@ ordersRoutes.post("/batch-ship", async (c) => {
           order.id,
           order.status,
           "cod_shipped",
-          `批量发货；运单号：${item.shipping_order_no}；归属成员：${ownerMember}；寄件人：${shipperSnap.name}`,
+          `批量发货；运单号：${item.shipping_order_no}；归属成员：${ownerMember || "（按商品所属人）"}；寄件人：${shipperSnap.name}`,
         ),
       );
     } else {

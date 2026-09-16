@@ -733,6 +733,60 @@ export async function attachProductOwnersOne<T extends RowWithOwners>(
 
 
 
+/**
+
+ * 按商品所属人生成财务/发货用的「归属成员」文案。
+
+ * 多名所属人时以顿号连接 display_name。
+
+ */
+
+export async function mapProductOwnerMemberLabels(
+
+  supabase: ServiceClient,
+
+  productIds: string[],
+
+): Promise<Map<string, string>> {
+
+  const unique = [...new Set(productIds.filter(Boolean))];
+
+  const result = new Map<string, string>();
+
+  if (unique.length === 0) return result;
+
+
+
+  const stubs: Array<{ id: string; owners?: ActorRef[] }> = unique.map(
+    (id) => ({ id }),
+  );
+
+  const withOwners = await attachProductOwners(supabase, stubs);
+
+  for (const row of withOwners) {
+
+    const label = (row.owners ?? [])
+
+      .map((o: ActorRef) =>
+
+        typeof o.display_name === "string" ? o.display_name.trim() : "",
+
+      )
+
+      .filter(Boolean)
+
+      .join("、");
+
+    if (label) result.set(row.id, label);
+
+  }
+
+  return result;
+
+}
+
+
+
 /** Replace all owners for a product. */
 
 export async function syncProductOwners(

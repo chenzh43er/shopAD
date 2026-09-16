@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Key } from "rea
 import {
   Button,
   Checkbox,
-  DatePicker,
-  Form,
   Input,
   Modal,
   Select,
@@ -45,6 +43,7 @@ import { parseShipText } from "../lib/parseShipText";
 import { formatMoney } from "../lib/formatMoney";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { formatActor } from "../components/AuditLogPanel";
+import { OrderDateTimeFilter } from "../components/OrderDateTimeFilter";
 import { OrderEditModal } from "../components/OrderEditModal";
 import { setOrdersListFrom } from "../lib/listNav";
 import { pickDefaultRegionId } from "../lib/defaultRegion";
@@ -137,43 +136,6 @@ function ellipsisCell(maxWidth: number) {
   };
 }
 
-const { RangePicker } = DatePicker;
-
-const DATE_PRESETS: {
-  label: string;
-  value: () => [Dayjs, Dayjs];
-}[] = [
-  {
-    label: "今日",
-    value: () => [dayjs().startOf("day"), dayjs().endOf("day")],
-  },
-  {
-    label: "昨日",
-    value: () => [
-      dayjs().subtract(1, "day").startOf("day"),
-      dayjs().subtract(1, "day").endOf("day"),
-    ],
-  },
-  {
-    label: "近七天",
-    value: () => [
-      dayjs().subtract(6, "day").startOf("day"),
-      dayjs().endOf("day"),
-    ],
-  },
-  {
-    label: "本月",
-    value: () => [dayjs().startOf("month"), dayjs().endOf("day")],
-  },
-  {
-    label: "近三个月",
-    value: () => [
-      dayjs().subtract(3, "month").startOf("day"),
-      dayjs().endOf("day"),
-    ],
-  },
-];
-
 const statusColor: Record<OrderStatus, string> = {
   pending: "default",
   paid: "processing",
@@ -252,13 +214,8 @@ const DEFAULT_COD_TAB: CodTabKey = "pending_review";
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const { profile, user, isSuperAdmin } = useAuth();
+  const { isSuperAdmin } = useAuth();
   const { tab: routeTab } = useParams<{ tab?: string }>();
-  const defaultOwnerMember =
-    profile?.display_name?.trim() ||
-    profile?.email?.trim() ||
-    user?.email?.trim() ||
-    "";
 
   const activeCodTab: CodTabKey = COD_TABS.some((t) => t.key === routeTab)
     ? (routeTab as CodTabKey)
@@ -317,7 +274,6 @@ export function OrdersPage() {
   const [shipTextError, setShipTextError] = useState<string | null>(null);
   const [shippers, setShippers] = useState<LogisticsShipper[]>([]);
   const [selectedShipperId, setSelectedShipperId] = useState<string>();
-  const [shipForm] = Form.useForm<{ owner_member: string }>();
 
   const [exportOpen, setExportOpen] = useState(false);
   const [exportKind, setExportKind] = useState<
@@ -425,8 +381,8 @@ export function OrdersPage() {
         }
       }
       if (dateRange?.[0] && dateRange?.[1]) {
-        params.set("date_from", dateRange[0].startOf("day").toISOString());
-        params.set("date_to", dateRange[1].endOf("day").toISOString());
+        params.set("date_from", dateRange[0].toISOString());
+        params.set("date_to", dateRange[1].toISOString());
       }
       if (productIds.length > 0) {
         params.set("product_ids", productIds.join(","));
@@ -1130,7 +1086,6 @@ export function OrdersPage() {
     setShipTextDraft("");
     setShipTextError(null);
     setSelectedShipperId(undefined);
-    shipForm.resetFields();
   };
 
   const resetExportModal = () => {
@@ -1197,8 +1152,8 @@ export function OrdersPage() {
 
       // 沿用列表页当前筛选条件（日期 / 单号 / 电话 / 批量查询）
       if (dateRange?.[0] && dateRange?.[1]) {
-        payload.date_from = dateRange[0].startOf("day").toISOString();
-        payload.date_to = dateRange[1].endOf("day").toISOString();
+        payload.date_from = dateRange[0].toISOString();
+        payload.date_to = dateRange[1].toISOString();
       }
       if (isBatchOrderQuery) {
         payload.order_nos = batchOrderNos;
@@ -1346,7 +1301,6 @@ export function OrdersPage() {
 
   const openShipModal = async () => {
     setShipModalOpen(true);
-    shipForm.setFieldsValue({ owner_member: defaultOwnerMember });
     try {
       const res = await apiFetch<{ data: LogisticsShipper[] }>("/api/shippers");
       const list = res.data ?? [];
@@ -1389,13 +1343,6 @@ export function OrdersPage() {
       message.warning("请选择寄件人");
       return;
     }
-    let ownerMember = "";
-    try {
-      const values = await shipForm.validateFields();
-      ownerMember = values.owner_member.trim();
-    } catch {
-      return;
-    }
 
     setBatching(true);
     try {
@@ -1410,7 +1357,6 @@ export function OrdersPage() {
             shipping_order_no: r.shipping_order_no,
           })),
           shipper_id: selectedShipperId,
-          owner_member: ownerMember,
         }),
       });
       const ok = res.succeeded.length;
@@ -1613,6 +1559,17 @@ export function OrdersPage() {
           } satisfies ColumnsType<Order>[number],
         ]),
     {
+      title: "运单号",
+      dataIndex: "shipping_order_no",
+      width: 160,
+      ellipsis: true,
+      onCell: () => ellipsisCell(160),
+      onHeaderCell: () => ellipsisCell(160),
+      render: (v: string | null) => (
+        <CellEllipsis text={v} maxWidth={144} />
+      ),
+    },
+    {
       title: "审核人",
       width: 88,
       ellipsis: true,
@@ -1689,20 +1646,12 @@ export function OrdersPage() {
         }))}
       />
       <Space style={{ marginBottom: 16 }} wrap>
-        <RangePicker
+        <OrderDateTimeFilter
           value={dateRange}
-          allowClear
-          presets={DATE_PRESETS}
-          onChange={(values) => {
+          onChange={(next) => {
             setPage(1);
-            if (values?.[0] && values?.[1]) {
-              setDateRange([values[0], values[1]]);
-            } else {
-              setDateRange(null);
-            }
+            setDateRange(next);
           }}
-          style={{ width: 280 }}
-          placeholder={["开始日期", "结束日期"]}
         />
         <Input.Search
           placeholder="搜索订单号"
@@ -2204,7 +2153,7 @@ export function OrdersPage() {
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
           粘贴「订单号 + 运单号」（每行一笔，Tab / 空格 /
-          逗号分隔）会自动解析；也可上传含这两列的 Excel。本批共用同一寄件人与归属成员。
+          逗号分隔）会自动解析；也可上传含这两列的 Excel。本批共用同一寄件人；归属成员按各订单商品所属人自动写入。
         </p>
         <Space direction="vertical" style={{ width: "100%" }} size="middle">
           <div>
@@ -2243,20 +2192,6 @@ export function OrdersPage() {
               </Upload>
             </div>
           </div>
-
-          <Form form={shipForm} layout="vertical">
-            <Form.Item
-              name="owner_member"
-              label="归属成员"
-              rules={[{ required: true, message: "请填写归属成员" }]}
-              extra="默认当前登录用户，可修改"
-            >
-              <Input
-                maxLength={INPUT_LIMITS.shippingMeta}
-                placeholder="归属成员"
-              />
-            </Form.Item>
-          </Form>
 
           <div>
             <div style={{ marginBottom: 6 }}>
@@ -2319,7 +2254,7 @@ export function OrdersPage() {
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
           {exportKind === "finance"
-            ? "按当前列表筛选条件导出订单，列对齐财务系统模板（订单号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
+            ? "按当前列表筛选条件导出订单，列对齐财务系统模板（订单号 / 物流号 / 商品 / 下单时间 / 金额 / 归属成员 / 中文属性*数量 / 购买数量）。可再按商品收窄。"
             : exportKind === "logistics"
               ? "按当前列表筛选条件导出，对齐极兔物流模板；第 1 列为订单号，第 2 列为物流订单号（运单号）；电商订单号仍填系统订单号。无数据字段留空或填模板默认值。可再按商品收窄。"
               : "按当前列表筛选条件导出 COD 订单；勾选需要导出的数据列，未勾选的列不会出现在 Excel 中。可再按商品收窄。"}

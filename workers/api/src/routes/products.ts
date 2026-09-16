@@ -6,6 +6,7 @@ import type {
 } from "@shopad/shared";
 import { PRODUCT_STATUSES, normalizeUserRole } from "@shopad/shared";
 import {
+  attachActors,
   attachActorsOne,
   listAuditLogs,
   writeAuditLog,
@@ -14,6 +15,7 @@ import { buildFieldDiffs, summarizeFieldDiffs } from "../lib/auditDiff";
 import {
   assertProductAccess,
   assertRegionAccess,
+  attachProductOwners,
   attachProductOwnersOne,
   isSuperAdmin,
   listAllowedRegionIds,
@@ -464,10 +466,15 @@ productsRoutes.get("/", async (c) => {
     });
   }
 
-  // 列表默认不二次补全 actors/owners（详情接口仍会附带）
   const listRows =
-    (data as unknown as Record<string, unknown>[] | null) ?? [];
-  const rows = listRows.map((row) =>
+    (data as unknown as Array<Record<string, unknown> & { id: string }>) ??
+    [];
+  const withActors = await attachActors(supabase, listRows, [
+    "created_by",
+    "updated_by",
+  ]);
+  const withOwners = await attachProductOwners(supabase, withActors);
+  const rows = withOwners.map((row) =>
     coerceProductListFields({
       ...row,
       extra_html: [],

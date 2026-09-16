@@ -3,6 +3,7 @@ import dayjs from "dayjs";
 
 export type FinanceExportRow = {
   order_no: string;
+  shipping_order_no: string;
   product_name: string;
   created_at: string;
   total_amount: number;
@@ -13,6 +14,7 @@ export type FinanceExportRow = {
 
 const HEADERS = [
   "订单号",
+  "物流号",
   "商品",
   "下单时间",
   "订单总金额",
@@ -44,6 +46,7 @@ function colWidth(values: (string | number)[], min = 10, max = 48): number {
 export function buildFinanceExcel(rows: FinanceExportRow[]): Blob {
   const dataRows = rows.map((r) => [
     r.order_no,
+    r.shipping_order_no ?? "",
     r.product_name,
     r.created_at ? dayjs(r.created_at).format("YYYY-MM-DD HH:mm:ss") : "",
     r.total_amount,
@@ -59,8 +62,8 @@ export function buildFinanceExcel(rows: FinanceExportRow[]): Blob {
   ws["!cols"] = Array.from({ length: colCount }, (_, col) => ({
     wch: colWidth(
       [HEADERS[col], ...dataRows.map((row) => row[col] ?? "")],
-      col === 2 ? 20 : 10, // 下单时间列保底
-      col === 1 || col === 5 ? 56 : 40,
+      col === 3 ? 20 : 10, // 下单时间列保底
+      col === 2 || col === 6 ? 56 : 40,
     ),
   }));
 

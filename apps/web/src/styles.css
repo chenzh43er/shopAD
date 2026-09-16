@@ -241,6 +241,96 @@ a {
   background: var(--accent-soft);
 }
 
+/* 订单筛选：日期 + 时分拆分 */
+.order-datetime-filter {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.order-datetime-filter .ant-picker {
+  border: none;
+  box-shadow: none !important;
+  background: transparent;
+}
+
+.order-datetime-filter__times {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.order-datetime-filter__label {
+  font-size: 12px;
+  margin-right: 2px;
+  user-select: none;
+}
+
+.order-datetime-filter__sep {
+  line-height: 1;
+  padding: 0 2px;
+  user-select: none;
+}
+
+.order-time-picker {
+  font-variant-numeric: tabular-nums;
+}
+
+.order-time-picker--active.ant-picker,
+.order-datetime-filter .order-time-picker--active.ant-picker {
+  background: var(--accent-soft);
+  border-radius: 6px;
+}
+
+.order-time-quick {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 2px;
+}
+
+.order-time-quick__hint {
+  font-size: 12px;
+  margin-right: 2px;
+  min-width: 2em;
+  user-select: none;
+}
+
+.order-time-quick__btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: #f8fbff;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-time-quick__btn:hover {
+  color: var(--accent);
+  border-color: #b7d7ff;
+  background: var(--accent-soft);
+}
+
+.order-time-quick__btn--active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
 /* 所有列表：列按内容撑开，超出时横向滚动，不压缩单元格 */
 .ant-table-content {
   overflow-x: auto;

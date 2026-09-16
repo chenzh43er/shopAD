@@ -75,7 +75,7 @@ const MODULES: ModuleCard[] = [
   },
   {
     title: "COD 待发货",
-    desc: "选择寄件人、填写运单号与归属成员；支持文本或 Excel 批量发货，亦可转无效。",
+    desc: "选择寄件人、填写运单号；归属成员按商品所属人自动写入。支持文本或 Excel 批量发货，亦可转无效。",
     to: "/cod/awaiting_shipment",
     linkLabel: "进入待发货",
     icon: <TruckOutlined />,
@@ -320,7 +320,7 @@ export function DashboardPage() {
                         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
                           在{" "}
                           <Link to="/cod/awaiting_shipment">待发货</Link>{" "}
-                          或详情页选择寄件人，填写发货订单号与归属成员。也可「批量发货」：粘贴文本或上传
+                          或详情页选择寄件人并填写发货订单号；归属成员按商品所属人自动写入。也可「批量发货」：粘贴文本或上传
                           Excel；仍可转无效。
                         </Paragraph>
                       </>

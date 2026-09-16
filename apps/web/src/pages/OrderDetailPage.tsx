@@ -31,8 +31,8 @@ import {
   getOrdersListFrom,
   setOrdersListFrom,
 } from "../lib/listNav";
-import { useAuth } from "../auth/AuthContext";
 import dayjs from "dayjs";
+import type { Product } from "@shopad/shared";
 
 const statusColor: Record<OrderStatus, string> = {
   pending: "default",
@@ -112,12 +112,6 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { profile, user } = useAuth();
-  const defaultOwnerMember =
-    profile?.display_name?.trim() ||
-    profile?.email?.trim() ||
-    user?.email?.trim() ||
-    "";
   const fromPath =
     (location.state as { from?: string } | null)?.from ||
     getOrdersListFrom() ||
@@ -298,9 +292,27 @@ export function OrderDetailPage() {
     setSelectedShipperId(undefined);
     shipForm.resetFields();
     shipForm.setFieldsValue({ consignor_flag: "0" });
+
+    let ownerFromProduct = "";
+    if (order?.product_id) {
+      try {
+        const product = await apiFetch<Product>(
+          `/api/products/${order.product_id}`,
+        );
+        ownerFromProduct =
+          product.owners
+            ?.map((o) => o.display_name?.trim() || "")
+            .filter(Boolean)
+            .join("、") ?? "";
+      } catch {
+        // 仍允许发货；服务端会按商品所属人写入
+      }
+    }
+
     shipMetaForm.setFieldsValue({
       shipping_order_no: order?.shipping_order_no ?? "",
-      owner_member: order?.owner_member?.trim() || defaultOwnerMember,
+      owner_member:
+        order?.owner_member?.trim() || ownerFromProduct || "",
     });
     setShipTarget(next);
     setShipModalOpen(true);
@@ -778,7 +790,7 @@ export function OrderDetailPage() {
         width={640}
       >
         <p style={{ color: "#666", marginBottom: 12 }}>
-          发货须填写发货订单号、归属成员，并选择寄件人（对齐财务/物流导出模板）。
+          发货须填写发货订单号并选择寄件人；归属成员默认按商品所属人写入（对应财务导出）。
         </p>
 
         <Form form={shipMetaForm} layout="vertical">
@@ -796,12 +808,12 @@ export function OrderDetailPage() {
           <Form.Item
             name="owner_member"
             label="归属成员"
-            rules={[{ required: true, message: "请填写归属成员" }]}
-            extra="默认当前登录用户，可修改；对应财务导出「归属成员」"
+            rules={[{ required: true, message: "请确认归属成员" }]}
+            extra="按商品所属人写入；仅当商品未设置所属人时需手填"
           >
             <Input
               maxLength={INPUT_LIMITS.shippingMeta}
-              placeholder="归属成员"
+              placeholder="商品所属人"
             />
           </Form.Item>
         </Form>
