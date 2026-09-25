@@ -28,6 +28,7 @@ import {
   type Currency,
   type Domain,
   type Product,
+  type ProductLocale,
   type Profile,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
@@ -35,6 +36,13 @@ import { INPUT_LIMITS } from "../lib/inputLimits";
 import { productsListPath } from "../lib/productsPaths";
 import { useAuth } from "../auth/AuthContext";
 import { ProductPackageSettings } from "../components/ProductPackageSettings";
+import {
+  emptyLocaleDraft,
+  localeFromApi,
+  ProductLocaleEditor,
+  ProductLocaleToolbar,
+  type LocaleDraft,
+} from "../components/ProductLocaleEditor";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
 import { SortableImageList } from "../components/SortableImageList";
 import dayjs from "dayjs";
@@ -124,7 +132,24 @@ export function ProductFormPage() {
   const [domainsLoading, setDomainsLoading] = useState(false);
   const [owners, setOwners] = useState<Profile[]>([]);
   const [ownersLoading, setOwnersLoading] = useState(false);
+  const [contentLocale, setContentLocale] = useState<"default" | string>(
+    "default",
+  );
+  /** 套餐页独立语言，避免切语言时卸载基本信息 Form 导致跳回基本信息 */
+  const [packageContentLocale, setPackageContentLocale] = useState<
+    "default" | string
+  >("default");
+  const [addedLocales, setAddedLocales] = useState<string[]>([]);
+  const [localeLabels, setLocaleLabels] = useState<Record<string, string>>({});
+  const [localeDrafts, setLocaleDrafts] = useState<
+    Record<string, LocaleDraft>
+  >({});
+  /** 操作日志面板刷新键（语言/套餐变更后立即刷新） */
+  const [logRefreshKey, setLogRefreshKey] = useState(0);
   const packagesEnabled = Form.useWatch("packages_enabled", form) ?? false;
+  const watchedLinkSuffix = Form.useWatch("link_suffix", form) as
+    | string
+    | undefined;
   const watchedRegionId = Form.useWatch("region_id", form) as
     | string
     | null
@@ -138,6 +163,10 @@ export function ProductFormPage() {
   const selectedCurrency =
     currencies.find((c) => c.id === watchedCurrencyId) ??
     product?.currency ??
+    null;
+  const selectedRegionName =
+    regions.find((r) => r.id === watchedRegionId)?.name ??
+    product?.region?.name ??
     null;
   const listRegionId =
     watchedRegionId || product?.region_id || searchParams.get("region_id");
@@ -346,6 +375,21 @@ export function ProductFormPage() {
         setCoverUrl(data.cover_url);
         setGalleryUrls(data.gallery_urls ?? []);
         setDetailImageUrls(data.detail_image_urls ?? []);
+        const locales = data.locales ?? [];
+        const codes = locales.map((l) => l.locale);
+        setAddedLocales(codes);
+        const labels: Record<string, string> = {};
+        for (const row of locales) {
+          if (row.label?.trim()) labels[row.locale] = row.label.trim();
+        }
+        setLocaleLabels(labels);
+        const drafts: Record<string, LocaleDraft> = {};
+        for (const row of locales) {
+          drafts[row.locale] = localeFromApi(row);
+        }
+        setLocaleDrafts(drafts);
+        setContentLocale("default");
+        setPackageContentLocale("default");
         if (!data.packages_enabled) setActiveTab("basic");
       } catch (e) {
         message.error(e instanceof Error ? e.message : "加载失败");
@@ -582,11 +626,145 @@ export function ProductFormPage() {
     );
   }
 
+  const handleAddLocale = async (code: string, label: string) => {
+    if (!id) throw new Error("请先保存商品");
+    const saved = await apiFetch<ProductLocale>(
+      `/api/products/${id}/locales/${encodeURIComponent(code)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          locale: code,
+          label,
+          title_external: null,
+          facebook_pixel_id: null,
+          google_conversion_id: null,
+          google_label: null,
+          description: null,
+          description_entries: [],
+          cover_url: null,
+          gallery_urls: [],
+          detail_image_urls: [],
+        }),
+      },
+    );
+    setAddedLocales((prev) => (prev.includes(code) ? prev : [...prev, code]));
+    setLocaleLabels((prev) => ({ ...prev, [code]: label }));
+    setLocaleDrafts((prev) =>
+      prev[code] ? prev : { ...prev, [code]: emptyLocaleDraft() },
+    );
+    setProduct((p) => {
+      if (!p) return p;
+      const others = (p.locales ?? []).filter((l) => l.locale !== code);
+      return {
+        ...p,
+        locales: [...others, saved],
+        updated_at: new Date().toISOString(),
+      };
+    });
+    setLogRefreshKey((n) => n + 1);
+  };
+
+  const handleRemoveLocale = async (code: string) => {
+    if (!id) throw new Error("请先保存商品");
+    await apiFetch(
+      `/api/products/${id}/locales/${encodeURIComponent(code)}`,
+      { method: "DELETE" },
+    );
+    setAddedLocales((prev) => prev.filter((c) => c !== code));
+    setLocaleLabels((prev) => {
+      const next = { ...prev };
+      delete next[code];
+      return next;
+    });
+    setLocaleDrafts((prev) => {
+      const next = { ...prev };
+      delete next[code];
+      return next;
+    });
+    if (contentLocale === code) setContentLocale("default");
+    if (packageContentLocale === code) setPackageContentLocale("default");
+    setProduct((p) =>
+      p
+        ? {
+            ...p,
+            locales: (p.locales ?? []).filter((l) => l.locale !== code),
+            updated_at: new Date().toISOString(),
+          }
+        : p,
+    );
+    setLogRefreshKey((n) => n + 1);
+  };
+
   const basicForm = (
+    <>
+      {isEdit && id ? (
+        <ProductLocaleToolbar
+          contentLocale={contentLocale}
+          addedLocales={addedLocales}
+          linkSuffix={watchedLinkSuffix ?? product?.link_suffix}
+          regionName={selectedRegionName}
+          localeLabels={localeLabels}
+          onChangeLocale={setContentLocale}
+          onAddLocale={handleAddLocale}
+          onRemoveLocale={handleRemoveLocale}
+        />
+      ) : (
+        <div
+          style={{
+            marginBottom: 16,
+            color: "#888",
+            fontSize: 13,
+          }}
+        >
+          请先保存商品后，再添加语言覆盖（路径 = /地区_语言字段，如 /sa_en、/id_en、/id_fr）。
+        </div>
+      )}
+
+      {contentLocale !== "default" && isEdit && id ? (
+        <ProductLocaleEditor
+          productId={id}
+          locale={contentLocale}
+          localeLabel={localeLabels[contentLocale]}
+          draft={localeDrafts[contentLocale] ?? emptyLocaleDraft()}
+          onChange={(next) =>
+            setLocaleDrafts((prev) => ({ ...prev, [contentLocale]: next }))
+          }
+          onSaved={(row: ProductLocale) => {
+            setLocaleDrafts((prev) => ({
+              ...prev,
+              [row.locale]: localeFromApi(row),
+            }));
+            if (row.label?.trim()) {
+              setLocaleLabels((prev) => ({
+                ...prev,
+                [row.locale]: row.label!.trim(),
+              }));
+            }
+            setProduct((p) => {
+              if (!p) return p;
+              const others = (p.locales ?? []).filter(
+                (l) => l.locale !== row.locale,
+              );
+              return {
+                ...p,
+                locales: [...others, row],
+                updated_at: new Date().toISOString(),
+              };
+            });
+            setLogRefreshKey((n) => n + 1);
+          }}
+        />
+      ) : null}
+
+      {/* 语言切换时不卸载 Form，避免套餐 Tab 因 packages_enabled 监听丢失而退回基本信息 */}
     <Form<FormValues>
       form={form}
       layout="vertical"
-      style={{ maxWidth: 720 }}
+      style={{
+        maxWidth: 720,
+        display:
+          contentLocale !== "default" && isEdit && id ? "none" : undefined,
+      }}
       initialValues={{
         price: 0,
         sales_count: 0,
@@ -1091,6 +1269,7 @@ export function ProductFormPage() {
         </div>
       ) : null}
     </Form>
+    </>
   );
 
   return (
@@ -1188,14 +1367,32 @@ export function ProductFormPage() {
                   label: "套餐设置",
                   disabled: !canEditPackages,
                   children: canEditPackages && id && product ? (
-                    <ProductPackageSettings
-                      productId={id}
-                      currentProduct={{
-                        id: product.id,
-                        name: product.name,
-                        cover_url: product.cover_url,
-                      }}
-                    />
+                    <>
+                      <ProductLocaleToolbar
+                        contentLocale={packageContentLocale}
+                        addedLocales={addedLocales}
+                        linkSuffix={
+                          watchedLinkSuffix ?? product.link_suffix
+                        }
+                        regionName={selectedRegionName}
+                        localeLabels={localeLabels}
+                        onChangeLocale={setPackageContentLocale}
+                        onAddLocale={handleAddLocale}
+                        onRemoveLocale={handleRemoveLocale}
+                      />
+                      <ProductPackageSettings
+                        productId={id}
+                        contentLocale={packageContentLocale}
+                        addedLocales={addedLocales}
+                        regionName={selectedRegionName}
+                        localeLabels={localeLabels}
+                        currentProduct={{
+                          id: product.id,
+                          name: product.name,
+                          cover_url: product.cover_url,
+                        }}
+                      />
+                    </>
                   ) : (
                     <div style={{ color: "#999", padding: "24px 0" }}>
                       请先填写并保存草稿后，再配置套餐。套餐商品默认为当前商品。
@@ -1213,7 +1410,7 @@ export function ProductFormPage() {
                     <AuditLogPanel
                       entityType="product"
                       entityId={id}
-                      refreshKey={product?.updated_at}
+                      refreshKey={`${product?.updated_at ?? ""}:${logRefreshKey}`}
                     />
                   ),
                 },

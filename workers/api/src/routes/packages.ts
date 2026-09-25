@@ -6,6 +6,10 @@ import {
   packageSnapshot,
 } from "../lib/auditDiff";
 import { assertProductAccess } from "../lib/access";
+import {
+  listPackageLocalesByPackageIds,
+  saveAllPackageLocales,
+} from "../lib/productLocales";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -86,10 +90,24 @@ packagesRoutes.get("/:productId/packages", async (c) => {
     itemsByPackage.set(item.package_id, list);
   }
 
+  let localesByPackage = new Map<string, Record<string, unknown>[]>();
+  try {
+    localesByPackage = await listPackageLocalesByPackageIds(
+      supabase,
+      packageIds,
+      productId,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn("package locales read failed:", msg);
+    localesByPackage = new Map();
+  }
+
   return c.json({
     data: (packages ?? []).map((pkg) => ({
       ...pkg,
       items: itemsByPackage.get(pkg.id) ?? [],
+      locales: localesByPackage.get(pkg.id) ?? [],
     })),
   });
 });
@@ -153,6 +171,16 @@ packagesRoutes.put("/:productId/packages", async (c) => {
   if (beforePkgError) return c.json({ error: beforePkgError.message }, 500);
 
   const beforePackageIds = (beforePackages ?? []).map((p) => p.id as string);
+  let beforeLocalesByPackage = new Map<string, Record<string, unknown>[]>();
+  try {
+    beforeLocalesByPackage = await listPackageLocalesByPackageIds(
+      supabase,
+      beforePackageIds,
+      productId,
+    );
+  } catch {
+    beforeLocalesByPackage = new Map();
+  }
   let beforeItems: Array<{
     package_id: string;
     ref_product_id: string | null;
@@ -175,12 +203,27 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     rows.push(item);
     beforeItemsByPackage.set(item.package_id, rows);
   }
-  const beforeSnapshots = (beforePackages ?? []).map((pkg) =>
-    packageSnapshot({
+  const beforeSnapshots = (beforePackages ?? []).map((pkg) => {
+    const localeRows = beforeLocalesByPackage.get(pkg.id as string) ?? [];
+    const locales: Record<
+      string,
+      { name: string; name_external: string; image_url: string | null }
+    > = {};
+    for (const row of localeRows) {
+      const code = String(row.locale ?? "");
+      if (!code) continue;
+      locales[code] = {
+        name: String(row.name ?? ""),
+        name_external: String(row.name_external ?? ""),
+        image_url: (row.image_url as string | null) ?? null,
+      };
+    }
+    return packageSnapshot({
       ...pkg,
+      locales,
       items: beforeItemsByPackage.get(pkg.id as string) ?? [],
-    }),
-  );
+    });
+  });
 
   // Replace-all strategy for simplicity (matches admin form save)
   const { error: deleteError } = await supabase
@@ -267,6 +310,40 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     }
   }
 
+  // 按新 package id 写入语言覆盖（Storage）
+  const localeMap: Record<
+    string,
+    Record<
+      string,
+      { name: string; name_external: string; image_url?: string | null }
+    >
+  > = {};
+  for (let i = 0; i < list.length; i++) {
+    const pkg = list[i]!;
+    const inserted = bySort.get(pkg.sort_order ?? i);
+    if (!inserted || !pkg.locales) continue;
+    const next: Record<
+      string,
+      { name: string; name_external: string; image_url?: string | null }
+    > = {};
+    for (const [locale, value] of Object.entries(pkg.locales)) {
+      next[locale] = {
+        name: value?.name?.trim() || "",
+        name_external: value?.name_external?.trim() || "",
+        image_url: value?.image_url?.trim() || null,
+      };
+    }
+    localeMap[inserted.id] = next;
+  }
+  try {
+    await saveAllPackageLocales(supabase, productId, localeMap);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "保存套餐语言失败" },
+      500,
+    );
+  }
+
   // Return refreshed list
   const refreshed = await supabase
     .from("product_packages")
@@ -275,6 +352,22 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     .order("sort_order", { ascending: true });
 
   if (refreshed.error) return c.json({ error: refreshed.error.message }, 500);
+
+  const refreshedIds = (refreshed.data ?? []).map((p) => p.id as string);
+  let localesByPackage = new Map<string, Record<string, unknown>[]>();
+  try {
+    localesByPackage = await listPackageLocalesByPackageIds(
+      supabase,
+      refreshedIds,
+      productId,
+    );
+  } catch (e) {
+    console.warn(
+      "package locales read failed:",
+      e instanceof Error ? e.message : e,
+    );
+    localesByPackage = new Map();
+  }
 
   await supabase
     .from("products")
@@ -288,8 +381,10 @@ packagesRoutes.put("/:productId/packages", async (c) => {
       original_price: pkg.original_price,
       discount_price: pkg.discount_price,
       summary: pkg.summary,
+      image_url: pkg.image_url,
       is_visible: pkg.is_visible,
       sort_order: pkg.sort_order ?? index,
+      locales: pkg.locales ?? {},
       items: pkg.items ?? [],
     }),
   );
@@ -306,5 +401,10 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     remark: packageDiff.summary,
   });
 
-  return c.json({ data: refreshed.data ?? [] });
+  return c.json({
+    data: (refreshed.data ?? []).map((pkg) => ({
+      ...pkg,
+      locales: localesByPackage.get(pkg.id as string) ?? [],
+    })),
+  });
 });

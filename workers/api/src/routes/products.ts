@@ -3,6 +3,7 @@ import type {
   CreateProductInput,
   ProductStatus,
   UpdateProductInput,
+  UpsertProductLocaleInput,
 } from "@shopad/shared";
 import { PRODUCT_STATUSES, normalizeUserRole } from "@shopad/shared";
 import {
@@ -11,7 +12,7 @@ import {
   listAuditLogs,
   writeAuditLog,
 } from "../lib/audit";
-import { buildFieldDiffs, summarizeFieldDiffs } from "../lib/auditDiff";
+import { buildFieldDiffs, buildLocaleAudit, summarizeFieldDiffs } from "../lib/auditDiff";
 import {
   assertProductAccess,
   assertRegionAccess,
@@ -22,6 +23,12 @@ import {
   scopeProductsByOwner,
   syncProductOwners,
 } from "../lib/access";
+import {
+  copyProductLocales,
+  deleteProductLocale,
+  listProductLocales,
+  upsertProductLocale,
+} from "../lib/productLocales";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -375,9 +382,21 @@ async function withProductExtras(
     supabase,
     (withActors ?? row) as Record<string, unknown> & { id: string },
   );
-  return withOwners
+  const base = withOwners
     ? coerceProductListFields(withOwners as Record<string, unknown>)
     : withOwners;
+  if (!base || typeof base !== "object" || !("id" in base)) return base;
+  try {
+    const locales = await listProductLocales(supabase, String(base.id));
+    return { ...base, locales };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/product_locales|schema cache|does not exist|PGRST/i.test(msg)) {
+      console.warn("product_locales unavailable:", msg);
+      return { ...base, locales: [] };
+    }
+    return { ...base, locales: [] };
+  }
 }
 
 export const productsRoutes = new Hono<{
@@ -530,6 +549,138 @@ productsRoutes.get("/:id", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
   if (!data) return c.json({ error: "商品不存在" }, 404);
   return c.json(await withProductExtras(supabase, data));
+});
+
+/** 列出 / 写入商品语言覆盖（路径 = /{region}_{locale}，如 en → /sa_en、/id_en） */
+productsRoutes.get("/:id/locales", async (c) => {
+  const id = c.req.param("id");
+  const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertProductAccess(supabase, id, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+  try {
+    const locales = await listProductLocales(supabase, id);
+    return c.json({ data: locales });
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "读取语言失败" },
+      500,
+    );
+  }
+});
+
+productsRoutes.put("/:id/locales/:locale", async (c) => {
+  const id = c.req.param("id");
+  const localeParam = c.req.param("locale");
+  const body = (await c.req.json()) as UpsertProductLocaleInput;
+  const actor = actorFrom(c);
+  const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertProductAccess(supabase, id, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+
+  const localeCode = (localeParam || body.locale || "").trim().toLowerCase();
+  let beforeLocale: Record<string, unknown> | null = null;
+  try {
+    const existing = await listProductLocales(supabase, id);
+    const found = existing.find(
+      (row) => String(row.locale).toLowerCase() === localeCode,
+    );
+    beforeLocale = found ? (found as Record<string, unknown>) : null;
+  } catch {
+    beforeLocale = null;
+  }
+
+  const result = await upsertProductLocale(supabase, id, {
+    ...body,
+    locale: localeParam || body.locale,
+  });
+  if (!result.ok) return c.json({ error: result.error }, 400);
+
+  const audit = buildLocaleAudit(
+    String(result.data.locale),
+    beforeLocale,
+    result.data as Record<string, unknown>,
+    beforeLocale ? "update" : "create",
+  );
+  await writeAuditLog(supabase, {
+    entityType: "product",
+    entityId: id,
+    action: audit.action,
+    actor,
+    changes: { fields: audit.diffs },
+    remark: audit.remark,
+  });
+  await supabase
+    .from("products")
+    .update({ updated_by: actor.id, updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  return c.json(result.data);
+});
+
+productsRoutes.delete("/:id/locales/:locale", async (c) => {
+  const id = c.req.param("id");
+  const locale = c.req.param("locale");
+  const actor = actorFrom(c);
+  const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertProductAccess(supabase, id, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+
+  let beforeLocale: Record<string, unknown> | null = null;
+  try {
+    const existing = await listProductLocales(supabase, id);
+    const code = (locale || "").trim().toLowerCase();
+    const found = existing.find(
+      (row) => String(row.locale).toLowerCase() === code,
+    );
+    beforeLocale = found ? (found as Record<string, unknown>) : null;
+  } catch {
+    beforeLocale = null;
+  }
+
+  const result = await deleteProductLocale(supabase, id, locale);
+  if (!result.ok) return c.json({ error: result.error }, 400);
+
+  const audit = buildLocaleAudit(
+    result.locale,
+    beforeLocale,
+    null,
+    "delete",
+  );
+  await writeAuditLog(supabase, {
+    entityType: "product",
+    entityId: id,
+    action: audit.action,
+    actor,
+    changes: { fields: audit.diffs },
+    remark: audit.remark,
+  });
+  await supabase
+    .from("products")
+    .update({ updated_by: actor.id, updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  return c.json({ ok: true, locale: result.locale });
 });
 
 /** 复制商品：基本信息 + 套餐；须提供全新唯一链接后缀；新商品为草稿 */
@@ -739,6 +890,43 @@ productsRoutes.post("/:id/copy", async (c) => {
         return c.json({ error: insertItemsError.message }, 500);
       }
     }
+
+    // 复制套餐语言覆盖（按新旧 package id 映射）
+    if (oldToNewPkg.size > 0) {
+      const oldPkgIds = [...oldToNewPkg.keys()];
+      const { data: pkgLocales, error: pkgLocErr } = await supabase
+        .from("product_package_locales")
+        .select("*")
+        .in("package_id", oldPkgIds);
+      if (pkgLocErr) return c.json({ error: pkgLocErr.message }, 500);
+      const localeInserts = (pkgLocales ?? [])
+        .map((row) => {
+          const newId = oldToNewPkg.get(row.package_id as string);
+          if (!newId) return null;
+          return {
+            package_id: newId,
+            locale: row.locale,
+            name: row.name ?? "",
+            name_external: row.name_external ?? "",
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null);
+      if (localeInserts.length > 0) {
+        const { error: insLocErr } = await supabase
+          .from("product_package_locales")
+          .insert(localeInserts);
+        if (insLocErr) return c.json({ error: insLocErr.message }, 500);
+      }
+    }
+  }
+
+  try {
+    await copyProductLocales(supabase, id, created.id);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "复制语言内容失败" },
+      500,
+    );
   }
 
   await writeAuditLog(supabase, {

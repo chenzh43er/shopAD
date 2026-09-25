@@ -137,8 +137,8 @@ with pkgs(name, name_external, original_price, discount_price, sort_order, summa
     (
       'خرطوم 15 متر',
       'خرطوم حديقة قابل للتمدد (15 مترًا)',
-      219.00::numeric,
-      99.00::numeric,
+      239.00::numeric,
+      129.00::numeric,
       1,
       '15m expandable garden hose',
       true,
@@ -198,7 +198,7 @@ from (
     ('خرطوم 30 متر', 'خرطوم حديقة قابل للتمدد (30 مترًا)', 219.00::numeric, 99.00::numeric, 0,
      '30m expandable garden hose', true,
      'https://cdn.youcan.shop/stores/ce723d2c520c644d8521d2d165afc79e/products/NQNBxPmRNMbXHRnoEaC8X8VMlkqrHUT6BzO5g36B.png'),
-    ('خرطوم 15 متر', 'خرطوم حديقة قابل للتمدد (15 مترًا)', 219.00::numeric, 99.00::numeric, 1,
+    ('خرطوم 15 متر', 'خرطوم حديقة قابل للتمدد (15 مترًا)', 239.00::numeric, 129.00::numeric, 1,
      '15m expandable garden hose', true,
      'https://cdn.youcan.shop/stores/ce723d2c520c644d8521d2d165afc79e/products/51GNWUbvzNPmixmkXYDCvT10wNaRMZwThkc5JJCJ.png')
 ) as v(name, name_external, original_price, discount_price, sort_order, summary, is_visible, image_url)

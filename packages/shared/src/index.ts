@@ -324,6 +324,137 @@ export interface Product {
   owners?: ActorRef[];
   creator?: ActorRef | null;
   updater?: ActorRef | null;
+  /** 已配置的店面语言覆盖（不含默认主表） */
+  locales?: ProductLocale[];
+}
+
+/** 可添加的覆盖语言：字段码 → 店面路径 = /{地区}_{字段}，如 en → /sa_en、/id_en */
+export const PRODUCT_CONTENT_LOCALES = ["en", "fr"] as const;
+export type ProductContentLocale = (typeof PRODUCT_CONTENT_LOCALES)[number];
+
+export const PRODUCT_CONTENT_LOCALE_LABELS: Record<
+  ProductContentLocale,
+  string
+> = {
+  en: "英语",
+  fr: "法语",
+};
+
+/** 地区名称 → 路径用 slug（ID→id，SA→sa） */
+export function regionSlugFromName(regionName?: string | null): string {
+  const key = (regionName ?? "").trim().toLowerCase();
+  if (!key || key === "id" || key === "indonesia" || key === "印尼") {
+    return "id";
+  }
+  if (
+    key === "sa" ||
+    key === "saudi" ||
+    key === "saudi arabia" ||
+    key === "沙特"
+  ) {
+    return "sa";
+  }
+  const slug = key.replace(/[^a-z0-9_-]/g, "");
+  return slug || "id";
+}
+
+/** 地区名称 → 默认主字段落地前缀（/{slug}） */
+export function defaultPathPrefixForRegion(
+  regionName?: string | null,
+): string {
+  return `/${regionSlugFromName(regionName)}`;
+}
+
+/**
+ * 店面路径前缀 = 地区 + 语言字段拼接：
+ * - default → /{region}（如 /id、/sa）
+ * - en → /{region}_en（如 /sa_en、/id_en）
+ * - fr → /{region}_fr
+ */
+export function saPathPrefixForLocale(
+  locale: string,
+  regionName?: string | null,
+): string {
+  const region = regionSlugFromName(regionName);
+  const code = (locale ?? "").trim().toLowerCase();
+  if (!code || code === "default") {
+    return `/${region}`;
+  }
+  return `/${region}_${code}`;
+}
+
+/** 覆盖语言字段码：2 位（可带 -xx），排除 default/id/ar */
+export function isValidOverlayLocaleCode(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const code = value.trim().toLowerCase();
+  if (!code || code === "default" || code === "id" || code === "ar") {
+    return false;
+  }
+  return /^[a-z]{2}(-[a-z]{2})?$/.test(code);
+}
+
+export function isProductContentLocale(
+  value: unknown,
+): value is ProductContentLocale {
+  return (
+    typeof value === "string" &&
+    (PRODUCT_CONTENT_LOCALES as readonly string[]).includes(value)
+  );
+}
+
+/** 展示名：已知映射 > 传入 label > 字段码本身 */
+export function localeDisplayLabel(
+  code: string,
+  customLabel?: string | null,
+): string {
+  const known =
+    PRODUCT_CONTENT_LOCALE_LABELS[code as ProductContentLocale] ?? null;
+  const custom = customLabel?.trim();
+  return custom || known || code;
+}
+
+/** 商品多语言覆盖（对应 product_locales） */
+export interface ProductLocale {
+  product_id: string;
+  locale: string;
+  /** 后台展示名，如「英语」 */
+  label?: string | null;
+  title_external: string | null;
+  facebook_pixel_id: string | null;
+  google_conversion_id: string | null;
+  google_label: string | null;
+  description: string | null;
+  description_entries: string[];
+  cover_url: string | null;
+  gallery_urls: string[];
+  detail_image_urls: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type UpsertProductLocaleInput = {
+  locale: string;
+  label?: string | null;
+  title_external?: string | null;
+  facebook_pixel_id?: string | null;
+  google_conversion_id?: string | null;
+  google_label?: string | null;
+  description?: string | null;
+  description_entries?: string[];
+  cover_url?: string | null;
+  gallery_urls?: string[];
+  detail_image_urls?: string[];
+};
+
+/** 套餐多语言覆盖（名称 + 图片） */
+export interface ProductPackageLocale {
+  package_id: string;
+  locale: string;
+  name: string;
+  name_external: string;
+  image_url?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 /** 商品套餐（售价在套餐层，不在 SKU） */
@@ -347,6 +478,8 @@ export interface ProductPackage {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  /** 多语言名称覆盖 */
+  locales?: ProductPackageLocale[];
 }
 
 /** 套餐明细 */
@@ -380,6 +513,11 @@ export interface UpsertProductPackageInput {
   image_url?: string | null;
   is_visible?: boolean;
   sort_order?: number;
+  /** 按 locale 覆盖名称/图片；key 如 en */
+  locales?: Record<
+    string,
+    { name?: string; name_external?: string; image_url?: string | null }
+  >;
   items?: Array<{
     id?: string;
     ref_product_id: string;

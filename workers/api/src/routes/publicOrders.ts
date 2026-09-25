@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { persistOrderOwnerMembers } from "../lib/access";
 import { attachOrderCurrencyOne } from "../lib/orderCurrency";
 import { clientIp, rateLimit } from "../lib/rateLimit";
 import { createServiceClient } from "../lib/supabase";
@@ -113,5 +114,53 @@ export function registerPublicOrderRoutes(app: App) {
     return c.json({
       data: await attachOrderCurrencyOne(supabase, order),
     });
+  });
+
+  /**
+   * 落地页下单后异步补写归属成员（商品所属人）。
+   * storefront 角色读不到 product_owners，故由 Worker service_role 写入。
+   * POST { order_no } | { order_id }
+   */
+  app.post("/api/orders/fill-owner-member", async (c) => {
+    const limited = await enforcePublicRateLimit(c);
+    if (limited) return limited;
+
+    let body: { order_no?: unknown; order_id?: unknown } = {};
+    try {
+      body = (await c.req.json()) as typeof body;
+    } catch {
+      return c.json({ error: "请求体无效" }, 400);
+    }
+
+    const orderNo =
+      typeof body.order_no === "string" ? body.order_no.trim() : "";
+    const orderId =
+      typeof body.order_id === "string" ? body.order_id.trim() : "";
+    if (!orderNo && !orderId) {
+      return c.json({ error: "请提供 order_no 或 order_id" }, 400);
+    }
+    if (orderNo.length > 64 || orderId.length > 64) {
+      return c.json({ error: "参数无效" }, 400);
+    }
+
+    const supabase = createServiceClient(c.env);
+    let query = supabase
+      .from("orders")
+      .select("id, product_id, owner_member, order_no")
+      .limit(1);
+    query = orderId ? query.eq("id", orderId) : query.eq("order_no", orderNo);
+
+    const { data: rows, error } = await query;
+    if (error) {
+      console.error("[publicOrders] fill-owner-member", error);
+      return c.json({ error: "查询失败" }, 500);
+    }
+    const order = rows?.[0];
+    if (!order) return c.json({ error: "订单不存在" }, 404);
+
+    const filled = await persistOrderOwnerMembers(supabase, [order]);
+    const id = typeof order.id === "string" ? order.id : "";
+    const ownerMember = id ? filled.get(id) ?? null : null;
+    return c.json({ ok: true, order_no: order.order_no, owner_member: ownerMember });
   });
 }

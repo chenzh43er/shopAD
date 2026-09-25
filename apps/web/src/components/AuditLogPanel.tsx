@@ -4,6 +4,7 @@ import type { AuditLog } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import dayjs from "dayjs";
 
+/** 操作类型 → 中文标签 */
 const ACTION_LABELS: Record<string, string> = {
   create: "创建",
   update: "修改",
@@ -13,19 +14,40 @@ const ACTION_LABELS: Record<string, string> = {
   remark_update: "备注修改",
   packages_update: "套餐更新",
   order_update: "订单修改",
+  locale_create: "新增语言",
+  locale_update: "更新语言",
+  locale_delete: "删除语言",
 };
 
+const ACTION_COLORS: Record<string, string> = {
+  create: "green",
+  update: "blue",
+  status_change: "orange",
+  review: "geekblue",
+  delete: "red",
+  remark_update: "default",
+  packages_update: "purple",
+  order_update: "cyan",
+  locale_create: "green",
+  locale_update: "blue",
+  locale_delete: "red",
+};
+
+/** 字段 → 中文标签 */
 const FIELD_LABELS: Record<string, string> = {
   name: "商品名称",
   description: "描述",
+  description_entries: "描述条目",
   price: "价格",
   status: "状态",
   link_suffix: "链接后缀",
   title_external: "外文标题",
+  label: "语言名称",
   cover_url: "封面图",
   gallery_urls: "轮播图",
-  facebook_pixel_id: "Facebook Pixel",
-  google_conversion_id: "Google Conversion",
+  detail_image_urls: "详情图",
+  facebook_pixel_id: "Facebook 像素",
+  google_conversion_id: "Google 转化 ID",
   google_label: "Google Label",
   extra_html: "附加 HTML",
   sku_code: "中文属性",
@@ -43,10 +65,15 @@ const FIELD_LABELS: Record<string, string> = {
   original_price: "原价",
   discount_price: "折扣价",
   summary: "套餐说明",
+  image_url: "图片",
   is_visible: "是否显示",
   sort_order: "排序",
   item_count: "明细件数",
   items: "套餐明细",
+  locales: "多语言",
+  locale_count: "语言数",
+  locale: "语言字段",
+  removed_locale: "删除语言",
   customer_name: "收件人",
   customer_phone: "收件电话",
   shipping_province: "收件省",
@@ -65,6 +92,9 @@ const FIELD_LABELS: Record<string, string> = {
   owner_member: "归属成员",
   shipping_order_no: "发货订单号",
   remark: "备注",
+  reject_reason: "拒绝原因",
+  review_status: "审核状态",
+  payment_type: "支付方式",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -74,9 +104,21 @@ const STATUS_LABELS: Record<string, string> = {
   pending: "待处理",
   approved: "已通过",
   rejected: "已拒绝",
+  confirmed: "已确认",
+  shipped: "已发货",
+  delivered: "已签收",
+  rejected_delivery: "拒收",
+  invalid: "无效",
   true: "是",
   false: "否",
 };
+
+const IMAGE_FIELDS = new Set([
+  "cover_url",
+  "gallery_urls",
+  "detail_image_urls",
+  "image_url",
+]);
 
 type FieldDiff = { field: string; from: unknown; to: unknown };
 
@@ -91,6 +133,21 @@ function fieldLabel(field: string): string {
   return field;
 }
 
+function looksLikeUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function formatImageLike(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "无";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "无图";
+    return `${value.length} 张图`;
+  }
+  if (looksLikeUrl(value)) return "有图";
+  return formatScalar(value);
+}
+
 function formatScalar(value: unknown): string {
   if (value === undefined || value === null || value === "") return "—";
   if (typeof value === "boolean") return value ? "是" : "否";
@@ -99,13 +156,38 @@ function formatScalar(value: unknown): string {
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return "空";
+    if (value.every((x) => typeof x === "string" && looksLikeUrl(x))) {
+      return `${value.length} 张图`;
+    }
     if (value.every((x) => typeof x === "string" || typeof x === "number")) {
-      const joined = value.map(String).join(", ");
-      return joined.length > 80 ? `${joined.slice(0, 80)}…（${value.length}项）` : joined;
+      const joined = value.map(String).join("、");
+      return joined.length > 80
+        ? `${joined.slice(0, 80)}…（${value.length}项）`
+        : joined;
     }
     return `${value.length} 项`;
   }
   if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    // 套餐多语言对象：{ en: { name, name_external, image_url } }
+    const localeKeys = Object.keys(obj);
+    if (
+      localeKeys.length > 0 &&
+      localeKeys.every((k) => /^[a-z]{2}(-[a-z]{2})?$/i.test(k))
+    ) {
+      return localeKeys
+        .map((code) => {
+          const row = obj[code];
+          if (!row || typeof row !== "object") return code;
+          const r = row as Record<string, unknown>;
+          const name = String(r.name || r.name_external || "").trim();
+          const hasImg = Boolean(r.image_url);
+          return name
+            ? `${code}「${name}」${hasImg ? "·有图" : ""}`
+            : `${code}${hasImg ? "(有图)" : ""}`;
+        })
+        .join("、");
+    }
     try {
       const text = JSON.stringify(value);
       return text.length > 80 ? `${text.slice(0, 80)}…` : text;
@@ -113,12 +195,32 @@ function formatScalar(value: unknown): string {
       return "[对象]";
     }
   }
+  if (looksLikeUrl(value)) return "有图/链接";
   const text = String(value);
   if (STATUS_LABELS[text]) return STATUS_LABELS[text];
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
 }
 
-function extractFieldDiffs(changes: Record<string, unknown> | null): FieldDiff[] {
+function formatDiffLine(d: FieldDiff): string {
+  const label = fieldLabel(d.field);
+  if (d.field === "package_added" || d.field === "locale") {
+    return `${label}：${formatScalar(d.to)}`;
+  }
+  if (d.field === "package_removed" || d.field === "removed_locale") {
+    return `${label}：${formatScalar(d.from)}`;
+  }
+  const baseField = d.field.includes(".")
+    ? d.field.split(".").pop()!
+    : d.field;
+  if (IMAGE_FIELDS.has(baseField) || IMAGE_FIELDS.has(d.field)) {
+    return `${label}：${formatImageLike(d.from)} → ${formatImageLike(d.to)}`;
+  }
+  return `${label}：${formatScalar(d.from)} → ${formatScalar(d.to)}`;
+}
+
+function extractFieldDiffs(
+  changes: Record<string, unknown> | null,
+): FieldDiff[] {
   if (!changes) return [];
   if (Array.isArray(changes.fields)) {
     return (changes.fields as FieldDiff[]).filter(
@@ -151,40 +253,40 @@ function extractFieldDiffs(changes: Record<string, unknown> | null): FieldDiff[]
   const diffs: FieldDiff[] = [];
   for (const [field, to] of Object.entries(changes)) {
     if (skip.has(field)) continue;
-    if (field === "package_count") {
-      diffs.push({ field, from: null, to });
-      continue;
-    }
     diffs.push({ field, from: null, to });
   }
   return diffs;
 }
 
+/** 含中文或常见摘要分隔符，视为可读摘要 */
+function isReadableSummary(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/[\u4e00-\u9fff]/.test(t)) return true;
+  if (t.includes("→") || t.includes("；")) return true;
+  return false;
+}
+
+/**
+ * 变更列展示优先级：
+ * 1. remark 可读中文摘要
+ * 2. fields / before-after 字段差异（中文标签）
+ * 3. from_value / to_value
+ */
 function formatChangeCell(row: AuditLog): string {
-  // 套餐更新：remark 已是中文摘要（新增/删除/修改了哪些套餐）
-  if (row.action === "packages_update" && row.remark) {
-    return row.remark;
+  const remark = row.remark?.trim() || "";
+  if (remark && isReadableSummary(remark)) {
+    return remark;
   }
 
   const diffs = extractFieldDiffs(row.changes);
   if (diffs.length > 0) {
-    return diffs
-      .map((d) => {
-        if (d.field === "package_added") {
-          return `${fieldLabel(d.field)}: ${formatScalar(d.to)}`;
-        }
-        if (d.field === "package_removed") {
-          return `${fieldLabel(d.field)}: ${formatScalar(d.from)}`;
-        }
-        return `${fieldLabel(d.field)}: ${formatScalar(d.from)} → ${formatScalar(d.to)}`;
-      })
-      .join("；");
+    return diffs.map(formatDiffLine).join("；");
   }
 
-  if (row.remark) return row.remark;
+  if (remark) return remark;
 
   if (row.from_value || row.to_value) {
-    // 旧商品「修改」常把状态写成 on_sale → on_sale，且无字段明细
     if (
       row.action === "update" &&
       row.from_value &&
@@ -193,13 +295,15 @@ function formatChangeCell(row: AuditLog): string {
       return `状态未变（${formatScalar(row.from_value)}）；历史日志未记录字段明细`;
     }
     if (row.action === "packages_update") {
-      return `套餐数量: ${formatScalar(row.from_value)} → ${formatScalar(row.to_value)}（历史日志未记录套餐明细，重新保存套餐后将显示具体变更）`;
+      return `套餐数量：${formatScalar(row.from_value)} → ${formatScalar(row.to_value)}（历史未记明细）`;
     }
     const label =
-      row.action === "status_change" || row.action === "delete"
+      row.action === "status_change" ||
+      row.action === "delete" ||
+      row.action === "review"
         ? "状态"
         : "值";
-    return `${label}: ${formatScalar(row.from_value)} → ${formatScalar(row.to_value)}`;
+    return `${label}：${formatScalar(row.from_value)} → ${formatScalar(row.to_value)}`;
   }
 
   return "—";
@@ -238,7 +342,9 @@ export function AuditLogPanel({ entityType, entityId, refreshKey }: Props) {
   }, [entityType, entityId, refreshKey]);
 
   if (!loading && logs.length === 0) {
-    return <Empty description="暂无操作日志" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
+    return (
+      <Empty description="暂无操作日志" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+    );
   }
 
   return (
@@ -261,7 +367,9 @@ export function AuditLogPanel({ entityType, entityId, refreshKey }: Props) {
           dataIndex: "action",
           width: 110,
           render: (v: string) => (
-            <Tag>{ACTION_LABELS[v] ?? v}</Tag>
+            <Tag color={ACTION_COLORS[v] ?? "default"}>
+              {ACTION_LABELS[v] ?? v}
+            </Tag>
           ),
         },
         {
@@ -271,7 +379,7 @@ export function AuditLogPanel({ entityType, entityId, refreshKey }: Props) {
         },
         {
           title: "变更",
-          width: 420,
+          width: 460,
           render: (_, row) => (
             <Typography.Paragraph
               style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}
@@ -284,13 +392,13 @@ export function AuditLogPanel({ entityType, entityId, refreshKey }: Props) {
         {
           title: "备注",
           dataIndex: "remark",
-          width: 220,
+          width: 180,
           render: (v: string | null, row) => {
-            // 变更列已展示详细内容时，备注列避免重复
             if (!v) return "—";
-            const changeText = formatChangeCell(row);
-            if (changeText === v) return "—";
-            if (row.action === "packages_update") return "—";
+            // 变更列已优先展示可读摘要时，备注列不再重复
+            if (isReadableSummary(v) && formatChangeCell(row) === v.trim()) {
+              return "—";
+            }
             return v;
           },
         },

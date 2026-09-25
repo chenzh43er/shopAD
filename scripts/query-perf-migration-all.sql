@@ -59,3 +59,33 @@ create index if not exists orders_customer_phone_pattern_idx
 
 comment on index public.orders_customer_phone_pattern_idx is
   'Supports prefix ilike/like on customer_phone for order phone search';
+
+-- 4) product-1 / product-2 落地页热点（单商品 link_suffix / 套餐 / 地区树 / 下单去重）
+drop index if exists public.products_link_suffix_uidx;
+
+create unique index products_link_suffix_uidx
+  on public.products (link_suffix)
+  include (id, status, region_id, currency_id)
+  where link_suffix is not null;
+
+create index if not exists products_on_sale_link_suffix_idx
+  on public.products (link_suffix)
+  include (id, region_id, currency_id, packages_enabled, price)
+  where status = 'on_sale'
+    and link_suffix is not null;
+
+create index if not exists product_packages_visible_by_product_idx
+  on public.product_packages (product_id, sort_order, created_at)
+  where is_visible = true;
+
+create index if not exists address_regions_library_tree_idx
+  on public.address_regions (library_id, level, sort_order, name)
+  where level between 1 and 3;
+
+create index if not exists address_regions_library_level_name_idx
+  on public.address_regions (library_id, level, name);
+
+drop index if exists public.address_regions_library_level_idx;
+
+create index if not exists orders_phone_product_created_idx
+  on public.orders (customer_phone, product_id, created_at desc);

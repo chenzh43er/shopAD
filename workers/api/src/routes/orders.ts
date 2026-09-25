@@ -22,6 +22,7 @@ import {
   writeAuditLogs,
   type WriteAuditInput,
 } from "../lib/audit";
+import { buildFieldDiffs, summarizeFieldDiffs } from "../lib/auditDiff";
 import {
   assertOrderAccess,
   assertProductAccess,
@@ -29,6 +30,7 @@ import {
   isSuperAdmin,
   listAccessibleProductIds,
   mapProductOwnerMemberLabels,
+  persistOrderOwnerMembers,
   scopeProductsByOwner,
 } from "../lib/access";
 import {
@@ -50,10 +52,10 @@ const FULL_EXPORT_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 /** 带地区筛选时用 !inner，避免把地区展开成超大 product_id IN (...) */
 const ORDER_LIST_SELECT_REGION =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
 function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
@@ -1450,9 +1452,18 @@ ordersRoutes.get("/", async (c) => {
   const { data, error, count } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
-  const dataOut = (data ?? []).map((row) =>
-    flattenOrderListRow(row as OrderListEmbedRow),
-  );
+  const filled = await persistOrderOwnerMembers(supabase, data ?? []);
+  const dataOut = (data ?? []).map((row) => {
+    const flat = flattenOrderListRow(row as OrderListEmbedRow);
+    const id = typeof flat.id === "string" ? flat.id : "";
+    const fromProduct = id ? filled.get(id) : "";
+    const stored =
+      typeof flat.owner_member === "string" ? flat.owner_member.trim() : "";
+    return {
+      ...flat,
+      owner_member: fromProduct || stored || null,
+    };
+  });
 
   return c.json({
     data: dataOut,
@@ -2059,7 +2070,15 @@ ordersRoutes.get("/:id", async (c) => {
     );
   }
 
-  const withActors = await attachActorsOne(supabase, order);
+  const filled = await persistOrderOwnerMembers(supabase, [order]);
+  const fromProduct =
+    typeof order.id === "string" ? filled.get(order.id) ?? "" : "";
+  const stored =
+    typeof order.owner_member === "string" ? order.owner_member.trim() : "";
+  const withActors = await attachActorsOne(supabase, {
+    ...order,
+    owner_member: fromProduct || stored || null,
+  });
   return c.json(await attachOrderCurrencyOne(supabase, withActors));
 });
 
@@ -2352,7 +2371,11 @@ ordersRoutes.patch("/:id", async (c) => {
     productIdChanging ||
     packageIdChanging
   ) {
-    applyTotalAmount(Number((unitPrice * quantity).toFixed(2)));
+    const shippingFee =
+      typeof before.shipping_fee === "number"
+        ? before.shipping_fee
+        : Number(before.shipping_fee) || 0;
+    applyTotalAmount(Number((unitPrice * quantity + shippingFee).toFixed(2)));
   }
 
   // 结构化地址变更且未显式传 shipping_address 时自动拼接
@@ -2399,37 +2422,62 @@ ordersRoutes.patch("/:id", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
   if (!data) return c.json({ error: "订单不存在" }, 404);
 
+  const beforeSnap: Record<string, unknown> = {
+    customer_name: before.customer_name,
+    customer_phone: before.customer_phone,
+    product_id: before.product_id,
+    product_name: before.product_name,
+    package_id: before.package_id,
+    package_name: before.package_name,
+    sku_code: before.sku_code,
+    quantity: before.quantity,
+    unit_price: before.unit_price,
+    total_amount: before.total_amount,
+    shipping_province: before.shipping_province,
+    shipping_city: before.shipping_city,
+    shipping_district: before.shipping_district,
+    shipping_detail: before.shipping_detail,
+    shipping_address: before.shipping_address,
+    shipping_order_no: before.shipping_order_no,
+    owner_member: before.owner_member,
+    remark: before.remark,
+  };
+  const afterSnap: Record<string, unknown> = {
+    customer_name: data.customer_name,
+    customer_phone: data.customer_phone,
+    product_id: data.product_id,
+    product_name: data.product_name,
+    package_id: data.package_id,
+    package_name: data.package_name,
+    sku_code: data.sku_code,
+    quantity: data.quantity,
+    unit_price: data.unit_price,
+    total_amount: data.total_amount,
+    shipping_province: data.shipping_province,
+    shipping_city: data.shipping_city,
+    shipping_district: data.shipping_district,
+    shipping_detail: data.shipping_detail,
+    shipping_address: data.shipping_address,
+    shipping_order_no: data.shipping_order_no,
+    owner_member: data.owner_member,
+    remark: data.remark,
+  };
+  const fieldDiffs = buildFieldDiffs(beforeSnap, afterSnap);
+
   await writeAuditLog(supabase, {
     entityType: "order",
     entityId: id,
     action: "order_update",
     actor,
     changes: {
-      before: {
-        customer_name: before.customer_name,
-        customer_phone: before.customer_phone,
-        product_id: before.product_id,
-        product_name: before.product_name,
-        package_id: before.package_id,
-        package_name: before.package_name,
-        sku_code: before.sku_code,
-        quantity: before.quantity,
-        unit_price: before.unit_price,
-        total_amount: before.total_amount,
-      },
-      after: {
-        customer_name: data.customer_name,
-        customer_phone: data.customer_phone,
-        product_id: data.product_id,
-        product_name: data.product_name,
-        package_id: data.package_id,
-        package_name: data.package_name,
-        sku_code: data.sku_code,
-        quantity: data.quantity,
-        unit_price: data.unit_price,
-        total_amount: data.total_amount,
-      },
+      fields: fieldDiffs,
+      before: beforeSnap,
+      after: afterSnap,
     },
+    remark:
+      fieldDiffs.length > 0
+        ? summarizeFieldDiffs(fieldDiffs)
+        : "保存订单（无字段差异）",
   });
 
   return c.json(

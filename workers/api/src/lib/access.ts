@@ -785,7 +785,51 @@ export async function mapProductOwnerMemberLabels(
 
 }
 
+/** 把订单归属成员写成商品所属人；返回 orderId → label（仅有所属人时）。 */
+export async function persistOrderOwnerMembers(
+  supabase: ServiceClient,
+  orders: Array<{
+    id?: unknown;
+    product_id?: unknown;
+    owner_member?: unknown;
+  }>,
+): Promise<Map<string, string>> {
+  const labels = await mapProductOwnerMemberLabels(
+    supabase,
+    orders.map((o) => (typeof o.product_id === "string" ? o.product_id : "")),
+  );
+  const byOrderId = new Map<string, string>();
+  const byLabel = new Map<string, string[]>();
 
+  for (const order of orders) {
+    const id = typeof order.id === "string" ? order.id : "";
+    const productId =
+      typeof order.product_id === "string" ? order.product_id : "";
+    const next = productId ? labels.get(productId) ?? "" : "";
+    if (!id || !next) continue;
+    byOrderId.set(id, next);
+    const cur =
+      typeof order.owner_member === "string" ? order.owner_member.trim() : "";
+    if (cur === next) continue;
+    if (!byLabel.has(next)) byLabel.set(next, []);
+    byLabel.get(next)!.push(id);
+  }
+
+  for (const [ownerMember, ids] of byLabel) {
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200);
+      const { error } = await supabase
+        .from("orders")
+        .update({ owner_member: ownerMember })
+        .in("id", chunk);
+      if (error) {
+        console.error("persistOrderOwnerMembers:", error.message);
+      }
+    }
+  }
+
+  return byOrderId;
+}
 
 /** Replace all owners for a product. */
 

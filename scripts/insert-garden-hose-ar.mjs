@@ -74,19 +74,14 @@ const PACKAGES = [
   },
   {
     name: "خرطوم 15 متر",
-    name_external: "خرطوم حديقة قابل للتمدd (15 مترًا)".replace(
-      "للتمدd",
-      "للتمدد",
-    ),
-    original_price: 219,
-    discount_price: 99,
+    name_external: "خرطوم حديقة قابل للتمدد (15 مترًا)",
+    original_price: 239,
+    discount_price: 129,
     sort_order: 1,
     image_url: `${IMG}/products/51GNWUbvzNPmixmkXYDCvT10wNaRMZwThkc5JJCJ.png`,
     sku: "DJ-0074",
   },
 ];
-
-PACKAGES[1].name_external = "خرطوم حديقة قابل للتمدد (15 مترًا)";
 
 const databaseUrl = process.env.DATABASE_URL;
 const supabaseUrl = process.env.SUPABASE_URL;
