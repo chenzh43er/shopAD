@@ -6,6 +6,8 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Radio,
+  Select,
   Space,
   Table,
   Upload,
@@ -21,7 +23,10 @@ import type {
   ImportAddressLibraryResult,
   Paginated,
 } from "@shopad/shared";
-import { localeDisplayLabel } from "@shopad/shared";
+import {
+  isValidOverlayLocaleCode,
+  localeDisplayLabel,
+} from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { parseAddressRegionExcel } from "../lib/parseAddressRegionExcel";
@@ -38,6 +43,14 @@ type CreateForm = {
   name: string;
   dial_code: string;
   remark?: string;
+};
+
+type ImportTargetMode = "default" | "locale";
+
+type ImportModalState = {
+  library: AddressLibrary;
+  /** 打开时预选：默认或某语言码 */
+  presetTarget?: "default" | string;
 };
 
 const CN_LEVEL = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
@@ -70,6 +83,13 @@ export function AddressRegionsPage() {
   );
   const [addedLocales, setAddedLocales] = useState<string[]>([]);
   const [localeLabels, setLocaleLabels] = useState<Record<string, string>>({});
+
+  const [importModal, setImportModal] = useState<ImportModalState | null>(null);
+  const [importMode, setImportMode] = useState<ImportTargetMode>("default");
+  const [importLocaleCode, setImportLocaleCode] = useState<string>("");
+  const [importNewLocaleName, setImportNewLocaleName] = useState("");
+  const [importNewLocaleCode, setImportNewLocaleCode] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -184,6 +204,31 @@ export function AddressRegionsPage() {
     syncLocalesFromLibrary(row);
   };
 
+  const openImportModal = (
+    library: AddressLibrary,
+    presetTarget?: "default" | string,
+  ) => {
+    const locales = library.locales ?? [];
+    const preset = presetTarget ?? "default";
+    setImportModal({ library, presetTarget: preset });
+    if (preset === "default") {
+      setImportMode("default");
+      setImportLocaleCode(locales[0]?.locale ?? "");
+    } else {
+      setImportMode("locale");
+      setImportLocaleCode(preset);
+    }
+    setImportNewLocaleName("");
+    setImportNewLocaleCode("");
+    setImportFile(null);
+  };
+
+  const closeImportModal = () => {
+    if (importing) return;
+    setImportModal(null);
+    setImportFile(null);
+  };
+
   const handleAddLocale = async (code: string, label: string) => {
     if (!detail) throw new Error("请先打开地区明细");
     const saved = await apiFetch<AddressLibraryLocale>(
@@ -233,67 +278,123 @@ export function AddressRegionsPage() {
     await load();
   };
 
-  const handleImportForRow = async (row: AddressLibrary, file: File) => {
-    setImporting(true);
-    try {
-      const buffer = await file.arrayBuffer();
-      const parsed = parseAddressRegionExcel(buffer);
-
-      const confirmed = await new Promise<boolean>((resolve) => {
-        Modal.confirm({
-          title: "确认导入",
-          content: (
-            <div>
-              <p>
-                地区：<strong>{row.name}</strong>
-              </p>
-              <p>
-                共 {parsed.paths.length} 条，{parsed.maxLevel} 级区域
-                （支持二级 / 三级 / 四级…）
-              </p>
-              <p style={{ color: "#666" }}>
-                导入将覆盖该地区现有默认区域数据，并清空各语言译文（语言条目保留，需重新导入译文）。
-              </p>
-            </div>
-          ),
-          okText: "开始导入",
-          cancelText: "取消",
-          onOk: () => resolve(true),
-          onCancel: () => resolve(false),
-        });
-      });
-      if (!confirmed) return;
-
-      const res = await apiFetch<ImportAddressLibraryResult>(
-        `/api/address-libraries/${row.id}/import`,
-        {
-          method: "POST",
-          body: JSON.stringify({ paths: parsed.paths }),
-        },
-      );
-      message.success(
-        `已导入 ${res.imported_paths} 条（${res.max_level} 级）`,
-      );
-      await load();
-      if (detail?.id === row.id) {
-        setDetailPage(1);
-        setDetail(res.library);
-        setContentLocale("default");
-        syncLocalesFromLibrary(res.library);
-      }
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "导入失败");
-    } finally {
-      setImporting(false);
-    }
+  const ensureLocaleExists = async (
+    libraryId: string,
+    code: string,
+    label: string,
+  ) => {
+    await apiFetch<AddressLibraryLocale>(
+      `/api/address-libraries/${libraryId}/locales/${encodeURIComponent(code)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ locale: code, label, names: {} }),
+      },
+    );
   };
 
-  const handleImportLocale = async (file: File) => {
-    if (!detail || contentLocale === "default") return;
+  const submitImportModal = async () => {
+    if (!importModal) return;
+    const { library } = importModal;
+    if (!importFile) {
+      message.error("请选择 Excel 文件");
+      return;
+    }
+
+    let targetLocale: "default" | string = "default";
+    let targetLabel: string | null = null;
+
+    if (importMode === "locale") {
+      const existingCodes = (library.locales ?? []).map((l) => l.locale);
+      if (importLocaleCode === "__new__") {
+        const name = importNewLocaleName.trim();
+        const code = importNewLocaleCode.trim().toLowerCase();
+        if (!name) {
+          message.error("请填写语言名称");
+          return;
+        }
+        if (!isValidOverlayLocaleCode(code)) {
+          message.error(
+            "字段须为 2 位小写字母，如 en、fr（不可用 id / ar / default）",
+          );
+          return;
+        }
+        if (existingCodes.includes(code)) {
+          message.error(`语言字段「${code}」已存在，请直接选择`);
+          return;
+        }
+        targetLocale = code;
+        targetLabel = name;
+      } else {
+        const code = importLocaleCode.trim().toLowerCase();
+        if (!code) {
+          message.error("请选择要导入的语言");
+          return;
+        }
+        targetLocale = code;
+        targetLabel =
+          library.locales?.find((l) => l.locale === code)?.label?.trim() ||
+          null;
+      }
+    }
+
     setImporting(true);
     try {
-      const buffer = await file.arrayBuffer();
+      const buffer = await importFile.arrayBuffer();
       const parsed = parseAddressRegionExcel(buffer);
+
+      if (targetLocale === "default") {
+        const confirmed = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: "确认导入默认语言",
+            content: (
+              <div>
+                <p>
+                  地区：<strong>{library.name}</strong>
+                </p>
+                <p>
+                  目标：<strong>默认语言（主表）</strong>
+                </p>
+                <p>
+                  共 {parsed.paths.length} 条，{parsed.maxLevel} 级区域
+                </p>
+                <p style={{ color: "#666" }}>
+                  将覆盖现有默认区域数据，并清空各语言译文（语言条目保留，需重新导入译文）。
+                </p>
+              </div>
+            ),
+            okText: "开始导入",
+            cancelText: "取消",
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+        if (!confirmed) return;
+
+        const res = await apiFetch<ImportAddressLibraryResult>(
+          `/api/address-libraries/${library.id}/import`,
+          {
+            method: "POST",
+            body: JSON.stringify({ paths: parsed.paths }),
+          },
+        );
+        message.success(
+          `已导入默认语言 ${res.imported_paths} 条（${res.max_level} 级）`,
+        );
+        setImportModal(null);
+        setImportFile(null);
+        await load();
+        if (detail?.id === library.id) {
+          setDetailPage(1);
+          setDetail(res.library);
+          setContentLocale("default");
+          syncLocalesFromLibrary(res.library);
+        }
+        return;
+      }
+
+      if (importLocaleCode === "__new__" && targetLabel) {
+        await ensureLocaleExists(library.id, targetLocale, targetLabel);
+      }
 
       const confirmed = await new Promise<boolean>((resolve) => {
         Modal.confirm({
@@ -301,20 +402,18 @@ export function AddressRegionsPage() {
           content: (
             <div>
               <p>
-                地区：<strong>{detail.name}</strong>
+                地区：<strong>{library.name}</strong>
               </p>
               <p>
-                语言：
+                目标：
                 <strong>
-                  {localeDisplayLabel(
-                    contentLocale,
-                    localeLabels[contentLocale],
-                  )}{" "}
-                  · {contentLocale}
+                  {localeDisplayLabel(targetLocale, targetLabel)} ·{" "}
+                  {targetLocale}
                 </strong>
               </p>
               <p>
-                共 {parsed.paths.length} 条译文路径（须与默认叶路径行数、级数一致，按当前列表顺序一一对应）
+                共 {parsed.paths.length}{" "}
+                条译文路径（须与默认叶路径行数、级数一致，按叶子顺序一一对应）
               </p>
             </div>
           ),
@@ -330,26 +429,63 @@ export function AddressRegionsPage() {
         imported_paths: number;
         name_keys: number;
       }>(
-        `/api/address-libraries/${detail.id}/locales/${encodeURIComponent(contentLocale)}/import`,
+        `/api/address-libraries/${library.id}/locales/${encodeURIComponent(targetLocale)}/import`,
         {
           method: "POST",
           body: JSON.stringify({
             paths: parsed.paths,
-            label: localeLabels[contentLocale] ?? null,
+            label: targetLabel,
           }),
         },
       );
       message.success(
-        `已导入 ${res.imported_paths} 条译文（${res.name_keys} 个节点名）`,
+        `已导入 ${localeDisplayLabel(targetLocale, targetLabel)} 译文 ${res.imported_paths} 条（${res.name_keys} 个节点名）`,
       );
-      setDetailPage(1);
-      await loadDetailRows();
+      setImportModal(null);
+      setImportFile(null);
+      await load();
+      if (detail?.id === library.id) {
+        setContentLocale(targetLocale);
+        setDetailPage(1);
+        setAddedLocales((prev) =>
+          prev.includes(targetLocale) ? prev : [...prev, targetLocale],
+        );
+        if (targetLabel) {
+          setLocaleLabels((prev) => ({
+            ...prev,
+            [targetLocale]: targetLabel!,
+          }));
+        }
+        setDetail((prev) => {
+          if (!prev) return prev;
+          const others = (prev.locales ?? []).filter(
+            (l) => l.locale !== targetLocale,
+          );
+          return {
+            ...prev,
+            locales: [
+              ...others,
+              { locale: targetLocale, label: targetLabel },
+            ],
+          };
+        });
+      }
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "导入译文失败");
+      message.error(e instanceof Error ? e.message : "导入失败");
     } finally {
       setImporting(false);
     }
   };
+
+  const importModalLocales = importModal?.library.locales ?? [];
+  const importLocaleSelectOptions = useMemo(() => {
+    const opts = importModalLocales.map((l) => ({
+      value: l.locale,
+      label: `${localeDisplayLabel(l.locale, l.label)} · ${l.locale}`,
+    }));
+    opts.push({ value: "__new__", label: "＋ 新建语言并导入…" });
+    return opts;
+  }, [importModalLocales]);
 
   const columns: ColumnsType<AddressLibrary> = [
     {
@@ -398,7 +534,7 @@ export function AddressRegionsPage() {
     {
       title: "操作",
       key: "actions",
-      width: 320,
+      width: 300,
       render: (_, row) => (
         <Space wrap>
           <Button size="small" onClick={() => openDetail(row)}>
@@ -407,18 +543,14 @@ export function AddressRegionsPage() {
           <Button size="small" onClick={() => openEdit(row)}>
             编辑
           </Button>
-          <Upload
-            accept=".xlsx,.xls"
-            showUploadList={false}
-            beforeUpload={(file) => {
-              void handleImportForRow(row, file);
-              return false;
-            }}
+          <Button
+            size="small"
+            icon={<UploadOutlined />}
+            loading={importing && importModal?.library.id === row.id}
+            onClick={() => openImportModal(row, "default")}
           >
-            <Button size="small" icon={<UploadOutlined />} loading={importing}>
-              导入默认
-            </Button>
-          </Upload>
+            导入
+          </Button>
           <Popconfirm
             title={`确认删除地区「${row.name}」？`}
             description="将同时删除其全部区域数据与语言覆盖"
@@ -469,7 +601,8 @@ export function AddressRegionsPage() {
         </Button>
       </div>
       <p style={{ color: "#666", marginTop: -8, marginBottom: 16 }}>
-        新增地区后可导入 Excel（表头为「一级区域 / 二级区域 / …」）。支持二级、三级、四级及更多级。多语言与商品管理一致：默认主字段 + 覆盖语言（如 en → /sa_en）。
+        导入时可选择写入「默认语言」或「其他多语言」。Excel 表头为「一级区域 /
+        二级区域 / …」。覆盖语言译文须与默认叶路径行数、级数一致。
       </p>
 
       <Table
@@ -583,8 +716,8 @@ export function AddressRegionsPage() {
             />
           </Form.Item>
           <Form.Item
-            label="导入文件（可选）"
-            extra="xlsx/xls，列可为二级 / 三级 / 四级区域…"
+            label="导入默认语言文件（可选）"
+            extra="xlsx/xls；新建时仅写入默认主表。其他语言请创建后用「导入」选择目标语言"
           >
             <Upload
               accept=".xlsx,.xls"
@@ -668,7 +801,12 @@ export function AddressRegionsPage() {
             ]}
             extra="国际电话区号；印尼填 62"
           >
-            <Input maxLength={5} placeholder="如：62" addonBefore="+" allowClear />
+            <Input
+              maxLength={5}
+              placeholder="如：62"
+              addonBefore="+"
+              allowClear
+            />
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea
@@ -682,11 +820,134 @@ export function AddressRegionsPage() {
         </Form>
       </Modal>
 
+      <Modal
+        title={
+          importModal
+            ? `导入区域 · ${importModal.library.name}`
+            : "导入区域"
+        }
+        open={Boolean(importModal)}
+        onCancel={closeImportModal}
+        confirmLoading={importing}
+        destroyOnClose
+        okText="解析并导入"
+        onOk={() => void submitImportModal()}
+      >
+        <Form layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item
+            label="导入目标"
+            required
+            extra={
+              importMode === "default"
+                ? "写入主表默认语言；会覆盖现有默认区域并清空各语言译文内容"
+                : "写入覆盖语言译文；须与默认叶路径行数、级数一致（按顺序对应）"
+            }
+          >
+            <Radio.Group
+              value={importMode}
+              onChange={(e) => {
+                const mode = e.target.value as ImportTargetMode;
+                setImportMode(mode);
+                if (
+                  mode === "locale" &&
+                  !importLocaleCode &&
+                  importModalLocales[0]
+                ) {
+                  setImportLocaleCode(importModalLocales[0].locale);
+                }
+              }}
+              optionType="button"
+              buttonStyle="solid"
+            >
+              <Radio.Button value="default">默认语言</Radio.Button>
+              <Radio.Button value="locale">其他多语言</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+
+          {importMode === "locale" ? (
+            <>
+              <Form.Item
+                label="语言"
+                required
+                extra="选择已有语言，或「新建语言并导入」"
+              >
+                <Select
+                  value={importLocaleCode || undefined}
+                  placeholder="请选择语言"
+                  options={importLocaleSelectOptions}
+                  onChange={(value) => setImportLocaleCode(value)}
+                />
+              </Form.Item>
+              {importLocaleCode === "__new__" ? (
+                <>
+                  <Form.Item
+                    label="语言名称"
+                    required
+                    extra="展示名称，如：英语、法语"
+                  >
+                    <Input
+                      value={importNewLocaleName}
+                      onChange={(e) => setImportNewLocaleName(e.target.value)}
+                      placeholder="英语"
+                      maxLength={32}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label="语言字段"
+                    required
+                    extra="路径用代码，2 位小写字母，如 en、fr"
+                  >
+                    <Input
+                      value={importNewLocaleCode}
+                      onChange={(e) => setImportNewLocaleCode(e.target.value)}
+                      placeholder="en"
+                      maxLength={5}
+                    />
+                  </Form.Item>
+                </>
+              ) : null}
+            </>
+          ) : null}
+
+          <Form.Item
+            label="Excel 文件"
+            required
+            extra="表头「一级区域 / 二级区域 / …」或 PROVINSI / KABUPATEN / …"
+          >
+            <Upload
+              accept=".xlsx,.xls"
+              maxCount={1}
+              fileList={
+                importFile
+                  ? [
+                      {
+                        uid: "import-file",
+                        name: importFile.name,
+                        status: "done",
+                      },
+                    ]
+                  : []
+              }
+              beforeUpload={(file) => {
+                setImportFile(file);
+                return false;
+              }}
+              onRemove={() => setImportFile(null)}
+            >
+              <Button icon={<UploadOutlined />}>选择 Excel</Button>
+            </Upload>
+          </Form.Item>
+        </Form>
+      </Modal>
+
       <Drawer
         title={detail ? `地区明细 · ${detail.name}` : "地区明细"}
         open={Boolean(detail)}
         onClose={() => setDetail(null)}
-        width={Math.min(960, typeof window !== "undefined" ? window.innerWidth - 48 : 960)}
+        width={Math.min(
+          960,
+          typeof window !== "undefined" ? window.innerWidth - 48 : 960,
+        )}
         destroyOnClose
       >
         {detail ? (
@@ -704,7 +965,7 @@ export function AddressRegionsPage() {
               onRemoveLocale={handleRemoveLocale}
               removeConfirmContent="将删除该语言下的地区名称译文。"
               showPathHint
-              overlayHint=" · 当前为覆盖语言：列表显示译文；请用「导入本语言」上传与默认叶路径顺序一致的 Excel"
+              overlayHint=" · 当前为覆盖语言：列表显示译文；用「导入」可选择写入默认或本语言"
             />
             <Space wrap style={{ marginBottom: 16 }} size="middle">
               <span>
@@ -724,33 +985,18 @@ export function AddressRegionsPage() {
                   setDetailPage(1);
                 }}
               />
-              {contentLocale === "default" ? (
-                <Upload
-                  accept=".xlsx,.xls"
-                  showUploadList={false}
-                  beforeUpload={(file) => {
-                    void handleImportForRow(detail, file);
-                    return false;
-                  }}
-                >
-                  <Button icon={<UploadOutlined />} loading={importing}>
-                    重新导入默认
-                  </Button>
-                </Upload>
-              ) : (
-                <Upload
-                  accept=".xlsx,.xls"
-                  showUploadList={false}
-                  beforeUpload={(file) => {
-                    void handleImportLocale(file);
-                    return false;
-                  }}
-                >
-                  <Button icon={<UploadOutlined />} loading={importing}>
-                    导入本语言
-                  </Button>
-                </Upload>
-              )}
+              <Button
+                icon={<UploadOutlined />}
+                loading={importing}
+                onClick={() =>
+                  openImportModal(
+                    detail,
+                    contentLocale === "default" ? "default" : contentLocale,
+                  )
+                }
+              >
+                导入
+              </Button>
             </Space>
             <Table
               rowKey="id"
