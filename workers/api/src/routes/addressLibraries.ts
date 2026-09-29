@@ -4,9 +4,19 @@ import type {
   CreateAddressLibraryInput,
   ImportAddressLibraryInput,
   UpdateAddressLibraryInput,
+  UpsertAddressLibraryLocaleInput,
 } from "@shopad/shared";
+import { buildAddressLocaleNames, translateAddressPath } from "@shopad/shared";
 import { createServiceClient } from "../lib/supabase";
 import { isSuperAdmin, listAllowedRegionIds } from "../lib/access";
+import {
+  clearAddressLocaleNames,
+  deleteAddressLibraryLocale,
+  deleteAllAddressLibraryLocales,
+  listAddressLibraryLocaleMeta,
+  listAddressLibraryLocales,
+  upsertAddressLibraryLocale,
+} from "../lib/addressLocales";
 import { requireSuperAdmin } from "../middleware/auth";
 import type { Env, Variables } from "../types";
 
@@ -165,6 +175,16 @@ async function summarizeLibrary(
   if (countRes.error) throw new Error(countRes.error.message);
   if (levelRes.error) throw new Error(levelRes.error.message);
 
+  let locales: AddressLibrary["locales"] = [];
+  try {
+    locales = await listAddressLibraryLocaleMeta(supabase, library.id);
+  } catch (e) {
+    console.warn(
+      "address locales meta failed:",
+      e instanceof Error ? e.message : e,
+    );
+  }
+
   return {
     id: library.id,
     name: library.name,
@@ -174,6 +194,7 @@ async function summarizeLibrary(
     region_count: countRes.count ?? 0,
     created_at: library.created_at,
     updated_at: library.updated_at,
+    locales,
   };
 }
 
@@ -205,7 +226,7 @@ async function summarizeLibraries(
         max_level: Number(row.max_level) || 0,
       });
     }
-    return libraries.map((library) => {
+    const withStats = libraries.map((library) => {
       const s = byId.get(library.id);
       return {
         id: library.id,
@@ -216,8 +237,21 @@ async function summarizeLibraries(
         region_count: s?.region_count ?? 0,
         created_at: library.created_at,
         updated_at: library.updated_at,
+        locales: [] as AddressLibrary["locales"],
       };
     });
+
+    // 列表页附带语言元信息（并行，失败不阻断）
+    await Promise.all(
+      withStats.map(async (lib) => {
+        try {
+          lib.locales = await listAddressLibraryLocaleMeta(supabase, lib.id);
+        } catch {
+          lib.locales = [];
+        }
+      }),
+    );
+    return withStats;
   }
 
   return Promise.all(libraries.map((row) => summarizeLibrary(supabase, row)));
@@ -477,6 +511,15 @@ addressLibrariesRoutes.post("/:id/import", requireSuperAdmin, async (c) => {
       normalized.paths,
       normalized.maxLevel,
     );
+    // 默认树已替换，旧路径 key 失效 → 清空各语言译名（保留语言条目）
+    try {
+      await clearAddressLocaleNames(supabase, id);
+    } catch (e) {
+      console.warn(
+        "clear address locale names failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
     const summary = await summarizeLibrary(supabase, library as LibraryRow);
     return c.json({
       library: summary,
@@ -567,6 +610,14 @@ addressLibrariesRoutes.post("/import", requireSuperAdmin, async (c) => {
       normalized.paths,
       normalized.maxLevel,
     );
+    try {
+      await clearAddressLocaleNames(supabase, library.id);
+    } catch (e) {
+      console.warn(
+        "clear address locale names failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
     const summary = await summarizeLibrary(supabase, library);
     return c.json({
       library: summary,
@@ -672,12 +723,166 @@ addressLibrariesRoutes.delete("/:id", requireSuperAdmin, async (c) => {
 
   if (error) return c.json({ error: error.message }, 500);
   if (!data) return c.json({ error: "地区不存在" }, 404);
+  try {
+    await deleteAllAddressLibraryLocales(supabase, id);
+  } catch (e) {
+    console.warn(
+      "delete address locales failed:",
+      e instanceof Error ? e.message : e,
+    );
+  }
   return c.json({ ok: true });
 });
+
+/** 列出地址库语言覆盖 */
+addressLibrariesRoutes.get("/:id/locales", async (c) => {
+  const id = c.req.param("id");
+  const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertLibraryAccess(supabase, c, id);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+  try {
+    const locales = await listAddressLibraryLocales(supabase, id);
+    return c.json({ data: locales });
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "读取语言失败" },
+      500,
+    );
+  }
+});
+
+/** 创建/更新语言覆盖（可只写 label，或整表替换 names） */
+addressLibrariesRoutes.put(
+  "/:id/locales/:locale",
+  requireSuperAdmin,
+  async (c) => {
+    const id = c.req.param("id");
+    const localeParam = c.req.param("locale");
+    let body: UpsertAddressLibraryLocaleInput;
+    try {
+      body = (await c.req.json()) as UpsertAddressLibraryLocaleInput;
+    } catch {
+      return c.json({ error: "请求体无效" }, 400);
+    }
+
+    const supabase = createServiceClient(c.env);
+    const { data: library, error: libError } = await supabase
+      .from("address_libraries")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (libError) return c.json({ error: libError.message }, 500);
+    if (!library) return c.json({ error: "地区不存在" }, 404);
+
+    const result = await upsertAddressLibraryLocale(supabase, id, {
+      ...body,
+      locale: localeParam || body.locale,
+    });
+    if (!result.ok) return c.json({ error: result.error }, 400);
+    return c.json(result.data);
+  },
+);
+
+addressLibrariesRoutes.delete(
+  "/:id/locales/:locale",
+  requireSuperAdmin,
+  async (c) => {
+    const id = c.req.param("id");
+    const locale = c.req.param("locale");
+    const supabase = createServiceClient(c.env);
+    const result = await deleteAddressLibraryLocale(supabase, id, locale);
+    if (!result.ok) return c.json({ error: result.error }, 400);
+    return c.json({ ok: true, locale: result.locale });
+  },
+);
+
+/**
+ * 导入某语言译文路径：Excel 解析后的 paths 须与当前默认叶路径行数、级数一致（按叶子顺序一一对应）
+ */
+addressLibrariesRoutes.post(
+  "/:id/locales/:locale/import",
+  requireSuperAdmin,
+  async (c) => {
+    const id = c.req.param("id");
+    const localeParam = c.req.param("locale");
+    let body: { paths?: unknown; label?: string | null };
+    try {
+      body = (await c.req.json()) as {
+        paths?: unknown;
+        label?: string | null;
+      };
+    } catch {
+      return c.json({ error: "请求体无效" }, 400);
+    }
+
+    const normalized = normalizePaths(body.paths);
+    if (!normalized.ok) return c.json({ error: normalized.error }, 400);
+
+    const supabase = createServiceClient(c.env);
+    const { data: library, error: libError } = await supabase
+      .from("address_libraries")
+      .select("id")
+      .eq("id", id)
+      .maybeSingle();
+    if (libError) return c.json({ error: libError.message }, 500);
+    if (!library) return c.json({ error: "地区不存在" }, 404);
+
+    const all: RegionRow[] = [];
+    const fetchSize = 1000;
+    for (let from = 0; ; from += fetchSize) {
+      const { data, error } = await supabase
+        .from("address_regions")
+        .select(
+          "id, library_id, parent_id, name, level, sort_order, created_at, updated_at",
+        )
+        .eq("library_id", id)
+        .order("level", { ascending: true })
+        .order("sort_order", { ascending: true })
+        .range(from, from + fetchSize - 1);
+      if (error) return c.json({ error: error.message }, 500);
+      const chunk = (data ?? []) as RegionRow[];
+      all.push(...chunk);
+      if (chunk.length < fetchSize) break;
+    }
+
+    const defaultLeaves = buildLeafPaths(all).map((leaf) => leaf.path);
+    if (defaultLeaves.length === 0) {
+      return c.json({ error: "请先导入默认语言区域数据" }, 400);
+    }
+
+    const built = buildAddressLocaleNames(defaultLeaves, normalized.paths);
+    if (!built.ok) return c.json({ error: built.error }, 400);
+
+    const result = await upsertAddressLibraryLocale(supabase, id, {
+      locale: localeParam,
+      label: body.label,
+      names: built.names,
+    });
+    if (!result.ok) return c.json({ error: result.error }, 400);
+
+    return c.json({
+      locale: result.data,
+      imported_paths: normalized.paths.length,
+      name_keys: Object.keys(built.names).length,
+    });
+  },
+);
 
 addressLibrariesRoutes.get("/:id/regions", async (c) => {
   const id = c.req.param("id");
   const q = (c.req.query("q") ?? "").trim();
+  const localeRaw = (c.req.query("locale") ?? "").trim().toLowerCase();
+  const contentLocale =
+    localeRaw && localeRaw !== "default" && localeRaw !== "id" && localeRaw !== "ar"
+      ? localeRaw
+      : null;
   const page = Math.max(1, Number(c.req.query("page") ?? 1) || 1);
   const pageSize = Math.min(
     200,
@@ -724,11 +929,44 @@ addressLibrariesRoutes.get("/:id/regions", async (c) => {
     if (chunk.length < fetchSize) break;
   }
 
-  let leaves = buildLeafPaths(all);
+  let names: Record<string, string> = {};
+  if (contentLocale) {
+    try {
+      const locales = await listAddressLibraryLocales(supabase, id);
+      const row = locales.find(
+        (item) => String(item.locale).toLowerCase() === contentLocale,
+      );
+      names =
+        row && row.names && typeof row.names === "object"
+          ? (row.names as Record<string, string>)
+          : {};
+    } catch (e) {
+      console.warn(
+        "address locale names load failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+
+  let leaves = buildLeafPaths(all).map((leaf) => {
+    const defaultPath = leaf.path;
+    const path = contentLocale
+      ? translateAddressPath(defaultPath, names)
+      : defaultPath;
+    return {
+      id: leaf.id,
+      path,
+      default_path: defaultPath,
+      level: leaf.level,
+    };
+  });
+
   if (q) {
     const needle = q.toLowerCase();
-    leaves = leaves.filter((leaf) =>
-      leaf.path.some((part) => part.toLowerCase().includes(needle)),
+    leaves = leaves.filter(
+      (leaf) =>
+        leaf.path.some((part) => part.toLowerCase().includes(needle)) ||
+        leaf.default_path.some((part) => part.toLowerCase().includes(needle)),
     );
   }
 
@@ -743,5 +981,6 @@ addressLibrariesRoutes.get("/:id/regions", async (c) => {
     page,
     pageSize,
     max_level: maxLevel,
+    locale: contentLocale ?? "default",
   });
 });

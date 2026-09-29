@@ -88,6 +88,12 @@ type ToolbarProps = {
   onAddLocale: (locale: string, label: string) => void | Promise<void>;
   /** 删除并持久化；失败时抛错 */
   onRemoveLocale: (locale: string) => void | Promise<void>;
+  /** 删除确认文案；地区管理可覆盖 */
+  removeConfirmContent?: string;
+  /** 是否展示落地路径提示（商品表单用） */
+  showPathHint?: boolean;
+  /** 覆盖语言编辑时的说明 */
+  overlayHint?: string;
 };
 
 export function ProductLocaleToolbar({
@@ -99,6 +105,9 @@ export function ProductLocaleToolbar({
   onChangeLocale,
   onAddLocale,
   onRemoveLocale,
+  removeConfirmContent,
+  showPathHint = true,
+  overlayHint,
 }: ToolbarProps) {
   const [addOpen, setAddOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -156,7 +165,9 @@ export function ProductLocaleToolbar({
   const confirmRemove = (code: string) => {
     Modal.confirm({
       title: `删除语言「${localeDisplayLabel(code, localeLabels[code])}」？`,
-      content: "将删除该语言下的商品覆盖内容（套餐外文名需在套餐里另行清理）。",
+      content:
+        removeConfirmContent ??
+        "将删除该语言下的商品覆盖内容（套餐外文名需在套餐里另行清理）。",
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -227,12 +238,17 @@ export function ProductLocaleToolbar({
           添加语言
         </Button>
       </div>
-      <div style={{ color: "#888", fontSize: 12 }}>
-        当前落地页路径：<code>{pathHint}</code>
-        {contentLocale !== "default"
-          ? " · 仅编辑下列多语言字段；价格/SKU/套餐开关等仍在「默认」"
-          : ` · 默认主字段路径 ${defaultPrefix}；覆盖语言路径为 /地区_语言字段（如 ${saPathPrefixForLocale("en", regionName)}）`}
-      </div>
+      {showPathHint ? (
+        <div style={{ color: "#888", fontSize: 12 }}>
+          当前落地页路径：<code>{pathHint}</code>
+          {contentLocale !== "default"
+            ? overlayHint ??
+              " · 仅编辑下列多语言字段；价格/SKU/套餐开关等仍在「默认」"
+            : ` · 默认主字段路径 ${defaultPrefix}；覆盖语言路径为 /地区_语言字段（如 ${saPathPrefixForLocale("en", regionName)}）`}
+        </div>
+      ) : contentLocale !== "default" && overlayHint ? (
+        <div style={{ color: "#888", fontSize: 12 }}>{overlayHint}</div>
+      ) : null}
 
       <Modal
         title="添加语言"

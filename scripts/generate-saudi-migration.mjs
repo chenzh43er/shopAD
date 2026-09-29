@@ -1,5 +1,6 @@
 /**
- * 从 data/saudi-addresses.json 生成 Supabase 迁移 SQL
+ * 从 data/saudi-addresses.json 生成 Supabase 迁移 SQL（默认阿语主表）
+ * 英语覆盖由 scripts/seed-saudi-region.mjs 写入 Storage，不在本 SQL 内。
  * 用法：node scripts/generate-saudi-migration.mjs
  */
 import { readFileSync, writeFileSync } from "node:fs";
@@ -9,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LIBRARY_NAME = "沙特阿拉伯";
 const DIAL_CODE = "966";
-const REMARK = "Saudi Arabia / KSA";
+const REMARK = "Saudi Arabia / KSA · 默认阿语 + en 英语覆盖";
 const OUT_PATH = resolve(
   root,
   "supabase/migrations/20260827010000_saudi_address_library.sql",
@@ -19,11 +20,16 @@ const regions = JSON.parse(
   readFileSync(resolve(root, "data/saudi-addresses.json"), "utf8"),
 );
 
+function districtAr(district) {
+  if (typeof district === "string") return district;
+  return String(district?.name ?? "").trim();
+}
+
 const paths = [];
 for (const region of regions) {
   for (const city of region.cities ?? []) {
     for (const district of city.districts ?? []) {
-      paths.push([region.name, city.name, district]);
+      paths.push([region.name, city.name, districtAr(district)]);
     }
   }
 }
@@ -32,14 +38,16 @@ if (paths.length === 0) {
   throw new Error("saudi-addresses.json 没有可导入的路径");
 }
 
-/** @param {string} s */
-const esc = (s) => s.replace(/'/g, "''");
+/** @param {unknown} s */
+const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
 const valueRows = paths
   .map((p) => `    ('${p.map(esc).join("','")}')`)
   .join(",\n");
 
 const sql = `-- 沙特阿拉伯地区库（${paths.length} 条三级地址路径，区号 966）
+-- 默认语言：阿拉伯语（主表 address_regions）
+-- 英语覆盖请运行：pnpm seed:saudi（写入 product-locales/addresses/.../en.json）
 -- 由 scripts/generate-saudi-migration.mjs 生成，源数据：data/saudi-addresses.json
 
 do $$
@@ -118,4 +126,4 @@ end $$;
 
 writeFileSync(OUT_PATH, sql, "utf8");
 console.log(`已生成迁移：${OUT_PATH}`);
-console.log(`- 路径行数：${paths.length}`);
+console.log(`- 路径行数：${paths.length}（阿语默认）`);

@@ -1,237 +1,363 @@
 [
   {
-    "name": "Riyadh Region",
+    "name": "منطقة الرياض",
+    "name_en": "Riyadh Region",
     "cities": [
       {
-        "name": "Riyadh",
+        "name": "الرياض",
+        "name_en": "Riyadh",
         "districts": [
-          "Al Olaya",
-          "Al Malaz",
-          "Al Nakheel",
-          "Al Murabba",
-          "Al Sulaymaniyah",
-          "Al Woroud",
-          "Al Sahafa"
+          { "name": "العليا", "name_en": "Al Olaya" },
+          { "name": "الملز", "name_en": "Al Malaz" },
+          { "name": "النخيل", "name_en": "Al Nakheel" },
+          { "name": "المربع", "name_en": "Al Murabba" },
+          { "name": "السليمانية", "name_en": "Al Sulaymaniyah" },
+          { "name": "الورود", "name_en": "Al Woroud" },
+          { "name": "الصحافة", "name_en": "Al Sahafa" }
         ]
       },
       {
-        "name": "Al Kharj",
-        "districts": ["Al Kharj Center", "Al Rayyan", "Al Yamama"]
-      },
-      {
-        "name": "Al Majma'ah",
-        "districts": ["Al Majma'ah Center"]
-      },
-      {
-        "name": "Diriyah",
-        "districts": ["Diriyah Center", "Al Bujairi"]
-      }
-    ]
-  },
-  {
-    "name": "Makkah Region",
-    "cities": [
-      {
-        "name": "Jeddah",
+        "name": "الخرج",
+        "name_en": "Al Kharj",
         "districts": [
-          "Al Hamra",
-          "Al Rawdah",
-          "Al Shati",
-          "Al Salamah",
-          "Al Andalus",
-          "Al Baghdadiyah"
+          { "name": "وسط الخرج", "name_en": "Al Kharj Center" },
+          { "name": "الريان", "name_en": "Al Rayyan" },
+          { "name": "اليمامة", "name_en": "Al Yamama" }
         ]
       },
       {
-        "name": "Mecca",
-        "districts": ["Al Aziziyah", "Al Shubaikah", "Al Misfalah", "Al Kakiyyah"]
+        "name": "المجمعة",
+        "name_en": "Al Majma'ah",
+        "districts": [
+          { "name": "وسط المجمعة", "name_en": "Al Majma'ah Center" }
+        ]
       },
       {
-        "name": "Taif",
-        "districts": ["Al Shafa", "Al Hawiyah", "Al Faisaliyah"]
-      },
-      {
-        "name": "Rabigh",
-        "districts": ["Rabigh Center"]
+        "name": "الدرعية",
+        "name_en": "Diriyah",
+        "districts": [
+          { "name": "وسط الدرعية", "name_en": "Diriyah Center" },
+          { "name": "البجيري", "name_en": "Al Bujairi" }
+        ]
       }
     ]
   },
   {
-    "name": "Madinah Region",
+    "name": "منطقة مكة المكرمة",
+    "name_en": "Makkah Region",
     "cities": [
       {
-        "name": "Medina",
-        "districts": ["Al Awali", "Al Haram", "Quba", "Al Iskan"]
+        "name": "جدة",
+        "name_en": "Jeddah",
+        "districts": [
+          { "name": "الحمراء", "name_en": "Al Hamra" },
+          { "name": "الروضة", "name_en": "Al Rawdah" },
+          { "name": "الشاطئ", "name_en": "Al Shati" },
+          { "name": "السلامة", "name_en": "Al Salamah" },
+          { "name": "الأندلس", "name_en": "Al Andalus" },
+          { "name": "البغدادية", "name_en": "Al Baghdadiyah" }
+        ]
       },
       {
-        "name": "Yanbu",
-        "districts": ["Yanbu Al Bahr", "Yanbu Al Sinaiyah"]
+        "name": "مكة المكرمة",
+        "name_en": "Mecca",
+        "districts": [
+          { "name": "العزيزية", "name_en": "Al Aziziyah" },
+          { "name": "الشبيكة", "name_en": "Al Shubaikah" },
+          { "name": "المسفلة", "name_en": "Al Misfalah" },
+          { "name": "الكعكية", "name_en": "Al Kakiyyah" }
+        ]
       },
       {
-        "name": "Al Ula",
-        "districts": ["Al Ula Center"]
+        "name": "الطائف",
+        "name_en": "Taif",
+        "districts": [
+          { "name": "الشفا", "name_en": "Al Shafa" },
+          { "name": "الحوية", "name_en": "Al Hawiyah" },
+          { "name": "الفيصلية", "name_en": "Al Faisaliyah" }
+        ]
+      },
+      {
+        "name": "رابغ",
+        "name_en": "Rabigh",
+        "districts": [{ "name": "وسط رابغ", "name_en": "Rabigh Center" }]
       }
     ]
   },
   {
-    "name": "Eastern Province",
+    "name": "منطقة المدينة المنورة",
+    "name_en": "Madinah Region",
     "cities": [
       {
-        "name": "Dammam",
-        "districts": ["Al Faisaliyah", "Al Shati", "Al Adamah", "Al Mazruiyah"]
+        "name": "المدينة المنورة",
+        "name_en": "Medina",
+        "districts": [
+          { "name": "العوالي", "name_en": "Al Awali" },
+          { "name": "الحرم", "name_en": "Al Haram" },
+          { "name": "قباء", "name_en": "Quba" },
+          { "name": "الإسكان", "name_en": "Al Iskan" }
+        ]
       },
       {
-        "name": "Khobar",
-        "districts": ["Al Khobar Al Shamalia", "Al Khobar Al Janubia", "Al Ulaya"]
+        "name": "ينبع",
+        "name_en": "Yanbu",
+        "districts": [
+          { "name": "ينبع البحر", "name_en": "Yanbu Al Bahr" },
+          { "name": "ينبع الصناعية", "name_en": "Yanbu Al Sinaiyah" }
+        ]
       },
       {
-        "name": "Dhahran",
-        "districts": ["Dhahran Center", "Al Doha"]
-      },
-      {
-        "name": "Jubail",
-        "districts": ["Jubail Center", "Al Fanateer"]
-      },
-      {
-        "name": "Al Ahsa",
-        "districts": ["Al Hofuf", "Al Mubarraz"]
+        "name": "العلا",
+        "name_en": "Al Ula",
+        "districts": [{ "name": "وسط العلا", "name_en": "Al Ula Center" }]
       }
     ]
   },
   {
-    "name": "Asir Region",
+    "name": "المنطقة الشرقية",
+    "name_en": "Eastern Province",
     "cities": [
       {
-        "name": "Abha",
-        "districts": ["Al Manhal", "Al Shafa"]
+        "name": "الدمام",
+        "name_en": "Dammam",
+        "districts": [
+          { "name": "الفيصلية", "name_en": "Al Faisaliyah" },
+          { "name": "الشاطئ", "name_en": "Al Shati" },
+          { "name": "الادمة", "name_en": "Al Adamah" },
+          { "name": "المزروعية", "name_en": "Al Mazruiyah" }
+        ]
       },
       {
-        "name": "Khamis Mushait",
-        "districts": ["Al Khaleej", "Al Rawdah"]
+        "name": "الخبر",
+        "name_en": "Khobar",
+        "districts": [
+          { "name": "الخبر الشمالية", "name_en": "Al Khobar Al Shamalia" },
+          { "name": "الخبر الجنوبية", "name_en": "Al Khobar Al Janubia" },
+          { "name": "العليا", "name_en": "Al Ulaya" }
+        ]
       },
       {
-        "name": "Bisha",
-        "districts": ["Bisha Center"]
+        "name": "الظهران",
+        "name_en": "Dhahran",
+        "districts": [
+          { "name": "وسط الظهران", "name_en": "Dhahran Center" },
+          { "name": "الدوحة", "name_en": "Al Doha" }
+        ]
+      },
+      {
+        "name": "الجبيل",
+        "name_en": "Jubail",
+        "districts": [
+          { "name": "وسط الجبيل", "name_en": "Jubail Center" },
+          { "name": "الفناتير", "name_en": "Al Fanateer" }
+        ]
+      },
+      {
+        "name": "الأحساء",
+        "name_en": "Al Ahsa",
+        "districts": [
+          { "name": "الهفوف", "name_en": "Al Hofuf" },
+          { "name": "المبرز", "name_en": "Al Mubarraz" }
+        ]
       }
     ]
   },
   {
-    "name": "Tabuk Region",
+    "name": "منطقة عسير",
+    "name_en": "Asir Region",
     "cities": [
       {
-        "name": "Tabuk",
-        "districts": ["Al Muruj", "Al Faisaliyah"]
+        "name": "أبها",
+        "name_en": "Abha",
+        "districts": [
+          { "name": "المنهل", "name_en": "Al Manhal" },
+          { "name": "الشفا", "name_en": "Al Shafa" }
+        ]
       },
       {
-        "name": "Duba",
-        "districts": ["Duba Center"]
+        "name": "خميس مشيط",
+        "name_en": "Khamis Mushait",
+        "districts": [
+          { "name": "الخليج", "name_en": "Al Khaleej" },
+          { "name": "الروضة", "name_en": "Al Rawdah" }
+        ]
       },
       {
-        "name": "Haql",
-        "districts": ["Haql Center"]
+        "name": "بيشة",
+        "name_en": "Bisha",
+        "districts": [{ "name": "وسط بيشة", "name_en": "Bisha Center" }]
       }
     ]
   },
   {
-    "name": "Hail Region",
+    "name": "منطقة تبوك",
+    "name_en": "Tabuk Region",
     "cities": [
       {
-        "name": "Hail",
-        "districts": ["Al Muntazah", "Al Khuzama", "Al Nuzha"]
+        "name": "تبوك",
+        "name_en": "Tabuk",
+        "districts": [
+          { "name": "المروج", "name_en": "Al Muruj" },
+          { "name": "الفيصلية", "name_en": "Al Faisaliyah" }
+        ]
+      },
+      {
+        "name": "ضباء",
+        "name_en": "Duba",
+        "districts": [{ "name": "وسط ضباء", "name_en": "Duba Center" }]
+      },
+      {
+        "name": "حقل",
+        "name_en": "Haql",
+        "districts": [{ "name": "وسط حقل", "name_en": "Haql Center" }]
       }
     ]
   },
   {
-    "name": "Northern Borders Region",
+    "name": "منطقة حائل",
+    "name_en": "Hail Region",
     "cities": [
       {
-        "name": "Arar",
-        "districts": ["Arar Center"]
-      },
-      {
-        "name": "Rafha",
-        "districts": ["Rafha Center"]
-      },
-      {
-        "name": "Turaif",
-        "districts": ["Turaif Center"]
+        "name": "حائل",
+        "name_en": "Hail",
+        "districts": [
+          { "name": "المنتزه", "name_en": "Al Muntazah" },
+          { "name": "الخزامى", "name_en": "Al Khuzama" },
+          { "name": "النزهة", "name_en": "Al Nuzha" }
+        ]
       }
     ]
   },
   {
-    "name": "Jazan Region",
+    "name": "منطقة الحدود الشمالية",
+    "name_en": "Northern Borders Region",
     "cities": [
       {
-        "name": "Jazan",
-        "districts": ["Al Rawdah", "Al Safa"]
+        "name": "عرعر",
+        "name_en": "Arar",
+        "districts": [{ "name": "وسط عرعر", "name_en": "Arar Center" }]
       },
       {
-        "name": "Sabya",
-        "districts": ["Sabya Center"]
+        "name": "رفحاء",
+        "name_en": "Rafha",
+        "districts": [{ "name": "وسط رفحاء", "name_en": "Rafha Center" }]
       },
       {
-        "name": "Abu Arish",
-        "districts": ["Abu Arish Center"]
+        "name": "طريف",
+        "name_en": "Turaif",
+        "districts": [{ "name": "وسط طريف", "name_en": "Turaif Center" }]
       }
     ]
   },
   {
-    "name": "Najran Region",
+    "name": "منطقة جازان",
+    "name_en": "Jazan Region",
     "cities": [
       {
-        "name": "Najran",
-        "districts": ["Al Faisaliyah", "Al Mukhaym"]
+        "name": "جازان",
+        "name_en": "Jazan",
+        "districts": [
+          { "name": "الروضة", "name_en": "Al Rawdah" },
+          { "name": "الصفا", "name_en": "Al Safa" }
+        ]
       },
       {
-        "name": "Sharurah",
-        "districts": ["Sharurah Center"]
+        "name": "صبيا",
+        "name_en": "Sabya",
+        "districts": [{ "name": "وسط صبيا", "name_en": "Sabya Center" }]
+      },
+      {
+        "name": "أبو عريش",
+        "name_en": "Abu Arish",
+        "districts": [
+          { "name": "وسط أبو عريش", "name_en": "Abu Arish Center" }
+        ]
       }
     ]
   },
   {
-    "name": "Al Bahah Region",
+    "name": "منطقة نجران",
+    "name_en": "Najran Region",
     "cities": [
       {
-        "name": "Al Bahah",
-        "districts": ["Al Zahrah", "Al Faisaliyah"]
+        "name": "نجران",
+        "name_en": "Najran",
+        "districts": [
+          { "name": "الفيصلية", "name_en": "Al Faisaliyah" },
+          { "name": "المخيم", "name_en": "Al Mukhaym" }
+        ]
       },
       {
-        "name": "Baljurashi",
-        "districts": ["Baljurashi Center"]
+        "name": "شرورة",
+        "name_en": "Sharurah",
+        "districts": [{ "name": "وسط شرورة", "name_en": "Sharurah Center" }]
       }
     ]
   },
   {
-    "name": "Al Jawf Region",
+    "name": "منطقة الباحة",
+    "name_en": "Al Bahah Region",
     "cities": [
       {
-        "name": "Sakaka",
-        "districts": ["Sakaka Center"]
+        "name": "الباحة",
+        "name_en": "Al Bahah",
+        "districts": [
+          { "name": "الزهرة", "name_en": "Al Zahrah" },
+          { "name": "الفيصلية", "name_en": "Al Faisaliyah" }
+        ]
       },
       {
-        "name": "Qurayyat",
-        "districts": ["Qurayyat Center"]
-      },
-      {
-        "name": "Tabarjal",
-        "districts": ["Tabarjal Center"]
+        "name": "بلجرشي",
+        "name_en": "Baljurashi",
+        "districts": [
+          { "name": "وسط بلجرشي", "name_en": "Baljurashi Center" }
+        ]
       }
     ]
   },
   {
-    "name": "Al Qassim Region",
+    "name": "منطقة الجوف",
+    "name_en": "Al Jawf Region",
     "cities": [
       {
-        "name": "Buraidah",
-        "districts": ["Al Safra", "Al Muruj", "Al Iskan"]
+        "name": "سكاكا",
+        "name_en": "Sakaka",
+        "districts": [{ "name": "وسط سكاكا", "name_en": "Sakaka Center" }]
       },
       {
-        "name": "Unayzah",
-        "districts": ["Unayzah Center"]
+        "name": "القريات",
+        "name_en": "Qurayyat",
+        "districts": [{ "name": "وسط القريات", "name_en": "Qurayyat Center" }]
       },
       {
-        "name": "Ar Rass",
-        "districts": ["Ar Rass Center"]
+        "name": "طبرجل",
+        "name_en": "Tabarjal",
+        "districts": [{ "name": "وسط طبرجل", "name_en": "Tabarjal Center" }]
+      }
+    ]
+  },
+  {
+    "name": "منطقة القصيم",
+    "name_en": "Al Qassim Region",
+    "cities": [
+      {
+        "name": "بريدة",
+        "name_en": "Buraidah",
+        "districts": [
+          { "name": "الصفراء", "name_en": "Al Safra" },
+          { "name": "المروج", "name_en": "Al Muruj" },
+          { "name": "الإسكان", "name_en": "Al Iskan" }
+        ]
+      },
+      {
+        "name": "عنيزة",
+        "name_en": "Unayzah",
+        "districts": [{ "name": "وسط عنيزة", "name_en": "Unayzah Center" }]
+      },
+      {
+        "name": "الرس",
+        "name_en": "Ar Rass",
+        "districts": [{ "name": "وسط الرس", "name_en": "Ar Rass Center" }]
       }
     ]
   }

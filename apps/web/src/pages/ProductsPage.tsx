@@ -16,6 +16,7 @@ import dayjs from "dayjs";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   PRODUCT_STATUS_LABELS,
+  defaultPathPrefixForRegion,
   type AddressLibrary,
   type Paginated,
   type Product,
@@ -44,11 +45,13 @@ const ACTIVE_STATUS_OPTIONS = (
 /** 筛选未设置地区的商品 */
 const REGION_UNSET = "__none__";
 
+/** 店面链接：https://{host}/{region}/{link_suffix}，如 /id/xxx、/sa/xxx */
 function buildProductUrl(product: Product): string | null {
   const host = product.domain?.host?.trim();
   const suffix = product.link_suffix?.trim().replace(/^\/+/, "");
   if (!host || !suffix) return null;
-  return `https://${host}/${suffix}`;
+  const regionPrefix = defaultPathPrefixForRegion(product.region?.name);
+  return `https://${host}${regionPrefix}/${suffix}`;
 }
 
 export function ProductsPage() {

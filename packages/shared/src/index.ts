@@ -729,7 +729,35 @@ export interface AddressLibrary {
   region_count: number;
   created_at: string;
   updated_at: string;
+  /** 已配置的店面语言覆盖（不含默认主表；列表/详情可附带） */
+  locales?: AddressLibraryLocaleMeta[];
 }
+
+/** 地址库语言覆盖元信息（不含全量 names） */
+export interface AddressLibraryLocaleMeta {
+  locale: string;
+  label?: string | null;
+}
+
+/**
+ * 地址库多语言覆盖（Storage：addresses/{libraryId}/{locale}.json）
+ * names 的 key = 默认语言路径用 \\0 拼接；value = 该节点译名
+ */
+export interface AddressLibraryLocale {
+  library_id: string;
+  locale: string;
+  /** 后台展示名，如「英语」 */
+  label?: string | null;
+  names: Record<string, string>;
+  updated_at?: string;
+}
+
+export type UpsertAddressLibraryLocaleInput = {
+  locale: string;
+  label?: string | null;
+  /** 传入则整表替换；省略则保留已有 names */
+  names?: Record<string, string>;
+};
 
 /** 地址库中的一级地域节点（邻接表，level 从 1 起） */
 export interface AddressRegion {
@@ -747,8 +775,10 @@ export interface AddressRegion {
 export interface AddressRegionPath {
   /** 叶子节点 id */
   id: string;
-  /** 从一级到当前级的名称列表 */
+  /** 从一级到当前级的名称列表（已按当前语言翻译） */
   path: string[];
+  /** 默认语言路径（切换语言时对照） */
+  default_path?: string[];
   level: number;
 }
 
@@ -779,6 +809,53 @@ export interface ImportAddressLibraryResult {
   imported_paths: number;
   region_count: number;
   max_level: number;
+}
+
+/** 用默认路径 key 查译名；缺省回退默认名 */
+export function translateAddressPath(
+  defaultPath: string[],
+  names: Record<string, string> | null | undefined,
+): string[] {
+  if (!names || Object.keys(names).length === 0) {
+    return [...defaultPath];
+  }
+  return defaultPath.map((_, i) => {
+    const key = defaultPath.slice(0, i + 1).join("\0");
+    const translated = names[key]?.trim();
+    return translated || defaultPath[i]!;
+  });
+}
+
+/** 由「默认叶路径 + 译文叶路径」生成 names 映射 */
+export function buildAddressLocaleNames(
+  defaultLeaves: string[][],
+  translatedLeaves: string[][],
+):
+  | { ok: true; names: Record<string, string> }
+  | { ok: false; error: string } {
+  if (defaultLeaves.length !== translatedLeaves.length) {
+    return {
+      ok: false,
+      error: `译文行数（${translatedLeaves.length}）须与默认路径行数（${defaultLeaves.length}）一致`,
+    };
+  }
+  const names: Record<string, string> = {};
+  for (let i = 0; i < defaultLeaves.length; i++) {
+    const d = defaultLeaves[i]!;
+    const t = translatedLeaves[i]!;
+    if (t.length !== d.length) {
+      return {
+        ok: false,
+        error: `第 ${i + 1} 行级数不一致：默认 ${d.length} 级，译文 ${t.length} 级`,
+      };
+    }
+    for (let j = 0; j < d.length; j++) {
+      const key = d.slice(0, j + 1).join("\0");
+      const val = t[j]!.trim();
+      if (val) names[key] = val;
+    }
+  }
+  return { ok: true, names };
 }
 
 export interface Paginated<T> {
