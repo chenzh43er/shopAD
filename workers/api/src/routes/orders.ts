@@ -1350,7 +1350,8 @@ ordersRoutes.get("/", async (c) => {
   const listSelect = regionId ? ORDER_LIST_SELECT_REGION : ORDER_LIST_SELECT;
   let query = supabase
     .from("orders")
-    .select(listSelect, { count: "estimated" })
+    // exact：后台「共 N 条」需准确；estimated 依赖 PG 表统计，插入后长期滞后会冻在旧值
+    .select(listSelect, { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
 

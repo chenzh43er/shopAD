@@ -424,7 +424,7 @@ productsRoutes.get("/", async (c) => {
   let query = supabase
     .from("products")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .select(selectCols as any, { count: "estimated" })
+    .select(selectCols as any, { count: "exact" })
     .order("status", { ascending: false })
     .order("updated_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
