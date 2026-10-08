@@ -10,6 +10,10 @@ import {
   listPackageLocalesByPackageIds,
   saveAllPackageLocales,
 } from "../lib/productLocales";
+import {
+  hostFromProductDomain,
+  scheduleStorefrontRevalidate,
+} from "../lib/storefrontRevalidate";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -157,7 +161,9 @@ packagesRoutes.put("/:productId/packages", async (c) => {
 
   const { data: product, error: productError } = await supabase
     .from("products")
-    .select("id")
+    .select(
+      "id, link_suffix, domain:domains!products_domain_id_fkey(host)",
+    )
     .eq("id", productId)
     .maybeSingle();
   if (productError) return c.json({ error: productError.message }, 500);
@@ -243,6 +249,10 @@ packagesRoutes.put("/:productId/packages", async (c) => {
       toValue: "0",
       changes: { fields: emptyDiff.diffs },
       remark: emptyDiff.summary,
+    });
+    scheduleStorefrontRevalidate(c, {
+      linkSuffixes: [product.link_suffix as string | null],
+      hosts: [hostFromProductDomain(product.domain)],
     });
     return c.json({ data: [] });
   }
@@ -399,6 +409,11 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     toValue: String(list.length),
     changes: { fields: packageDiff.diffs },
     remark: packageDiff.summary,
+  });
+
+  scheduleStorefrontRevalidate(c, {
+    linkSuffixes: [product.link_suffix as string | null],
+    hosts: [hostFromProductDomain(product.domain)],
   });
 
   return c.json({

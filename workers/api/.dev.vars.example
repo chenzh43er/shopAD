@@ -13,3 +13,9 @@ SUPABASE_JWT_SECRET=
 REDIS_ENABLED=false
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
+
+# 后台改商品后刷新落地页 ISR（与 product-1/2 的 REVALIDATE_SECRET 相同）
+STOREFRONT_REVALIDATE_SECRET=
+# 逗号分隔，例：http://localhost:3000,http://localhost:3001
+# 不填则按商品绑定域名 https://{host}/api/revalidate
+STOREFRONT_REVALIDATE_URLS=

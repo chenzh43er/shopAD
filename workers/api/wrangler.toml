@@ -15,3 +15,5 @@ REDIS_ENABLED = "false"
 # SUPABASE_JWT_SECRET        (optional)
 # UPSTASH_REDIS_REST_URL     (optional; Upstash console)
 # UPSTASH_REDIS_REST_TOKEN   (optional)
+# STOREFRONT_REVALIDATE_SECRET  (须与落地页 REVALIDATE_SECRET 一致)
+# STOREFRONT_REVALIDATE_URLS    (可选；逗号分隔落地页根 URL，未配则用商品域名)

@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
 import {
   Button,
-  Col,
   Form,
   Image,
   Input,
   Modal,
-  Row,
   Space,
   Upload,
   message,
@@ -33,9 +31,6 @@ const MAX_DESCRIPTION_ENTRIES = 30;
 
 export type LocaleDraft = {
   title_external: string;
-  facebook_pixel_id: string;
-  google_conversion_id: string;
-  google_label: string;
   description: string;
   description_entries: string[];
   cover_url: string | null;
@@ -46,9 +41,6 @@ export type LocaleDraft = {
 export function emptyLocaleDraft(): LocaleDraft {
   return {
     title_external: "",
-    facebook_pixel_id: "",
-    google_conversion_id: "",
-    google_label: "",
     description: "",
     description_entries: [],
     cover_url: null,
@@ -60,9 +52,6 @@ export function emptyLocaleDraft(): LocaleDraft {
 export function localeFromApi(row: ProductLocale): LocaleDraft {
   return {
     title_external: row.title_external ?? "",
-    facebook_pixel_id: row.facebook_pixel_id ?? "",
-    google_conversion_id: row.google_conversion_id ?? "",
-    google_label: row.google_label ?? "",
     description: row.description ?? "",
     description_entries: Array.isArray(row.description_entries)
       ? row.description_entries
@@ -243,7 +232,7 @@ export function ProductLocaleToolbar({
           当前落地页路径：<code>{pathHint}</code>
           {contentLocale !== "default"
             ? overlayHint ??
-              " · 仅编辑下列多语言字段；价格/SKU/套餐开关等仍在「默认」"
+              " · 仅编辑下列多语言字段；价格/SKU/像素与转化ID/套餐开关等仍在「默认」"
             : ` · 默认主字段路径 ${defaultPrefix}；覆盖语言路径为 /地区_语言字段（如 ${saPathPrefixForLocale("en", regionName)}）`}
         </div>
       ) : contentLocale !== "default" && overlayHint ? (
@@ -336,13 +325,11 @@ export function ProductLocaleEditor({
   const save = async () => {
     setSaving(true);
     try {
+      // 像素 / 转化 ID 仅使用默认语言商品字段，多语言侧暂不编辑、不写入
       const payload: UpsertProductLocaleInput = {
         locale,
         label: localeLabel?.trim() || null,
         title_external: draft.title_external.trim() || null,
-        facebook_pixel_id: draft.facebook_pixel_id.trim() || null,
-        google_conversion_id: draft.google_conversion_id.trim() || null,
-        google_label: draft.google_label.trim() || null,
         description: draft.description.trim() || null,
         description_entries: draft.description_entries
           .map((s) => s.trim())
@@ -382,39 +369,6 @@ export function ProductLocaleEditor({
             placeholder="该语言落地页标题"
           />
         </Form.Item>
-        <Row gutter={24}>
-          <Col xs={24} md={12}>
-            <Form.Item label="Facebook像素id" extra="多个用 # 隔开">
-              <Input
-                maxLength={INPUT_LIMITS.mediumText}
-                value={draft.facebook_pixel_id}
-                onChange={(e) => patch({ facebook_pixel_id: e.target.value })}
-              />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Row gutter={24}>
-          <Col xs={24} md={12}>
-            <Form.Item label="Google转化ID">
-              <Input
-                maxLength={INPUT_LIMITS.shortId}
-                value={draft.google_conversion_id}
-                onChange={(e) =>
-                  patch({ google_conversion_id: e.target.value })
-                }
-              />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={12}>
-            <Form.Item label="Google Label">
-              <Input
-                maxLength={INPUT_LIMITS.mediumText}
-                value={draft.google_label}
-                onChange={(e) => patch({ google_label: e.target.value })}
-              />
-            </Form.Item>
-          </Col>
-        </Row>
 
         <Form.Item
           label="商品描述条目"

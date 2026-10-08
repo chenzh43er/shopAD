@@ -14,6 +14,15 @@ export interface Env {
   REDIS_ENABLED?: string;
   UPSTASH_REDIS_REST_URL?: string;
   UPSTASH_REDIS_REST_TOKEN?: string;
+  /**
+   * 落地页缓存失效密钥（须与 product-1/2 的 REVALIDATE_SECRET 一致）
+   */
+  STOREFRONT_REVALIDATE_SECRET?: string;
+  /**
+   * 落地页根地址，逗号分隔，如 https://a.example.com,https://b.example.com
+   * 未配时回退商品绑定域名 host
+   */
+  STOREFRONT_REVALIDATE_URLS?: string;
 }
 
 export type Variables = {

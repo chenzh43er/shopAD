@@ -29,6 +29,10 @@ import {
   listProductLocales,
   upsertProductLocale,
 } from "../lib/productLocales";
+import {
+  hostFromProductDomain,
+  scheduleStorefrontRevalidate,
+} from "../lib/storefrontRevalidate";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
@@ -628,6 +632,16 @@ productsRoutes.put("/:id/locales/:locale", async (c) => {
     .update({ updated_by: actor.id, updated_at: new Date().toISOString() })
     .eq("id", id);
 
+  const { data: productMeta } = await supabase
+    .from("products")
+    .select("link_suffix, domain:domains!products_domain_id_fkey(host)")
+    .eq("id", id)
+    .maybeSingle();
+  scheduleStorefrontRevalidate(c, {
+    linkSuffixes: [productMeta?.link_suffix as string | null],
+    hosts: [hostFromProductDomain(productMeta?.domain)],
+  });
+
   return c.json(result.data);
 });
 
@@ -679,6 +693,16 @@ productsRoutes.delete("/:id/locales/:locale", async (c) => {
     .from("products")
     .update({ updated_by: actor.id, updated_at: new Date().toISOString() })
     .eq("id", id);
+
+  const { data: productMeta } = await supabase
+    .from("products")
+    .select("link_suffix, domain:domains!products_domain_id_fkey(host)")
+    .eq("id", id)
+    .maybeSingle();
+  scheduleStorefrontRevalidate(c, {
+    linkSuffixes: [productMeta?.link_suffix as string | null],
+    hosts: [hostFromProductDomain(productMeta?.domain)],
+  });
 
   return c.json({ ok: true, locale: result.locale });
 });
@@ -1137,6 +1161,13 @@ productsRoutes.post("/", async (c) => {
     changes: { name: data.name, owner_ids: ownerIds },
   });
 
+  if (data.status === "on_sale") {
+    scheduleStorefrontRevalidate(c, {
+      linkSuffixes: [data.link_suffix as string | null],
+      hosts: [hostFromProductDomain(data.domain)],
+    });
+  }
+
   return c.json(await withProductExtras(supabase, data), 201);
 });
 
@@ -1474,6 +1505,14 @@ productsRoutes.put("/:id", async (c) => {
           : "保存商品（无字段差异）",
   });
 
+  scheduleStorefrontRevalidate(c, {
+    linkSuffixes: [
+      before?.link_suffix as string | null,
+      data.link_suffix as string | null,
+    ],
+    hosts: [hostFromProductDomain(data.domain)],
+  });
+
   return c.json(await withProductExtras(supabase, data));
 });
 
@@ -1545,6 +1584,11 @@ productsRoutes.patch("/:id/status", async (c) => {
     remark: `状态: ${before.status ?? "—"} → ${body.status}`,
   });
 
+  scheduleStorefrontRevalidate(c, {
+    linkSuffixes: [data.link_suffix as string | null],
+    hosts: [hostFromProductDomain(data.domain)],
+  });
+
   return c.json(await withProductExtras(supabase, data));
 });
 
@@ -1565,7 +1609,9 @@ productsRoutes.delete("/:id", async (c) => {
 
   const { data: before } = await supabase
     .from("products")
-    .select("id, name, status")
+    .select(
+      "id, name, status, link_suffix, domain:domains!products_domain_id_fkey(host)",
+    )
     .eq("id", id)
     .maybeSingle();
 
@@ -1593,6 +1639,11 @@ productsRoutes.delete("/:id", async (c) => {
     fromValue: before.status,
     toValue: "off_sale",
     changes: { name: before.name },
+  });
+
+  scheduleStorefrontRevalidate(c, {
+    linkSuffixes: [before.link_suffix as string | null],
+    hosts: [hostFromProductDomain(before.domain)],
   });
 
   return c.json({ ok: true });
