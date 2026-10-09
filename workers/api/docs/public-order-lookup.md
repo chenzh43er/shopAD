@@ -8,7 +8,7 @@
 https://shopad-api.ubeator.workers.dev
 ```
 
-本地：`http://127.0.0.1:8787`
+本地：`http://127.0.0.1:8788`
 
 ---
 

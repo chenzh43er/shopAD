@@ -41,7 +41,8 @@ import { requireSuperAdmin } from "../middleware/auth";
 import { createServiceClient } from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
-const FINANCE_EXPORT_MAX_ROWS = 5000;
+/** PostgREST 单次最多约 1000 行；导出用 range 分页拉全量，无业务上限 */
+const EXPORT_FETCH_PAGE = 1000;
 const FINANCE_EXPORT_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count, status";
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
@@ -50,6 +51,34 @@ const LOGISTICS_EXPORT_SELECT =
 /** 全部订单导出：业务可读字段（不含内部 UUID） */
 const FULL_EXPORT_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
+
+type ExportRangeQuery = {
+  range: (
+    from: number,
+    to: number,
+  ) => PromiseLike<{
+    data: unknown[] | null;
+    error: { message: string } | null;
+  }>;
+};
+
+/** 按页拉取导出订单，直到不足一页（无最大条数截断） */
+async function fetchAllExportRows(
+  buildQuery: () => ExportRangeQuery,
+): Promise<{ rows: Record<string, unknown>[]; error: string | null }> {
+  const all: Record<string, unknown>[] = [];
+  for (let from = 0; ; from += EXPORT_FETCH_PAGE) {
+    const { data, error } = await buildQuery().range(
+      from,
+      from + EXPORT_FETCH_PAGE - 1,
+    );
+    if (error) return { rows: all, error: error.message };
+    const chunk = (data ?? []) as Record<string, unknown>[];
+    all.push(...chunk);
+    if (chunk.length < EXPORT_FETCH_PAGE) break;
+  }
+  return { rows: all, error: null };
+}
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
   "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
@@ -1631,28 +1660,26 @@ ordersRoutes.post("/finance-export", async (c) => {
     return c.json({ data: [], total: 0 });
   }
 
-  let query = supabase
-    .from("orders")
-    .select(FINANCE_EXPORT_SELECT)
-    .eq("payment_type", "cod")
-    .order("created_at", { ascending: false })
-    .limit(FINANCE_EXPORT_MAX_ROWS);
-  if (statusRaw) query = query.eq("status", statusRaw);
-  if (reviewStatusRaw) query = query.eq("review_status", reviewStatusRaw);
+  const { rows: data, error } = await fetchAllExportRows(() => {
+    let query = supabase
+      .from("orders")
+      .select(FINANCE_EXPORT_SELECT)
+      .eq("payment_type", "cod")
+      .order("created_at", { ascending: false });
+    if (statusRaw) query = query.eq("status", statusRaw);
+    if (reviewStatusRaw) query = query.eq("review_status", reviewStatusRaw);
+    query = applyExportListFilters(query, listFilters.filters);
+    if (filterProductIds) {
+      query = query.in("product_id", filterProductIds);
+    }
+    if (ownerMembers.length > 0) {
+      query = query.in("owner_member", ownerMembers);
+    }
+    return query;
+  });
+  if (error) return c.json({ error }, 500);
 
-  query = applyExportListFilters(query, listFilters.filters);
-
-  if (filterProductIds) {
-    query = query.in("product_id", filterProductIds);
-  }
-  if (ownerMembers.length > 0) {
-    query = query.in("owner_member", ownerMembers);
-  }
-
-  const { data, error } = await query;
-  if (error) return c.json({ error: error.message }, 500);
-
-  const rowProductIds = (data ?? [])
+  const rowProductIds = data
     .map((row) =>
       typeof row.product_id === "string" ? row.product_id : "",
     )
@@ -1662,7 +1689,7 @@ ordersRoutes.post("/finance-export", async (c) => {
     rowProductIds,
   );
 
-  const rows = (data ?? []).map((row) => {
+  const rows = data.map((row) => {
     const qty = orderPurchaseQty(row);
     const productId =
       typeof row.product_id === "string" ? row.product_id : "";
@@ -1694,11 +1721,9 @@ ordersRoutes.post("/finance-export", async (c) => {
   return c.json({
     data: rows,
     total: rows.length,
-    truncated: rows.length >= FINANCE_EXPORT_MAX_ROWS,
+    truncated: false,
   });
 });
-
-const LOGISTICS_EXPORT_MAX = FINANCE_EXPORT_MAX_ROWS;
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -1809,27 +1834,25 @@ ordersRoutes.post("/logistics-export", async (c) => {
     return c.json({ data: [], total: 0 });
   }
 
-  let query = supabase
-    .from("orders")
-    .select(LOGISTICS_EXPORT_SELECT)
-    .eq("payment_type", "cod")
-    .eq("status", status)
-    .order("created_at", { ascending: false })
-    .limit(LOGISTICS_EXPORT_MAX);
+  const { rows: data, error } = await fetchAllExportRows(() => {
+    let query = supabase
+      .from("orders")
+      .select(LOGISTICS_EXPORT_SELECT)
+      .eq("payment_type", "cod")
+      .eq("status", status)
+      .order("created_at", { ascending: false });
+    query = applyExportListFilters(query, listFilters.filters);
+    if (filterProductIds) {
+      query = query.in("product_id", filterProductIds);
+    }
+    if (ownerMembers.length > 0) {
+      query = query.in("owner_member", ownerMembers);
+    }
+    return query;
+  });
+  if (error) return c.json({ error }, 500);
 
-  query = applyExportListFilters(query, listFilters.filters);
-
-  if (filterProductIds) {
-    query = query.in("product_id", filterProductIds);
-  }
-  if (ownerMembers.length > 0) {
-    query = query.in("owner_member", ownerMembers);
-  }
-
-  const { data, error } = await query;
-  if (error) return c.json({ error: error.message }, 500);
-
-  const rows = ((data ?? []) as Record<string, unknown>[]).map((row) => {
+  const rows = data.map((row) => {
     const province = asText(row.shipping_province);
     const city = asText(row.shipping_city);
     const district = asText(row.shipping_district);
@@ -1857,7 +1880,7 @@ ordersRoutes.post("/logistics-export", async (c) => {
   return c.json({
     data: rows,
     total: rows.length,
-    truncated: rows.length >= LOGISTICS_EXPORT_MAX,
+    truncated: false,
   });
 });
 
@@ -1904,23 +1927,21 @@ ordersRoutes.post("/full-export", async (c) => {
     return c.json({ data: [], total: 0 });
   }
 
-  let query = supabase
-    .from("orders")
-    .select(FULL_EXPORT_SELECT)
-    .eq("payment_type", "cod")
-    .order("created_at", { ascending: false })
-    .limit(FINANCE_EXPORT_MAX_ROWS);
+  const { rows: data, error } = await fetchAllExportRows(() => {
+    let query = supabase
+      .from("orders")
+      .select(FULL_EXPORT_SELECT)
+      .eq("payment_type", "cod")
+      .order("created_at", { ascending: false });
+    query = applyExportListFilters(query, listFilters.filters);
+    if (filterProductIds) {
+      query = query.in("product_id", filterProductIds);
+    }
+    return query;
+  });
+  if (error) return c.json({ error }, 500);
 
-  query = applyExportListFilters(query, listFilters.filters);
-
-  if (filterProductIds) {
-    query = query.in("product_id", filterProductIds);
-  }
-
-  const { data, error } = await query;
-  if (error) return c.json({ error: error.message }, 500);
-
-  const rawRows = (data ?? []) as Array<
+  const rawRows = data as Array<
     Record<string, unknown> & {
       product_id?: string | null;
       sku_code?: unknown;
@@ -2017,7 +2038,7 @@ ordersRoutes.post("/full-export", async (c) => {
   return c.json({
     data: rows,
     total: rows.length,
-    truncated: rows.length >= FINANCE_EXPORT_MAX_ROWS,
+    truncated: false,
   });
 });
 
@@ -2403,9 +2424,11 @@ ordersRoutes.patch("/:id", async (c) => {
       (patch.shipping_detail as string | null | undefined) !== undefined
         ? (patch.shipping_detail as string | null)
         : (before.shipping_detail as string | null);
-    const composed = [province, city, district, detail]
-      .filter((x): x is string => Boolean(x && String(x).trim()))
-      .join(" ");
+    // 与店面下单一致：明细, 区, 市, 省
+    const composed = [detail, district, city, province]
+      .map((x) => (x == null ? "" : String(x).trim()))
+      .filter(Boolean)
+      .join(", ");
     patch.shipping_address = composed || null;
   }
 

@@ -7,6 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 CORS_ORIGINS = "http://localhost:5173,http://localhost:5174,https://shopad.pages.dev,https://acomedia.work,https://www.acomedia.work"
 # Redis 可选：默认关闭。本地/生产要启用时设为 "true"，并配置 UPSTASH_*
 REDIS_ENABLED = "false"
+# 后台改商品后通知落地页失效 ISR（密钥用 wrangler secret put STOREFRONT_REVALIDATE_SECRET）
+STOREFRONT_REVALIDATE_URLS = "https://www.nusasnack.shop"
 
 # Secrets (set via `wrangler secret put` or `.dev.vars`):
 # SUPABASE_URL

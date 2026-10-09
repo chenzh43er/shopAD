@@ -27,7 +27,6 @@ type EditOrderFormValues = {
   shipping_city?: string;
   shipping_district?: string;
   shipping_detail?: string;
-  shipping_address?: string;
   product_id: string;
   package_id?: string;
   quantity: number;
@@ -43,6 +42,19 @@ function packageItemCount(pkg: ProductPackageWithItems): number {
     return acc + (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
   }, 0);
   return Math.max(1, sum || 1);
+}
+
+/** 与店面下单一致：明细, 区, 市, 省 */
+function composeShippingAddressInfo(parts: {
+  detail?: string | null;
+  district?: string | null;
+  city?: string | null;
+  province?: string | null;
+}): string {
+  return [parts.detail, parts.district, parts.city, parts.province]
+    .map((x) => (x ?? "").trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 function packageUnitPrice(pkg: ProductPackageWithItems): number {
@@ -82,6 +94,20 @@ export function OrderEditModal({
   const [packagesEnabled, setPackagesEnabled] = useState(false);
   const [form] = Form.useForm<EditOrderFormValues>();
   const totalAmount = Form.useWatch("total_amount", form);
+  const watchedProvince = Form.useWatch("shipping_province", form);
+  const watchedCity = Form.useWatch("shipping_city", form);
+  const watchedDistrict = Form.useWatch("shipping_district", form);
+  const watchedDetail = Form.useWatch("shipping_detail", form);
+  const shippingAddressInfo = useMemo(
+    () =>
+      composeShippingAddressInfo({
+        detail: watchedDetail,
+        district: watchedDistrict,
+        city: watchedCity,
+        province: watchedProvince,
+      }),
+    [watchedDetail, watchedDistrict, watchedCity, watchedProvince],
+  );
   const totalAmountFieldWidth = useMemo(() => {
     const amountText = Number.isFinite(Number(totalAmount))
       ? Number(totalAmount).toFixed(2)
@@ -228,7 +254,6 @@ export function OrderEditModal({
       shipping_city: data.shipping_city ?? "",
       shipping_district: data.shipping_district ?? "",
       shipping_detail: data.shipping_detail ?? "",
-      shipping_address: data.shipping_address ?? "",
       product_id: data.product_id ?? undefined,
       package_id: data.package_id ?? undefined,
       quantity: Math.max(1, Number(data.quantity) || 1),
@@ -340,7 +365,13 @@ export function OrderEditModal({
         shipping_city: values.shipping_city?.trim() || null,
         shipping_district: values.shipping_district?.trim() || null,
         shipping_detail: values.shipping_detail?.trim() || null,
-        shipping_address: values.shipping_address?.trim() || null,
+        shipping_address:
+          composeShippingAddressInfo({
+            detail: values.shipping_detail,
+            district: values.shipping_district,
+            city: values.shipping_city,
+            province: values.shipping_province,
+          }) || null,
         quantity: values.quantity,
         total_amount: values.total_amount,
         owner_member: values.owner_member?.trim() || null,
@@ -439,8 +470,15 @@ export function OrderEditModal({
           <Form.Item name="shipping_detail" label="收件地址">
             <Input maxLength={INPUT_LIMITS.address} />
           </Form.Item>
-          <Form.Item name="shipping_address" label="收件地址信息">
-            <Input maxLength={INPUT_LIMITS.addressInfo} />
+          <Form.Item
+            label="收件地址信息"
+            extra="由收件地址与省市区自动拼接，不可手动修改"
+          >
+            <Input
+              value={shippingAddressInfo || "—"}
+              disabled
+              maxLength={INPUT_LIMITS.addressInfo}
+            />
           </Form.Item>
           <Form.Item
             name="product_id"

@@ -34,7 +34,16 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:8787",
+        // 8788：避开本机常见占用 8787 的其他 wrangler（如 HousePro pages dev）
+        target: "http://127.0.0.1:8788",
+        changeOrigin: true,
+      },
+    },
+  },
+  preview: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8788",
         changeOrigin: true,
       },
     },

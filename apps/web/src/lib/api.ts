@@ -65,12 +65,14 @@ export async function apiFetch<T>(
   const looksLikeHtml =
     /^\s*<!doctype html/i.test(text) || /^\s*<html[\s>]/i.test(text);
 
-  // Pages 未配置 VITE_API_BASE_URL 时，/api/* 会回落成 SPA HTML（仍可能是 200）
+  // 同源 /api 未打到 Worker 时会变成 HTML（本地常见：未 pnpm dev:api，或代理端口被其他项目占用）
   if (looksLikeHtml || (text && !contentType.includes("application/json"))) {
     throw new ApiError(
       API_BASE
         ? `API 返回了非 JSON 响应（${res.status}）。请检查 Worker 是否正常。`
-        : "API 地址未配置：生产环境请设置 VITE_API_BASE_URL 为 Worker 地址后重新构建部署。",
+        : looksLikeHtml
+          ? "API 返回了 HTML 而非 JSON。本地请先 pnpm dev:api（:8788）再开前端；生产请确认 Pages Functions 已部署。勿把 VITE_API_BASE_URL 设为 *.workers.dev。"
+          : `API 返回了非 JSON 响应（${res.status}）。请确认本地 API（:8788）或生产 /api 代理正常。`,
       res.status === 200 ? 502 : res.status,
     );
   }

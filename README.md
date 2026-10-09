@@ -66,7 +66,7 @@ cp apps/web/.env.example apps/web/.env
 ```env
 VITE_SUPABASE_URL=https://xxxx.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJ...
-# 本地开发留空，走 Vite 代理到 :8787
+# 本地开发留空，走 Vite 代理到 :8788
 VITE_API_BASE_URL=
 ```
 
@@ -77,7 +77,7 @@ pnpm dev
 ```
 
 - 前端：http://localhost:5173
-- API：http://127.0.0.1:8787（健康检查 `/api/health`）
+- API：http://127.0.0.1:8788（健康检查 `/api/health`）
 
 也可分别启动：
 
