@@ -266,6 +266,8 @@ export function OrdersPage() {
   const [forceStatusRemark, setForceStatusRemark] = useState("");
   const [forceStatusRejectReason, setForceStatusRejectReason] = useState("");
   const [forceOrderNoById, setForceOrderNoById] = useState<Record<string, string>>({});
+  const [forcePasteDraft, setForcePasteDraft] = useState("");
+  const [forcePasteKind, setForcePasteKind] = useState<"order_no" | "shipping_order_no">("order_no");
   const [editOrderId, setEditOrderId] = useState<string | null>(null);
 
   const [shipModalOpen, setShipModalOpen] = useState(false);
@@ -986,6 +988,7 @@ export function OrdersPage() {
     setForceStatusTarget("awaiting_confirm");
     setForceStatusRemark("");
     setForceStatusRejectReason("");
+    setForcePasteDraft("");
     setForceStatusModalOpen(true);
   };
 
@@ -1036,6 +1039,58 @@ export function OrdersPage() {
       setSelectedRowKeys(merged);
       if (Object.keys(noById).length > 0) setForceOrderNoById((prev) => ({ ...prev, ...noById }));
       message.success("已自动导入当前Tab全部筛选结果 " + ids.length + " 笔订单");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "导入失败");
+    } finally {
+      setForceImporting(false);
+    }
+  };
+
+  /** 强制扭转：直接粘贴一行一个的订单号/运单号，不受当前 Tab 状态限制解析为订单 */
+  const importForcePastedNos = async () => {
+    if (!regionId) { message.warning("请先选择地区"); return; }
+    const nos = parseBatchOrderNos(forcePasteDraft);
+    if (nos.length === 0) {
+      message.warning(forcePasteKind === "order_no" ? "请粘贴至少一个订单号" : "请粘贴至少一个运单号");
+      return;
+    }
+    setForceImporting(true);
+    try {
+      const ids: string[] = [];
+      const noById: Record<string, string> = {};
+      const chunkSize = 100;
+      for (let i = 0; i < nos.length; i += chunkSize) {
+        const chunk = nos.slice(i, i + chunkSize);
+        const params = new URLSearchParams({
+          page: "1",
+          pageSize: String(Math.min(chunk.length, 500)),
+          payment_type: "cod",
+          region_id: regionId,
+        });
+        if (forcePasteKind === "order_no") params.set("order_nos", chunk.join(","));
+        else params.set("shipping_order_nos", chunk.join(","));
+        const res = await apiFetch<Paginated<Order>>("/api/orders?" + params.toString());
+        for (const o of res.data ?? []) {
+          ids.push(o.id);
+          if (o.order_no) noById[o.id] = o.order_no;
+        }
+      }
+      if (ids.length === 0) { message.warning("未找到匹配的订单（已忽略状态筛选）"); return; }
+      const merged = Array.from(new Set([...selectedRowKeys.map(String), ...ids.map(String)]));
+      setSelectedRowKeys(merged);
+      if (Object.keys(noById).length > 0) setForceOrderNoById((prev) => ({ ...prev, ...noById }));
+      const missing = nos.length - new Set(ids).size;
+      // 用订单号回查缺失数不精确时，仅提示找到数
+      void missing;
+      const foundNos = new Set(Object.values(noById));
+      const missingNos = forcePasteKind === "order_no" ? nos.filter((n) => !foundNos.has(n)) : [];
+      if (missingNos.length > 0) {
+        const preview = missingNos.slice(0, 5).join("、");
+        const more = missingNos.length > 5 ? ` 等 ${missingNos.length} 个` : "";
+        message.info(`已匹配 ${ids.length}/${nos.length} 笔；未匹配：${preview}${more}`);
+      } else {
+        message.success(`已匹配 ${ids.length}/${nos.length} 笔订单，可直接确认流转`);
+      }
     } catch (e) {
       message.error(e instanceof Error ? e.message : "导入失败");
     } finally {
@@ -2071,6 +2126,35 @@ export function OrdersPage() {
               value: status,
               label: ORDER_STATUS_LABELS[status],
             }))}
+          />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}>粘贴单号直接导入（一行一个，不受当前 Tab 状态限制）</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <Select
+              style={{ width: 140 }}
+              value={forcePasteKind}
+              onChange={setForcePasteKind}
+              options={[
+                { value: "order_no", label: "订单号" },
+                { value: "shipping_order_no", label: "运单号" },
+              ]}
+            />
+            <Button size="small" loading={forceImporting} onClick={() => void importForcePastedNos()}>
+              解析并导入
+            </Button>
+            {forcePasteDraft.trim() ? (
+              <Button size="small" onClick={() => setForcePasteDraft("")}>
+                清空
+              </Button>
+            ) : null}
+          </div>
+          <Input.TextArea
+            value={forcePasteDraft}
+            onChange={(e) => setForcePasteDraft(e.target.value)}
+            placeholder={forcePasteKind === "order_no" ? "每行一个订单号，例如：\nSA202401010001\nSA202401010002" : "每行一个运单号，例如：\nSF1234567890\nJD0987654321"}
+            rows={4}
+            allowClear
           />
         </div>
         <div style={{ marginBottom: 12 }}>
