@@ -2158,12 +2158,6 @@ export function OrdersPage() {
           />
         </div>
         <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 6 }}>当前筛选结果导入</div>
-          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-            <Button size="small" loading={forceImporting} onClick={() => void importForceStatusOrderNos()}>
-              自动导入当前筛选结果
-            </Button>
-          </div>
           {selectedRowKeys.length > 0 ? (
             <div style={{ marginTop: 8, border: "1px solid #d9d9d9", borderRadius: 6, padding: "8px 12px", maxHeight: 160, overflow: "auto" }}>
               <div style={{ marginBottom: 6, color: "#666" }}>已勾选订单号（{selectedRowKeys.length}）：</div>
