@@ -1058,6 +1058,7 @@ export function OrdersPage() {
     try {
       const ids: string[] = [];
       const noById: Record<string, string> = {};
+      let skippedSameStatus = 0;
       const chunkSize = 100;
       for (let i = 0; i < nos.length; i += chunkSize) {
         const chunk = nos.slice(i, i + chunkSize);
@@ -1071,6 +1072,10 @@ export function OrdersPage() {
         else params.set("shipping_order_nos", chunk.join(","));
         const res = await apiFetch<Paginated<Order>>("/api/orders?" + params.toString());
         for (const o of res.data ?? []) {
+          if ((o.status as string) === (forceStatusTarget as string)) {
+            skippedSameStatus += 1;
+            continue;
+          }
           ids.push(o.id);
           if (o.order_no) noById[o.id] = o.order_no;
         }
@@ -1087,9 +1092,9 @@ export function OrdersPage() {
       if (missingNos.length > 0) {
         const preview = missingNos.slice(0, 5).join("、");
         const more = missingNos.length > 5 ? ` 等 ${missingNos.length} 个` : "";
-        message.info(`已匹配 ${ids.length}/${nos.length} 笔；未匹配：${preview}${more}`);
+        message.info(`已匹配 ${ids.length}/${nos.length} 笔；未匹配：${preview}${more}${skippedSameStatus > 0 ? `；已过滤已是「${ORDER_STATUS_LABELS[forceStatusTarget]}」的 ${skippedSameStatus} 笔` : ""}`);
       } else {
-        message.success(`已匹配 ${ids.length}/${nos.length} 笔订单，可直接确认流转`);
+        message.success(`已匹配 ${ids.length}/${nos.length} 笔订单，可直接确认流转${skippedSameStatus > 0 ? `（已过滤已是「${ORDER_STATUS_LABELS[forceStatusTarget]}」的 ${skippedSameStatus} 笔）` : ""}`);
       }
     } catch (e) {
       message.error(e instanceof Error ? e.message : "导入失败");
