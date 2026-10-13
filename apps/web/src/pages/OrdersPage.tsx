@@ -265,6 +265,7 @@ export function OrdersPage() {
   );
   const [forceStatusRemark, setForceStatusRemark] = useState("");
   const [forceStatusRejectReason, setForceStatusRejectReason] = useState("");
+  const [forceOrderNoById, setForceOrderNoById] = useState<Record<string, string>>({});
   const [editOrderId, setEditOrderId] = useState<string | null>(null);
 
   const [shipModalOpen, setShipModalOpen] = useState(false);
@@ -977,15 +978,69 @@ export function OrdersPage() {
     });
   };
 
-  const openForceStatusModal = () => {
-    if (selectedRowKeys.length === 0) {
-      message.warning("请先勾选要流转的订单");
+  const openForceStatusModal = (allowEmpty = false) => {
+    if (selectedRowKeys.length === 0 && !allowEmpty) {
+      message.warning("请先勾选要流转的订单，或用订单号导入");
       return;
     }
     setForceStatusTarget("awaiting_confirm");
     setForceStatusRemark("");
     setForceStatusRejectReason("");
     setForceStatusModalOpen(true);
+  };
+
+  /** 自动导入当前筛选结果：有粘贴则按订单号取交集，无粘贴则取当前Tab全部（含筛选状态） */
+  const [forceImporting, setForceImporting] = useState(false);
+  const buildForceFilterParams = (pageNum: number, pageLen: number) => {
+    const params = new URLSearchParams({
+      page: String(pageNum),
+      pageSize: String(pageLen),
+      payment_type: filters.paymentType,
+      ...(regionId ? { region_id: regionId } : {}),
+    } as Record<string, string>);
+    if (filters.reviewStatus) params.set("review_status", filters.reviewStatus);
+    const effectiveStatus = filters.status;
+    if (effectiveStatus) params.set("status", effectiveStatus);
+    {
+      if (orderNo.trim()) params.set("order_no", orderNo.trim());
+      const phone = phoneSearchDigits(customerPhone);
+      if (phone) params.set("customer_phone", phone);
+      if (showWaybillSearch && shippingOrderNo.trim()) params.set("shipping_order_no", shippingOrderNo.trim());
+    }
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      params.set("date_from", dateRange[0].toISOString());
+      params.set("date_to", dateRange[1].toISOString());
+    }
+    if (productIds.length > 0) params.set("product_ids", productIds.join(","));
+    return params;
+  };
+  const importForceStatusOrderNos = async () => {
+    if (!regionId) { message.warning("请先选择地区"); return; }
+
+    setForceImporting(true);
+    try {
+      const pageLen = 500;
+      let pageNum = 1;
+      const ids: string[] = [];
+      const noById: Record<string, string> = {};
+      for (;;) {
+        const params = buildForceFilterParams(pageNum, pageLen);
+        const res = await apiFetch<Paginated<Order>>("/api/orders?" + params.toString());
+        for (const o of res.data ?? []) { ids.push(o.id); if (o.order_no) { noById[o.id] = o.order_no; } }
+        if ((res.data ?? []).length < pageLen) break;
+        pageNum += 1;
+        if (pageNum > 20) break;
+      }
+      if (ids.length === 0) { message.warning("当前筛选结果中未找到匹配订单"); return; }
+      const merged = Array.from(new Set([...selectedRowKeys.map(String), ...ids.map(String)]));
+      setSelectedRowKeys(merged);
+      if (Object.keys(noById).length > 0) setForceOrderNoById((prev) => ({ ...prev, ...noById }));
+      message.success("已自动导入当前Tab全部筛选结果 " + ids.length + " 笔订单");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "导入失败");
+    } finally {
+      setForceImporting(false);
+    }
   };
 
   const submitBatchForceStatus = async () => {
@@ -1785,15 +1840,20 @@ export function OrdersPage() {
           导出财务 Excel
         </Button>
         {isSuperAdmin ? (
+          <>
           <Button
             danger
             disabled={selectedRowKeys.length === 0}
             loading={batching}
-            onClick={openForceStatusModal}
+            onClick={() => openForceStatusModal()}
           >
             强制流转状态
             {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
           </Button>
+          <Button loading={batching} onClick={() => openForceStatusModal(true)}>
+            强制扭转筛选
+          </Button>
+          </>
         ) : null}
         {isAllTab ? (
           <Button
@@ -2012,6 +2072,26 @@ export function OrdersPage() {
               label: ORDER_STATUS_LABELS[status],
             }))}
           />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 6 }}>当前筛选结果导入</div>
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <Button size="small" loading={forceImporting} onClick={() => void importForceStatusOrderNos()}>
+              自动导入当前筛选结果
+            </Button>
+          </div>
+          {selectedRowKeys.length > 0 ? (
+            <div style={{ marginTop: 8, border: "1px solid #d9d9d9", borderRadius: 6, padding: "8px 12px", maxHeight: 160, overflow: "auto" }}>
+              <div style={{ marginBottom: 6, color: "#666" }}>已勾选订单号（{selectedRowKeys.length}）：</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {selectedRowKeys.map((k) => {
+                  const id = String(k);
+                  const no = forceOrderNoById[id] ?? data.find((o) => o.id === id)?.order_no ?? id;
+                  return (<Tag key={id} style={{ marginBottom: 4 }}>{no}</Tag>);
+                })}
+              </div>
+            </div>
+          ) : null}
         </div>
         {forceStatusTarget === "cancelled" ? (
           <div style={{ marginBottom: 12 }}>
