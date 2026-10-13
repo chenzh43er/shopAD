@@ -1848,20 +1848,9 @@ export function OrdersPage() {
           导出财务 Excel
         </Button>
         {isSuperAdmin ? (
-          <>
-          <Button
-            danger
-            disabled={selectedRowKeys.length === 0}
-            loading={batching}
-            onClick={() => openForceStatusModal()}
-          >
-            强制流转状态
-            {selectedRowKeys.length > 0 ? `（${selectedRowKeys.length}）` : ""}
-          </Button>
           <Button loading={batching} onClick={() => openForceStatusModal(true)}>
             强制扭转筛选
           </Button>
-          </>
         ) : null}
         {isAllTab ? (
           <Button
