@@ -12,7 +12,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import type { Profile } from "@shopad/shared";
 import { isSuperAdmin as checkSuper } from "@shopad/shared";
 import { ApiError, apiFetch } from "../lib/api";
-import { supabase } from "../lib/supabase";
+import { supabase, friendlyAuthError, isNetworkError } from "../lib/supabase";
 
 interface AuthContextValue {
   session: Session | null;
@@ -143,14 +143,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(async (email: string, password: string) => {
     setAuthError(null);
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (error) throw error;
-    // onAuthStateChange(SIGNED_IN) 会拉 profile；这里先同步 session 便于立刻跳转判断
-    setSession(data.session);
-    await loadProfile(data.session);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      // onAuthStateChange(SIGNED_IN) 会拉 profile；这里先同步 session 便于立刻跳转判断
+      setSession(data.session);
+      await loadProfile(data.session);
+    } catch (e) {
+      if (isNetworkError(e)) throw new Error(friendlyAuthError(e));
+      throw e;
+    }
   }, [loadProfile]);
 
   const signOut = useCallback(async () => {

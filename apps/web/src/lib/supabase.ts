@@ -31,3 +31,27 @@ if (anonKey && looksLikeServiceRoleKey(anonKey)) {
 }
 
 export const supabase = createClient(url ?? "", anonKey ?? "");
+
+export const SUPABASE_CONFIG_ERROR =
+  !url || !anonKey
+    ? "未配置 Supabase（VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY 为空）。请复制 apps/web/.env.example 为 apps/web/.env 并填入后重启 vite。"
+    : null;
+
+export function isNetworkError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  return (
+    /networkerror when attempting to fetch resource/i.test(msg) ||
+    /failed to fetch|fetch failed|networkerror|network request failed|load failed/i.test(
+      msg,
+    ) ||
+    (e instanceof TypeError && /fetch/i.test(msg))
+  );
+}
+
+export function friendlyAuthError(e: unknown): string {
+  if (SUPABASE_CONFIG_ERROR) return SUPABASE_CONFIG_ERROR;
+  if (isNetworkError(e)) {
+    return "无法连接 Supabase（NetworkError）。请检查：1) apps/web/.env 的 VITE_SUPABASE_URL 是否正确；2) 本机能否直连该域名（公司 VPN/代理/防火墙常拦截）；3) 是否用了 http 与 https 混用。";
+  }
+  return e instanceof Error ? e.message : "登录失败";
+}

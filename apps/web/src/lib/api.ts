@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, isNetworkError } from "./supabase";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
 
@@ -55,10 +55,24 @@ export async function apiFetch<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...requestInit,
-    headers,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...requestInit,
+      headers,
+    });
+  } catch (e) {
+    // fetch 本身抛错（DNS/拒绝连接/CORS/离线）：Firefox 报 "NetworkError when attempting to fetch resource"
+    if (isNetworkError(e)) {
+      throw new ApiError(
+        API_BASE
+          ? `连不上 API（${API_BASE}${path}）。请确认 Worker 地址可访问、CORS 白名单包含当前域名。`
+          : "连不上本地 API。请先开 `pnpm dev:api`（wrangler :8788）再开前端；保持 VITE_API_BASE_URL 为空走 Vite 代理。浏览器 Network 面板看 /api/me 是否 pending/failed 可确认。",
+        0,
+      );
+    }
+    throw e;
+  }
 
   const contentType = res.headers.get("content-type") ?? "";
   const text = await res.text();
