@@ -992,59 +992,7 @@ export function OrdersPage() {
     setForceStatusModalOpen(true);
   };
 
-  /** 自动导入当前筛选结果：有粘贴则按订单号取交集，无粘贴则取当前Tab全部（含筛选状态） */
   const [forceImporting, setForceImporting] = useState(false);
-  const buildForceFilterParams = (pageNum: number, pageLen: number) => {
-    const params = new URLSearchParams({
-      page: String(pageNum),
-      pageSize: String(pageLen),
-      payment_type: filters.paymentType,
-      ...(regionId ? { region_id: regionId } : {}),
-    } as Record<string, string>);
-    if (filters.reviewStatus) params.set("review_status", filters.reviewStatus);
-    const effectiveStatus = filters.status;
-    if (effectiveStatus) params.set("status", effectiveStatus);
-    {
-      if (orderNo.trim()) params.set("order_no", orderNo.trim());
-      const phone = phoneSearchDigits(customerPhone);
-      if (phone) params.set("customer_phone", phone);
-      if (showWaybillSearch && shippingOrderNo.trim()) params.set("shipping_order_no", shippingOrderNo.trim());
-    }
-    if (dateRange && dateRange[0] && dateRange[1]) {
-      params.set("date_from", dateRange[0].toISOString());
-      params.set("date_to", dateRange[1].toISOString());
-    }
-    if (productIds.length > 0) params.set("product_ids", productIds.join(","));
-    return params;
-  };
-  const importForceStatusOrderNos = async () => {
-    if (!regionId) { message.warning("请先选择地区"); return; }
-
-    setForceImporting(true);
-    try {
-      const pageLen = 500;
-      let pageNum = 1;
-      const ids: string[] = [];
-      const noById: Record<string, string> = {};
-      for (;;) {
-        const params = buildForceFilterParams(pageNum, pageLen);
-        const res = await apiFetch<Paginated<Order>>("/api/orders?" + params.toString());
-        for (const o of res.data ?? []) { ids.push(o.id); if (o.order_no) { noById[o.id] = o.order_no; } }
-        if ((res.data ?? []).length < pageLen) break;
-        pageNum += 1;
-        if (pageNum > 20) break;
-      }
-      if (ids.length === 0) { message.warning("当前筛选结果中未找到匹配订单"); return; }
-      const merged = Array.from(new Set([...selectedRowKeys.map(String), ...ids.map(String)]));
-      setSelectedRowKeys(merged);
-      if (Object.keys(noById).length > 0) setForceOrderNoById((prev) => ({ ...prev, ...noById }));
-      message.success("已自动导入当前Tab全部筛选结果 " + ids.length + " 笔订单");
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "导入失败");
-    } finally {
-      setForceImporting(false);
-    }
-  };
 
   /** 强制扭转：直接粘贴一行一个的订单号/运单号，不受当前 Tab 状态限制解析为订单 */
   const importForcePastedNos = async () => {
