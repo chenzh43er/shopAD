@@ -915,14 +915,25 @@ productsRoutes.post("/:id/copy", async (c) => {
       }
     }
 
-    // 复制套餐语言覆盖（按新旧 package id 映射）
+    // 复制套餐语言覆盖（按新旧 package id 映射；表不存在时跳过，保证老库可复制）
     if (oldToNewPkg.size > 0) {
       const oldPkgIds = [...oldToNewPkg.keys()];
-      const { data: pkgLocales, error: pkgLocErr } = await supabase
-        .from("product_package_locales")
-        .select("*")
-        .in("package_id", oldPkgIds);
-      if (pkgLocErr) return c.json({ error: pkgLocErr.message }, 500);
+      let pkgLocales: Record<string, unknown>[] | null = null;
+      try {
+        const { data, error: pkgLocErr } = await supabase
+          .from("product_package_locales")
+          .select("*")
+          .in("package_id", oldPkgIds);
+        if (pkgLocErr) {
+          if (!/schema cache|could not find the table|does not exist/i.test(pkgLocErr.message)) {
+            return c.json({ error: pkgLocErr.message }, 500);
+          }
+        } else {
+          pkgLocales = data as Record<string, unknown>[] | null;
+        }
+      } catch {
+        pkgLocales = null;
+      }
       const localeInserts = (pkgLocales ?? [])
         .map((row) => {
           const newId = oldToNewPkg.get(row.package_id as string);
@@ -939,7 +950,9 @@ productsRoutes.post("/:id/copy", async (c) => {
         const { error: insLocErr } = await supabase
           .from("product_package_locales")
           .insert(localeInserts);
-        if (insLocErr) return c.json({ error: insLocErr.message }, 500);
+        if (insLocErr && !/schema cache|could not find the table|does not exist/i.test(insLocErr.message)) {
+          return c.json({ error: insLocErr.message }, 500);
+        }
       }
     }
   }
