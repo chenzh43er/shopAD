@@ -31,6 +31,9 @@ const MAX_DESCRIPTION_ENTRIES = 30;
 
 export type LocaleDraft = {
   title_external: string;
+  facebook_pixel_id: string;
+  google_conversion_id: string;
+  google_label: string;
   description: string;
   description_entries: string[];
   cover_url: string | null;
@@ -41,6 +44,9 @@ export type LocaleDraft = {
 export function emptyLocaleDraft(): LocaleDraft {
   return {
     title_external: "",
+    facebook_pixel_id: "",
+    google_conversion_id: "",
+    google_label: "",
     description: "",
     description_entries: [],
     cover_url: null,
@@ -52,6 +58,9 @@ export function emptyLocaleDraft(): LocaleDraft {
 export function localeFromApi(row: ProductLocale): LocaleDraft {
   return {
     title_external: row.title_external ?? "",
+    facebook_pixel_id: row.facebook_pixel_id ?? "",
+    google_conversion_id: row.google_conversion_id ?? "",
+    google_label: row.google_label ?? "",
     description: row.description ?? "",
     description_entries: Array.isArray(row.description_entries)
       ? row.description_entries
@@ -75,6 +84,12 @@ type ToolbarProps = {
   onChangeLocale: (locale: "default" | string) => void;
   /** 添加并自动持久化；失败时抛错 */
   onAddLocale: (locale: string, label: string) => void | Promise<void>;
+  /** 重命名（含改显示名/字段码）；失败时抛错 */
+  onRenameLocale?: (
+    oldLocale: string,
+    newLocale: string,
+    label: string,
+  ) => void | Promise<void>;
   /** 删除并持久化；失败时抛错 */
   onRemoveLocale: (locale: string) => void | Promise<void>;
   /** 删除确认文案；地区管理可覆盖 */
@@ -93,6 +108,7 @@ export function ProductLocaleToolbar({
   localeLabels = {},
   onChangeLocale,
   onAddLocale,
+  onRenameLocale,
   onRemoveLocale,
   removeConfirmContent,
   showPathHint = true,
@@ -103,6 +119,11 @@ export function ProductLocaleToolbar({
   const [removingCode, setRemovingCode] = useState<string | null>(null);
   const [langName, setLangName] = useState("");
   const [langCode, setLangCode] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editCodeValue, setEditCodeValue] = useState("");
+  const [editing, setEditing] = useState(false);
 
   const defaultPrefix = saPathPrefixForLocale("default", regionName);
   const prefix = saPathPrefixForLocale(contentLocale, regionName);
@@ -151,8 +172,48 @@ export function ProductLocaleToolbar({
     }
   };
 
-  const confirmRemove = (code: string) => {
-    Modal.confirm({
+  const openEdit = (code: string) => {
+    setEditingCode(code);
+    setEditName(localeLabels[code] ?? localeDisplayLabel(code, localeLabels[code]));
+    setEditCodeValue(code);
+    setEditOpen(true);
+  };
+
+  const submitEdit = async () => {
+    if (!editingCode) return;
+    const name = editName.trim();
+    const code = editCodeValue.trim().toLowerCase();
+    if (!name) {
+      message.error("请填写语言名称");
+      return;
+    }
+    if (!isValidOverlayLocaleCode(code)) {
+      message.error("字段须为 2 位小写字母，如 en、fr（不可用 id / ar / default）");
+      return;
+    }
+    if (code !== editingCode && addedLocales.includes(code)) {
+      message.error(`语言字段「${code}」已添加`);
+      return;
+    }
+    if (!onRenameLocale) {
+      message.error("当前页面不支持重命名，请升级后重试");
+      return;
+    }
+    setEditing(true);
+    try {
+      await onRenameLocale(editingCode, code, name);
+      setEditOpen(false);
+      setEditingCode(null);
+      onChangeLocale(code);
+      message.success("语言已更新");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "更新语言失败");
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  const confirmRemove = (code: string) => {    Modal.confirm({
       title: `删除语言「${localeDisplayLabel(code, localeLabels[code])}」？`,
       content:
         removeConfirmContent ??
@@ -214,6 +275,12 @@ export function ProductLocaleToolbar({
             </Button>
             <Button
               size="small"
+              onClick={() => openEdit(code)}
+            >
+              编辑
+            </Button>
+            <Button
+              size="small"
               danger
               icon={<DeleteOutlined />}
               loading={removingCode === code}
@@ -232,7 +299,7 @@ export function ProductLocaleToolbar({
           当前落地页路径：<code>{pathHint}</code>
           {contentLocale !== "default"
             ? overlayHint ??
-              " · 仅编辑下列多语言字段；价格/SKU/像素与转化ID/套餐开关等仍在「默认」"
+              " · 该语言可编辑标题/像素/转化ID/描述/图片；价格/SKU/套餐开关等仍在「默认」"
             : ` · 默认主字段路径 ${defaultPrefix}；覆盖语言路径为 /地区_语言字段（如 ${saPathPrefixForLocale("en", regionName)}）`}
         </div>
       ) : contentLocale !== "default" && overlayHint ? (
@@ -241,8 +308,7 @@ export function ProductLocaleToolbar({
 
       <Modal
         title="添加语言"
-        open={addOpen}
-        onCancel={() => (adding ? undefined : setAddOpen(false))}
+        open={addOpen}        onCancel={() => (adding ? undefined : setAddOpen(false))}
         onOk={() => void submitAdd()}
         okText="添加并保存"
         confirmLoading={adding}
@@ -280,6 +346,53 @@ export function ProductLocaleToolbar({
             extra="由「地区 slug + _ + 语言字段」拼接"
           >
             <Input value={pathPreview} readOnly />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        title={`编辑语言「${editingCode ?? ""}」`}
+        open={editOpen}
+        onCancel={() => (editing ? undefined : setEditOpen(false))}
+        onOk={() => void submitEdit()}
+        okText="保存"
+        confirmLoading={editing}
+        destroyOnClose
+      >
+        <Form layout="vertical">
+          <Form.Item label="语言" required extra="展示名称，如：英语、法语">
+            <Input
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="英语"
+              maxLength={32}
+              disabled={editing}
+            />
+          </Form.Item>
+          <Form.Item
+            label="字段"
+            required
+            extra="路径用代码，2 位小写字母，如 en、fr；改动后落地路径同步变化"
+          >
+            <Input
+              value={editCodeValue}
+              onChange={(e) => setEditCodeValue(e.target.value)}
+              placeholder="en"
+              maxLength={5}
+              disabled={editing}
+            />
+          </Form.Item>
+          <Form.Item label="落地路径" extra="由「地区 slug + _ + 语言字段」拼接">
+            <Input
+              value={
+                isValidOverlayLocaleCode(editCodeValue.trim().toLowerCase())
+                  ? saPathPrefixForLocale(
+                      editCodeValue.trim().toLowerCase(),
+                      regionName,
+                    )
+                  : "—"
+              }
+              readOnly
+            />
           </Form.Item>
         </Form>
       </Modal>
@@ -325,11 +438,13 @@ export function ProductLocaleEditor({
   const save = async () => {
     setSaving(true);
     try {
-      // 像素 / 转化 ID 仅使用默认语言商品字段，多语言侧暂不编辑、不写入
       const payload: UpsertProductLocaleInput = {
         locale,
         label: localeLabel?.trim() || null,
         title_external: draft.title_external.trim() || null,
+        facebook_pixel_id: draft.facebook_pixel_id.trim() || null,
+        google_conversion_id: draft.google_conversion_id.trim() || null,
+        google_label: draft.google_label.trim() || null,
         description: draft.description.trim() || null,
         description_entries: draft.description_entries
           .map((s) => s.trim())
@@ -367,6 +482,36 @@ export function ProductLocaleEditor({
             value={draft.title_external}
             onChange={(e) => patch({ title_external: e.target.value })}
             placeholder="该语言落地页标题"
+          />
+        </Form.Item>
+
+        <Form.Item
+          label="Facebook像素id"
+          extra="多个用 # 隔开；留空则跟随默认"
+        >
+          <Input
+            maxLength={INPUT_LIMITS.mediumText}
+            value={draft.facebook_pixel_id}
+            onChange={(e) => patch({ facebook_pixel_id: e.target.value })}
+            placeholder="该语言像素ID，多个用#隔开"
+          />
+        </Form.Item>
+
+        <Form.Item label="Google转化ID">
+          <Input
+            maxLength={INPUT_LIMITS.shortId}
+            value={draft.google_conversion_id}
+            onChange={(e) => patch({ google_conversion_id: e.target.value })}
+            placeholder="该语言转化ID"
+          />
+        </Form.Item>
+
+        <Form.Item label="Google Label">
+          <Input
+            maxLength={INPUT_LIMITS.mediumText}
+            value={draft.google_label}
+            onChange={(e) => patch({ google_label: e.target.value })}
+            placeholder="该语言 Label"
           />
         </Form.Item>
 

@@ -70,6 +70,19 @@ function packageLocalesPath(productId: string) {
   return `packages/${productId}.json`;
 }
 
+/** 前端草稿兜底：只保留语言内容字段，防止 product_id/locale 污染 */
+function cleanFallback(fallback?: Record<string, unknown>) {
+  if (!fallback || typeof fallback !== "object") return {};
+  const {
+    product_id: _pid,
+    locale: _locale,
+    created_at: _c,
+    updated_at: _u,
+    ...rest
+  } = fallback;
+  return rest;
+}
+
 async function downloadJson<T>(
   supabase: Supabase,
   path: string,
@@ -276,6 +289,105 @@ export async function deleteProductLocale(
     productLocalePath(productId, localeCheck.locale),
   );
   return { ok: true as const, locale: localeCheck.locale };
+}
+
+/** 重命名语言字段码：复制商品语言 JSON + 迁移套餐语言 key + 删除旧文件；
+ * 旧文件缺失时（如仅前端存在按钮）则用前端传来的草稿数据直接创建新文件，保证可编辑。 */
+export async function renameProductLocale(
+  supabase: Supabase,
+  productId: string,
+  oldLocale: string,
+  newLocale: string,
+  label?: string | null,
+  fallback?: Record<string, unknown>,
+) {
+  const oldCheck = validateLocaleCode(oldLocale);
+  if (!oldCheck.ok) return oldCheck;
+  const newCheck = validateLocaleCode(newLocale);
+  if (!newCheck.ok) return newCheck;
+  const from = oldCheck.locale;
+  const to = newCheck.locale;
+  if (from === to) {
+    // 仅改显示名；旧文件缺失时用兜底数据创建
+    const existing =
+      (await downloadJson<Record<string, unknown>>(
+        supabase,
+        productLocalePath(productId, from),
+      )) ?? fallback ?? null;
+    if (!existing) return { ok: false as const, error: `语言「${from}」不存在` };
+    if (label !== undefined || fallback) {
+      const merged = {
+        ...existing,
+        ...cleanFallback(fallback),
+        ...(label !== undefined ? { label: label?.trim() || null } : {}),
+      };
+      await uploadJson(supabase, productLocalePath(productId, from), merged);
+      return {
+        ok: true as const,
+        data: coerceLocaleRow({
+          product_id: productId,
+          locale: from,
+          ...merged,
+        }),
+      };
+    }
+    return {
+      ok: true as const,
+      data: coerceLocaleRow({ product_id: productId, locale: from, ...existing }),
+    };
+  }
+  const existing =
+    (await downloadJson<Record<string, unknown>>(
+      supabase,
+      productLocalePath(productId, from),
+    )) ?? fallback ?? null;
+  if (!existing) return { ok: false as const, error: `语言「${from}」不存在，请先点“保存本语言内容”后再改字段` };
+  const target = await downloadJson<Record<string, unknown>>(
+    supabase,
+    productLocalePath(productId, to),
+  );
+  if (target) return { ok: false as const, error: `语言字段「${to}」已存在` };
+  const merged = {
+    ...existing,
+    ...cleanFallback(fallback),
+    ...(label !== undefined ? { label: label?.trim() || null } : {}),
+  };
+  await uploadJson(supabase, productLocalePath(productId, to), merged);
+  await removePath(supabase, productLocalePath(productId, from));
+  // 迁移套餐语言 key
+  try {
+    const pkgMap =
+      (await downloadJson<PackageLocaleMap>(
+        supabase,
+        packageLocalesPath(productId),
+      )) ?? {};
+    let changed = false;
+    for (const pkgLocales of Object.values(pkgMap)) {
+      if (pkgLocales[from] !== undefined && pkgLocales[to] === undefined) {
+        pkgLocales[to] = pkgLocales[from]!;
+        delete pkgLocales[from];
+        changed = true;
+      } else if (pkgLocales[from] !== undefined) {
+        delete pkgLocales[from];
+        changed = true;
+      }
+    }
+    if (changed) {
+      if (Object.keys(pkgMap).length === 0) {
+        await removePath(supabase, packageLocalesPath(productId));
+      } else {
+        await uploadJson(supabase, packageLocalesPath(productId), pkgMap);
+      }
+    }
+  } catch {
+    /* 套餐迁移失败不阻断主流程 */
+  }
+  return {
+    ok: true as const,
+    data: coerceLocaleRow({ product_id: productId, locale: to, ...merged }),
+    from,
+    to,
+  };
 }
 
 export async function copyProductLocales(

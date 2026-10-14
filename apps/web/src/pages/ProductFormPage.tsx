@@ -664,8 +664,93 @@ export function ProductFormPage() {
     setLogRefreshKey((n) => n + 1);
   };
 
-  const handleRemoveLocale = async (code: string) => {
+  const handleRenameLocale = async (oldCode: string, newCode: string, label: string) => {
     if (!id) throw new Error("请先保存商品");
+    const cleanLabel = label.trim() || newCode;
+    if (oldCode === newCode) {
+      // 仅改显示名：直接 PUT 同码更新 label
+      const saved = await apiFetch<ProductLocale>(
+        `/api/products/${id}/locales/${encodeURIComponent(oldCode)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ locale: oldCode, label: cleanLabel }),
+        },
+      );
+      const to = saved.locale;
+      setLocaleLabels((prev) => ({ ...prev, [to]: cleanLabel }));
+      setLocaleDrafts((prev) => ({ ...prev, [to]: localeFromApi(saved) }));
+      setProduct((p) => {
+        if (!p) return p;
+        const others = (p.locales ?? []).filter((l) => l.locale !== to);
+        return { ...p, locales: [...others, saved], updated_at: new Date().toISOString() };
+      });
+      setLogRefreshKey((n) => n + 1);
+      return;
+    }
+    // 改码：先 PUT 新码（带当前草稿兜底，旧文件缺失也能建出来），再 DELETE 旧码；
+    // 只用已发布的 PUT/DELETE 接口，无需等后端改名接口上线
+    const draft = localeDrafts[oldCode] ?? emptyLocaleDraft();
+    const saved = await apiFetch<ProductLocale>(
+      `/api/products/${id}/locales/${encodeURIComponent(newCode)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          locale: newCode,
+          label: cleanLabel,
+          title_external: draft.title_external.trim() || null,
+          facebook_pixel_id: draft.facebook_pixel_id.trim() || null,
+          google_conversion_id: draft.google_conversion_id.trim() || null,
+          google_label: draft.google_label.trim() || null,
+          description: draft.description.trim() || null,
+          description_entries: draft.description_entries,
+          cover_url: draft.cover_url,
+          gallery_urls: draft.gallery_urls,
+          detail_image_urls: draft.detail_image_urls,
+        }),
+      },
+    );
+    const to = saved.locale;
+    try {
+      await apiFetch(`/api/products/${id}/locales/${encodeURIComponent(oldCode)}`, {
+        method: "DELETE",
+      });
+    } catch {
+      /* 旧文件缺失时删除会 400，忽略（新文件已建好） */
+    }
+    setAddedLocales((prev) =>
+      prev.includes(oldCode)
+        ? prev.map((c) => (c === oldCode ? to : c))
+        : [...prev, to],
+    );
+    setLocaleLabels((prev) => {
+      const next = { ...prev };
+      delete next[oldCode];
+      next[to] = label.trim() || saved.label?.trim() || to;
+      return next;
+    });
+    setLocaleDrafts((prev) => {
+      const next = { ...prev };
+      delete next[oldCode];
+      next[to] = localeFromApi(saved);
+      return next;
+    });
+    setContentLocale((cur) => (cur === oldCode ? to : cur));
+    setPackageContentLocale((cur) => (cur === oldCode ? to : cur));
+    setProduct((p) => {
+      if (!p) return p;
+      const others = (p.locales ?? []).filter(
+        (l) => l.locale !== oldCode && l.locale !== to,
+      );
+      return {
+        ...p,
+        locales: [...others, saved],
+        updated_at: new Date().toISOString(),
+      };
+    });
+    setLogRefreshKey((n) => n + 1);
+  };
+
+  const handleRemoveLocale = async (code: string) => {    if (!id) throw new Error("请先保存商品");
     await apiFetch(
       `/api/products/${id}/locales/${encodeURIComponent(code)}`,
       { method: "DELETE" },
@@ -706,6 +791,7 @@ export function ProductFormPage() {
           localeLabels={localeLabels}
           onChangeLocale={setContentLocale}
           onAddLocale={handleAddLocale}
+          onRenameLocale={handleRenameLocale}
           onRemoveLocale={handleRemoveLocale}
         />
       ) : (
@@ -1378,6 +1464,7 @@ export function ProductFormPage() {
                         localeLabels={localeLabels}
                         onChangeLocale={setPackageContentLocale}
                         onAddLocale={handleAddLocale}
+                        onRenameLocale={handleRenameLocale}
                         onRemoveLocale={handleRemoveLocale}
                       />
                       <ProductPackageSettings

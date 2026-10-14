@@ -27,6 +27,7 @@ import {
   copyProductLocales,
   deleteProductLocale,
   listProductLocales,
+  renameProductLocale,
   upsertProductLocale,
 } from "../lib/productLocales";
 import {
@@ -645,8 +646,51 @@ productsRoutes.put("/:id/locales/:locale", async (c) => {
   return c.json(result.data);
 });
 
-productsRoutes.delete("/:id/locales/:locale", async (c) => {
+productsRoutes.post("/:id/locales/:locale/rename", async (c) => {
   const id = c.req.param("id");
+  const locale = c.req.param("locale");
+  const body = (await c.req.json()) as {
+    new_locale?: string;
+    label?: string | null;
+    draft?: Record<string, unknown>;
+  };
+  const actor = actorFrom(c);
+  const supabase = createServiceClient(c.env);
+  try {
+    const access = await assertProductAccess(supabase, id, c);
+    if (!access.ok) return c.json({ error: access.error }, access.status);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "权限校验失败" },
+      500,
+    );
+  }
+  const result = await renameProductLocale(
+    supabase,
+    id,
+    locale,
+    String(body.new_locale ?? ""),
+    body.label,
+    body.draft,
+  );
+  if ("error" in result) return c.json({ error: result.error }, 400);
+  if (!("data" in result)) return c.json({ error: "语言字段无效" }, 400);
+  await writeAuditLog(supabase, {
+    entityType: "product",
+    entityId: id,
+    action: "locale_rename",
+    actor,
+    changes: { from: locale, to: result.data.locale, label: body.label ?? null },
+    remark: `语言重命名: ${locale} → ${String(result.data.locale)}`,
+  });
+  await supabase
+    .from("products")
+    .update({ updated_by: actor.id, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  return c.json(result.data);
+});
+
+productsRoutes.delete("/:id/locales/:locale", async (c) => {  const id = c.req.param("id");
   const locale = c.req.param("locale");
   const actor = actorFrom(c);
   const supabase = createServiceClient(c.env);
