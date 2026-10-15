@@ -75,15 +75,39 @@ uploadsRoutes.post("/product-image", async (c) => {
     }
   }
 
-  const path = `products/${crypto.randomUUID()}.${ext}`;
+  const uuid = crypto.randomUUID();
+  const path = `products/${uuid}.${ext}`;
 
   // ID 模式：R2 配齐后直传 R2 自定义域；未配则回退 Supabase Storage
   if (isR2Configured(c.env)) {
     try {
       const uploaded = await r2PutObject(c.env, path, uploadBytes, uploadType);
+      // 列表缩略图：非 GIF 同步生成 256px WebP，后台列表只拉小图
+      let thumbUrl: string | null = null;
+      if (fileType !== "image/gif") {
+        try {
+          const thumb = await optimizeProductImage(original, fileType, {
+            maxEdge: 256,
+            quality: 70,
+          });
+          if (thumb) {
+            const thumbPath = `products/thumbs/${uuid}.webp`;
+            const thumbUploaded = await r2PutObject(
+              c.env,
+              thumbPath,
+              thumb.bytes,
+              thumb.contentType,
+            );
+            thumbUrl = thumbUploaded.url;
+          }
+        } catch (error) {
+          console.error("thumb upload failed, list will use original:", error);
+        }
+      }
       return c.json({
         path: uploaded.path,
         url: uploaded.url,
+        thumbUrl,
         contentType: uploadType,
       });
     } catch (error) {

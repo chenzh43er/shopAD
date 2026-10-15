@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
-  Image,
   Input,
   Popconfirm,
   Select,
@@ -12,6 +11,7 @@ import {
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { ThumbImage } from "../components/ThumbImage";
 import dayjs from "dayjs";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -220,7 +220,7 @@ export function ProductsPage() {
       width: 72,
       render: (url: string | null) =>
         url ? (
-          <Image src={url} className="cover-thumb" width={48} height={48} />
+          <ThumbImage src={url} className="cover-thumb" width={48} height={48} />
         ) : (
           <div className="cover-placeholder">无图</div>
         ),
