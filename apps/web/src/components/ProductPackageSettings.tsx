@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
-  Image,
   Input,
   InputNumber,
   Space,
@@ -27,6 +26,7 @@ import {
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import { INPUT_LIMITS } from "../lib/inputLimits";
+import { ThumbImage } from "./ThumbImage";
 
 type LocaleNames = {
   name: string;
@@ -282,7 +282,7 @@ export function ProductPackageSettings({
 
       <Space style={{ marginBottom: 16 }} align="center">
         {currentProduct.cover_url ? (
-          <Image src={currentProduct.cover_url} width={48} height={48} />
+          <ThumbImage src={currentProduct.cover_url} width={48} height={48} />
         ) : (
           <div
             style={{
@@ -473,7 +473,7 @@ export function ProductPackageSettings({
               return (
                 <Space>
                   {imgUrl ? (
-                    <Image src={imgUrl} width={40} height={40} />
+                    <ThumbImage src={imgUrl} width={40} height={40} />
                   ) : null}
                   <Upload
                     accept="image/*"

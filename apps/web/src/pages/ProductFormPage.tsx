@@ -10,7 +10,6 @@ import {
   Select,
   Switch,
   Upload,
-  Image,
   Space,
   Spin,
   Tabs,
@@ -45,6 +44,7 @@ import {
 } from "../components/ProductLocaleEditor";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
 import { SortableImageList } from "../components/SortableImageList";
+import { ThumbImage } from "../components/ThumbImage";
 import dayjs from "dayjs";
 
 const MAX_GALLERY = 20;
@@ -1252,7 +1252,7 @@ export function ProductFormPage() {
       >
         <Space direction="vertical">
           {coverUrl ? (
-            <Image src={coverUrl} width={160} style={{ borderRadius: 4 }} />
+            <ThumbImage src={coverUrl} width={160} style={{ borderRadius: 4 }} />
           ) : null}
           <Upload
             accept="image/jpeg,image/png,image/webp,image/gif"
@@ -1286,7 +1286,7 @@ export function ProductFormPage() {
                 overflow: "hidden",
               }}
             >
-              <Image
+              <ThumbImage
                 src={url}
                 width={96}
                 height={96}

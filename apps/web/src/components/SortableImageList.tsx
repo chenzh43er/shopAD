@@ -1,11 +1,12 @@
 import { useRef, useState, type DragEvent } from "react";
-import { Button, Image, Space, Upload } from "antd";
+import { Button, Space, Upload } from "antd";
 import {
   DeleteOutlined,
   LeftOutlined,
   PlusOutlined,
   RightOutlined,
 } from "@ant-design/icons";
+import { ThumbImage } from "./ThumbImage";
 
 type Props = {
   urls: string[];
@@ -114,12 +115,12 @@ export function SortableImageList({
                 overflow: "hidden",
               }}
             >
-              <Image
+              <ThumbImage
                 src={url}
                 width={itemSize}
                 height={itemSize}
                 style={{ objectFit: "cover" }}
-                preview={{ mask: "预览" }}
+                previewMask="预览"
               />
             </div>
             <div

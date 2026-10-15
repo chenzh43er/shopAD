@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   Button,
   Form,
-  Image,
   Input,
   Modal,
   Space,
@@ -24,6 +23,7 @@ import {
 import { apiFetch } from "../lib/api";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { SortableImageList } from "./SortableImageList";
+import { ThumbImage } from "./ThumbImage";
 
 const MAX_GALLERY = 20;
 const MAX_DETAIL_IMAGES = 30;
@@ -580,7 +580,7 @@ export function ProductLocaleEditor({
         <Form.Item label="商品封面">
           <Space direction="vertical">
             {draft.cover_url ? (
-              <Image
+              <ThumbImage
                 src={draft.cover_url}
                 width={160}
                 style={{ borderRadius: 4 }}
@@ -627,7 +627,7 @@ export function ProductLocaleEditor({
                   overflow: "hidden",
                 }}
               >
-                <Image src={url} width={96} height={96} style={{ objectFit: "cover" }} />
+                <ThumbImage src={url} width={96} height={96} style={{ objectFit: "cover" }} />
                 <Button
                   size="small"
                   danger
