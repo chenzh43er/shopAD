@@ -1,5 +1,6 @@
 import { createServiceClient } from "./supabase"
 import { optimizeProductImage } from "./optimizeProductImage"
+import { isR2Configured, r2PutObject } from "./r2"
 import type { Env } from "../types"
 
 export type ReoptimizeImageResult = {
@@ -61,12 +62,20 @@ function isAlreadyOptimizedWebp(url: string, byteLength: number): boolean {
 }
 
 async function uploadOptimized(
-  supabase: ReturnType<typeof createServiceClient>,
+  env: Env,
   bytes: ArrayBuffer,
   contentType: string,
   ext: string,
 ): Promise<{ path: string; url: string }> {
   const path = `products/${crypto.randomUUID()}.${ext}`
+  if (isR2Configured(env)) {
+    try {
+      return await r2PutObject(env, path, bytes, contentType)
+    } catch (error) {
+      console.error("R2 upload failed, falling back to Supabase:", error)
+    }
+  }
+  const supabase = createServiceClient(env)
   const { error } = await supabase.storage
     .from("product-images")
     .upload(path, bytes, {
@@ -87,7 +96,6 @@ export async function reoptimizeImageUrl(
   env: Env,
   url: string,
 ): Promise<ReoptimizeImageResult> {
-  const supabase = createServiceClient(env)
   if (!/^https?:\/\//i.test(url)) {
     return { from: url, to: null, status: "skipped", reason: "not-http" }
   }
@@ -152,7 +160,7 @@ export async function reoptimizeImageUrl(
     }
 
     const uploaded = await uploadOptimized(
-      supabase,
+      env,
       optimized.bytes,
       optimized.contentType,
       optimized.ext,

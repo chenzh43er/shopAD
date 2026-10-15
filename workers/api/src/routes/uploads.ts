@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { createServiceClient } from "../lib/supabase";
 import { optimizeProductImage } from "../lib/optimizeProductImage";
+import { isR2Configured, r2PutObject } from "../lib/r2";
 import { reoptimizeProductImages } from "../lib/reoptimizeProductImages";
 import { requireSuperAdmin } from "../middleware/auth";
 import type { Env, Variables } from "../types";
@@ -75,6 +76,21 @@ uploadsRoutes.post("/product-image", async (c) => {
   }
 
   const path = `products/${crypto.randomUUID()}.${ext}`;
+
+  // ID 模式：R2 配齐后直传 R2 自定义域；未配则回退 Supabase Storage
+  if (isR2Configured(c.env)) {
+    try {
+      const uploaded = await r2PutObject(c.env, path, uploadBytes, uploadType);
+      return c.json({
+        path: uploaded.path,
+        url: uploaded.url,
+        contentType: uploadType,
+      });
+    } catch (error) {
+      console.error("R2 upload failed, falling back to Supabase:", error);
+    }
+  }
+
   const supabase = createServiceClient(c.env);
 
   const { error } = await supabase.storage

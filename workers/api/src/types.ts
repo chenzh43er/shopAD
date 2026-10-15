@@ -23,6 +23,16 @@ export interface Env {
    * 未配时回退商品绑定域名 host
    */
   STOREFRONT_REVALIDATE_URLS?: string;
+  /**
+   * CF R2（S3 兼容）。配齐后商品图直传 R2（ID 模式）；
+   * 未配则回退 Supabase Storage。密钥走 wrangler secret / .dev.vars。
+   */
+  R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  R2_BUCKET?: string;
+  /** R2 公开基地址：已 proxied 的自定义域，如 https://static.quan2go.com（勿用 r2.dev） */
+  R2_PUBLIC_BASE_URL?: string;
 }
 
 export type Variables = {
