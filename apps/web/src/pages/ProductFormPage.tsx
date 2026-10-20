@@ -35,6 +35,7 @@ import { INPUT_LIMITS } from "../lib/inputLimits";
 import { productsListPath } from "../lib/productsPaths";
 import { useAuth } from "../auth/AuthContext";
 import { ProductPackageSettings } from "../components/ProductPackageSettings";
+import { ProductGiftSettings } from "../components/ProductGiftSettings";
 import {
   emptyLocaleDraft,
   localeFromApi,
@@ -137,6 +138,10 @@ export function ProductFormPage() {
   );
   /** 套餐页独立语言，避免切语言时卸载基本信息 Form 导致跳回基本信息 */
   const [packageContentLocale, setPackageContentLocale] = useState<
+    "default" | string
+  >("default");
+  /** 赠品页独立语言，与套餐页同理 */
+  const [giftContentLocale, setGiftContentLocale] = useState<
     "default" | string
   >("default");
   const [addedLocales, setAddedLocales] = useState<string[]>([]);
@@ -768,6 +773,7 @@ export function ProductFormPage() {
     });
     if (contentLocale === code) setContentLocale("default");
     if (packageContentLocale === code) setPackageContentLocale("default");
+    if (giftContentLocale === code) setGiftContentLocale("default");
     setProduct((p) =>
       p
         ? {
@@ -1387,7 +1393,7 @@ export function ProductFormPage() {
         destroyOnClose
       >
         <p style={{ marginBottom: 16, color: "#666" }}>
-          将复制当前商品的基本信息与套餐，新商品保存为草稿。请填写一个尚未使用的链接后缀。
+          将复制当前商品的基本信息、套餐、多语言与赠品设置，新商品保存为草稿。请填写一个尚未使用的链接后缀。
         </p>
         <Form form={copyForm} layout="vertical">
           <Form.Item
@@ -1483,6 +1489,45 @@ export function ProductFormPage() {
                   ) : (
                     <div style={{ color: "#999", padding: "24px 0" }}>
                       请先填写并保存草稿后，再配置套餐。套餐商品默认为当前商品。
+                    </div>
+                  ),
+                },
+              ]
+            : []),
+          ...(isEdit && id
+            ? [
+                {
+                  key: "gifts",
+                  label: "赠品设置",
+                  disabled: !canEditPackages,
+                  children: canEditPackages && id && product ? (
+                    <>
+                      <ProductLocaleToolbar
+                        contentLocale={giftContentLocale}
+                        addedLocales={addedLocales}
+                        linkSuffix={
+                          watchedLinkSuffix ?? product.link_suffix
+                        }
+                        regionName={selectedRegionName}
+                        localeLabels={localeLabels}
+                        onChangeLocale={setGiftContentLocale}
+                        onAddLocale={handleAddLocale}
+                        onRenameLocale={handleRenameLocale}
+                        onRemoveLocale={handleRemoveLocale}
+                      />
+                      <ProductGiftSettings
+                        productId={id}
+                        currentProduct={{ id: product.id, name: product.name }}
+                        regionName={selectedRegionName}
+                        contentLocale={giftContentLocale}
+                        addedLocales={addedLocales}
+                        localeLabels={localeLabels}
+                        onChanged={() => setLogRefreshKey((n) => n + 1)}
+                      />
+                    </>
+                  ) : (
+                    <div style={{ color: "#999", padding: "24px 0" }}>
+                      请先填写并保存草稿后，再配置赠品。
                     </div>
                   ),
                 },

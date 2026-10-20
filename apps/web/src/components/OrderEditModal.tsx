@@ -11,12 +11,15 @@ import {
 } from "antd";
 import {
   type Order,
+  type OrderGiftSnapshot,
   type Paginated,
   type Product,
+  type ProductGift,
   type ProductPackageWithItems,
   type UpdateOrderInput,
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
+import { parseGiftSnapshot } from "../lib/formatGifts";
 import { formatMoney } from "../lib/formatMoney";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 
@@ -63,6 +66,159 @@ function packageUnitPrice(pkg: ProductPackageWithItems): number {
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+type GiftEditRow = {
+  key: string;
+  name: string;
+  sku_code: string;
+  package_name: string;
+  quantity: number;
+  /** 赠品自身套餐内件数（导出按「套餐内件数 × 赠品数量」计件） */
+  package_count?: number;
+};
+
+function giftPackageLabel(gift: ProductGift): string {
+  const name = gift.package?.name?.trim() ?? "";
+  const external = gift.package?.name_external?.trim() ?? "";
+  if (name && external && name !== external) return `${name}（${external}）`;
+  return external || name;
+}
+
+function newGiftKey() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function rowsFromSnapshot(raw: unknown): GiftEditRow[] {
+  return parseGiftSnapshot(raw).map((gift) => ({
+    key: newGiftKey(),
+    name: gift.name ?? "",
+    sku_code: gift.sku_code ?? "",
+    package_name: gift.package_name?.trim() ?? "",
+    quantity: gift.quantity,
+    package_count: gift.package_count ?? undefined,
+  }));
+}
+
+/** 赠品名称优先：自定义名称 → 标题(外部) → 内部名称。不同套餐分开显示。 */
+function rowsFromProductGifts(gifts: ProductGift[]): GiftEditRow[] {
+  const merged = new Map<string, GiftEditRow>();
+  for (const gift of gifts) {
+    const sku = gift.gift_product?.sku_code?.trim() ?? "";
+    const name =
+      gift.gift_name?.trim() ||
+      gift.gift_product?.title_external?.trim() ||
+      gift.gift_product?.name?.trim() ||
+      "";
+    const packageName = giftPackageLabel(gift);
+    if (!sku && !name) continue;
+    const qty = Math.max(1, Math.floor(Number(gift.quantity) || 1));
+    const mergeKey = `${sku}|${name}|${packageName}`;
+    const exist = merged.get(mergeKey);
+    if (exist) {
+      exist.quantity += qty;
+      continue;
+    }
+    merged.set(mergeKey, {
+      key: newGiftKey(),
+      name,
+      sku_code: sku,
+      package_name: packageName,
+      quantity: qty,
+    });
+  }
+  return [...merged.values()];
+}
+
+/** 用商品赠品配置补上套餐，并优先展示赠品名称。数量仍以订单快照为准。 */
+function rowsForOrder(raw: unknown, catalog: GiftEditRow[]): GiftEditRow[] {
+  const snaps = parseGiftSnapshot(raw);
+  if (snaps.length === 0) return [];
+  if (catalog.length === 0) return rowsFromSnapshot(raw);
+
+  const used = new Set<string>();
+  const rows: GiftEditRow[] = [];
+  for (const snap of snaps) {
+    const pkg = snap.package_name?.trim() ?? "";
+    let matches = catalog.filter((row) => {
+      if (used.has(row.key)) return false;
+      const skuOk = Boolean(snap.sku_code) && row.sku_code === snap.sku_code;
+      const nameOk = Boolean(snap.name) && row.name === snap.name;
+      if (!skuOk && !nameOk) return false;
+      return pkg ? row.package_name === pkg : true;
+    });
+    if (!pkg && matches.length > 1 && snap.sku_code) {
+      const bySku = matches.filter((row) => row.sku_code === snap.sku_code);
+      if (bySku.length > 0) matches = bySku;
+    }
+    if (matches.length === 0) {
+      rows.push({
+        key: newGiftKey(),
+        name: snap.name ?? "",
+        sku_code: snap.sku_code ?? "",
+        package_name: pkg,
+        quantity: snap.quantity,
+        package_count: snap.package_count ?? undefined,
+      });
+      continue;
+    }
+    if (matches.length === 1) {
+      used.add(matches[0]!.key);
+      rows.push({
+        ...matches[0]!,
+        quantity: snap.quantity,
+        package_count: snap.package_count ?? matches[0]!.package_count,
+      });
+      continue;
+    }
+    const sum = matches.reduce((acc, row) => acc + row.quantity, 0);
+    for (const row of matches) used.add(row.key);
+    if (sum === snap.quantity) {
+      rows.push(
+        ...matches.map((row) => ({
+          ...row,
+          package_count: row.package_count ?? snap.package_count ?? undefined,
+        })),
+      );
+      continue;
+    }
+    rows.push({
+      ...matches[0]!,
+      quantity: snap.quantity,
+      package_count: snap.package_count ?? matches[0]!.package_count,
+      package_name:
+        matches
+          .map((row) => row.package_name)
+          .filter(Boolean)
+          .join("、") || pkg,
+    });
+  }
+  return rows;
+}
+
+function rowsToSnapshot(rows: GiftEditRow[]): OrderGiftSnapshot[] | null {
+  const list: OrderGiftSnapshot[] = [];
+  for (const row of rows) {
+    const name = row.name.trim();
+    const sku = row.sku_code.trim();
+    const packageName = row.package_name.trim();
+    if (!name && !sku) continue;
+    const quantity = Math.floor(Number(row.quantity));
+    const rawPkgCount = Number(row.package_count);
+    const packageCount =
+      Number.isFinite(rawPkgCount) && rawPkgCount > 0
+        ? Math.floor(rawPkgCount)
+        : undefined;
+    const entry: OrderGiftSnapshot = {
+      sku_code: sku || null,
+      name: name || null,
+      package_name: packageName || null,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+    };
+    if (packageCount !== undefined) entry.package_count = packageCount;
+    list.push(entry);
+  }
+  return list.length > 0 ? list : null;
+}
+
 type OrderEditModalProps = {
   open: boolean;
   orderId: string | null;
@@ -93,6 +249,7 @@ export function OrderEditModal({
   const [packageCount, setPackageCount] = useState(1);
   const [packagesEnabled, setPackagesEnabled] = useState(false);
   const [form] = Form.useForm<EditOrderFormValues>();
+  const [gifts, setGifts] = useState<GiftEditRow[]>([]);
   const totalAmount = Form.useWatch("total_amount", form);
   const watchedProvince = Form.useWatch("shipping_province", form);
   const watchedCity = Form.useWatch("shipping_city", form);
@@ -161,6 +318,13 @@ export function OrderEditModal({
     return res.data ?? [];
   };
 
+  const loadProductGiftRows = async (productId: string) => {
+    const res = await apiFetch<{ data: ProductGift[] }>(
+      `/api/products/${productId}/gifts`,
+    );
+    return rowsFromProductGifts(res.data ?? []);
+  };
+
   const applyProductSync = async (
     productId: string,
     preferredPackageId?: string | null,
@@ -198,6 +362,13 @@ export function OrderEditModal({
       });
       syncTotalAmount(nextUnitPrice);
     }
+
+    try {
+      setGifts(await loadProductGiftRows(productId));
+    } catch (e) {
+      setGifts([]);
+      message.error(e instanceof Error ? e.message : "读取商品赠品失败");
+    }
   };
 
   const applyPackageSync = (packageId: string) => {
@@ -212,6 +383,15 @@ export function OrderEditModal({
 
   const initFromOrder = async (data: Order) => {
     setOrder(data);
+    let catalog: GiftEditRow[] = [];
+    if (data.product_id) {
+      try {
+        catalog = await loadProductGiftRows(data.product_id);
+      } catch {
+        catalog = [];
+      }
+    }
+    setGifts(rowsForOrder(data.gift_snapshot, catalog));
     const [productList, initialPackages] = await Promise.all([
       loadProducts(),
       data.product_id ? loadPackages(data.product_id) : Promise.resolve([]),
@@ -327,6 +507,7 @@ export function OrderEditModal({
   useEffect(() => {
     if (!open || !orderId) {
       setOrder(null);
+      setGifts([]);
       form.resetFields();
       return;
     }
@@ -357,6 +538,13 @@ export function OrderEditModal({
     if (!order) return;
     try {
       const values = await form.validateFields();
+      const invalidGift = gifts.findIndex(
+        (gift) => !gift.name.trim() && !gift.sku_code.trim(),
+      );
+      if (invalidGift >= 0) {
+        message.error(`第 ${invalidGift + 1} 条赠品需填写名称或中文属性`);
+        return;
+      }
       setSaving(true);
       const payload: UpdateOrderInput = {
         customer_name: values.customer_name.trim(),
@@ -377,6 +565,7 @@ export function OrderEditModal({
         owner_member: values.owner_member?.trim() || null,
         shipping_order_no: values.shipping_order_no?.trim() || null,
         remark: values.remark?.trim() || null,
+        gift_snapshot: rowsToSnapshot(gifts),
       };
 
       const nextProductId = values.product_id;
@@ -609,6 +798,59 @@ export function OrderEditModal({
               <Input maxLength={INPUT_LIMITS.shippingMeta} />
             </Form.Item>
           </Space>
+          <Form.Item
+            label="赠品"
+            extra="赠品名称、中文属性和套餐来自订单赠品，不能修改。数量是每份赠品件数，导出时按「套餐内件数 × 赠品数量」计算。有赠品名称时优先显示赠品名称。"
+          >
+            <Space direction="vertical" style={{ width: "100%" }} size={8}>
+              {gifts.length === 0 ? (
+                <span style={{ color: "#999" }}>暂无赠品</span>
+              ) : (
+                <Space wrap align="start">
+                  <span style={{ width: 240, color: "#888" }}>赠品名称</span>
+                  <span style={{ width: 140, color: "#888" }}>中文属性</span>
+                  <span style={{ width: 160, color: "#888" }}>套餐</span>
+                  <span style={{ width: 100, color: "#888" }}>每份数量</span>
+                </Space>
+              )}
+              {gifts.map((gift) => {
+                return (
+                  <Space key={gift.key} wrap align="start">
+                    <Input
+                      value={gift.name || "—"}
+                      disabled
+                      style={{ width: 240 }}
+                    />
+                    <Input
+                      value={gift.sku_code || "—"}
+                      disabled
+                      style={{ width: 140 }}
+                    />
+                    <Input
+                      value={gift.package_name || "未指定套餐"}
+                      disabled
+                      style={{ width: 160 }}
+                    />
+                    <InputNumber
+                      min={1}
+                      max={9999}
+                      precision={0}
+                      value={gift.quantity}
+                      style={{ width: 100 }}
+                      onChange={(value) => {
+                        const quantity = Math.max(1, Number(value) || 1);
+                        setGifts((rows) =>
+                          rows.map((row) =>
+                            row.key === gift.key ? { ...row, quantity } : row,
+                          ),
+                        );
+                      }}
+                    />
+                  </Space>
+                );
+              })}
+            </Space>
+          </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input.TextArea
               rows={3}

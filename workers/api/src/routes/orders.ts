@@ -44,13 +44,13 @@ import type { Env, Variables } from "../types";
 /** PostgREST 单次最多约 1000 行；导出用 range 分页拉全量，无业务上限 */
 const EXPORT_FETCH_PAGE = 1000;
 const FINANCE_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count, status";
+  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count, gift_snapshot, status";
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
-  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, remark, cod_amount, total_amount";
+  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, gift_snapshot, remark, cod_amount, total_amount";
 /** 全部订单导出：业务可读字段（不含内部 UUID） */
 const FULL_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
 
 type ExportRangeQuery = {
   range: (
@@ -81,10 +81,10 @@ async function fetchAllExportRows(
 }
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 /** 带地区筛选时用 !inner，避免把地区展开成超大 product_id IN (...) */
 const ORDER_LIST_SELECT_REGION =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
 function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
@@ -190,7 +190,12 @@ type OrderListEmbedRow = Record<string, unknown> & {
   } | null;
 };
 
-function flattenOrderListRow(row: OrderListEmbedRow) {
+function flattenOrderListRow(
+  row: OrderListEmbedRow,
+): Record<string, unknown> & {
+  reviewer: { id: string; display_name: string | null } | null;
+  currency: import("../lib/orderCurrency").OrderCurrency | null;
+} {
   const reviewerRaw = row.reviewer;
   const reviewer = Array.isArray(reviewerRaw) ? reviewerRaw[0] : reviewerRaw;
   const currencyRaw = row.product?.currency;
@@ -1374,6 +1379,8 @@ ordersRoutes.get("/", async (c) => {
   const dateTo = c.req.query("date_to")?.trim();
   const regionId = c.req.query("region_id")?.trim();
   const productIds = parseCsvIds(c.req.query("product_ids"));
+  const sortRaw = c.req.query("sort")?.trim() ?? "created_at.desc";
+  const sortAsc = sortRaw === "created_at.asc";
 
   const supabase = createServiceClient(c.env);
   const listSelect = regionId ? ORDER_LIST_SELECT_REGION : ORDER_LIST_SELECT;
@@ -1381,7 +1388,8 @@ ordersRoutes.get("/", async (c) => {
     .from("orders")
     // exact：后台「共 N 条」需准确；estimated 依赖 PG 表统计，插入后长期滞后会冻在旧值
     .select(listSelect, { count: "exact" })
-    .order("created_at", { ascending: false })
+    .order("created_at", { ascending: sortAsc })
+    .order("id", { ascending: sortAsc })
     .range((page - 1) * pageSize, page * pageSize - 1);
 
   let filterProductIds: string[] | null | "empty";
@@ -1483,14 +1491,28 @@ ordersRoutes.get("/", async (c) => {
   if (error) return c.json({ error: error.message }, 500);
 
   const filled = await persistOrderOwnerMembers(supabase, data ?? []);
+  const giftLookup = await buildGiftPkgLookup(
+    supabase,
+    (data ?? [])
+      .map((row) =>
+        typeof row.product_id === "string" ? row.product_id : "",
+      )
+      .filter(Boolean),
+  );
   const dataOut = (data ?? []).map((row) => {
     const flat = flattenOrderListRow(row as OrderListEmbedRow);
     const id = typeof flat.id === "string" ? flat.id : "";
     const fromProduct = id ? filled.get(id) : "";
     const stored =
       typeof flat.owner_member === "string" ? flat.owner_member.trim() : "";
+    const productId =
+      typeof flat.product_id === "string" ? flat.product_id : "";
     return {
       ...flat,
+      gift_snapshot: withResolvedGiftPkgCount(
+        flat.gift_snapshot,
+        giftLookup(productId),
+      ),
       owner_member: fromProduct || stored || null,
     };
   });
@@ -1689,6 +1711,8 @@ ordersRoutes.post("/finance-export", async (c) => {
     rowProductIds,
   );
 
+  const giftLookup = await buildGiftPkgLookup(supabase, rowProductIds);
+
   const rows = data.map((row) => {
     const qty = orderPurchaseQty(row);
     const productId =
@@ -1712,7 +1736,7 @@ ordersRoutes.post("/finance-export", async (c) => {
           ? row.total_amount
           : Number(row.total_amount) || 0,
       owner_member: fromProduct || stored,
-      sku_quantity: formatSkuQuantity(row),
+      sku_quantity: formatSkuQuantityWithGifts(row, giftLookup(productId)),
       quantity: qty,
       status_label: status ? (ORDER_STATUS_LABELS[status] ?? status) : "",
     };
@@ -1770,6 +1794,311 @@ function formatSkuQuantity(row: {
   const sku = asText(row.sku_code);
   if (!sku) return "";
   return `${sku} * ${orderSkuUnits(row)}`;
+}
+
+/** 快照缺 package_count 时，按订单商品当前赠品配置解析「赠品套餐内件数」 */
+type GiftPkgLookup = (label: string, giftQty: number) => number | undefined;
+
+/**
+ * 预加载一批订单商品的赠品配置，返回「按 productId 取套餐内件数解析器」。
+ * 仅用于历史/新建快照缺 package_count 的订单导出时按真实配置回退（避免被当 ×1）。
+ * 任何查询异常都退化为「无解析器」，导出仍按 ×1 兜底，不阻断导出。
+ */
+async function buildGiftPkgLookup(
+  supabase: ServiceClient,
+  productIds: string[],
+): Promise<(productId: string) => GiftPkgLookup | undefined> {
+  try {
+    const unique = [...new Set(productIds.filter(Boolean))];
+    if (unique.length === 0) return () => undefined;
+
+    const { data: gifts, error } = await supabase
+      .from("product_gifts")
+      .select("product_id, gift_product_id, package_id, quantity")
+      .in("product_id", unique);
+    if (error) throw new Error(error.message);
+    if (!gifts || gifts.length === 0) return () => undefined;
+
+    const giftProductIds = [
+      ...new Set(
+        gifts
+          .map((g) => g.gift_product_id as string)
+          .filter((id) => typeof id === "string" && id.length > 0),
+      ),
+    ];
+    const productMap = new Map<string, { name: string; sku_code: string }>();
+    if (giftProductIds.length > 0) {
+      const { data: products } = await supabase
+        .from("products")
+        .select("id, name, sku_code")
+        .in("id", giftProductIds);
+      for (const p of products ?? []) {
+        productMap.set(p.id as string, {
+          name: (p.name as string) ?? "",
+          sku_code: (p.sku_code as string) ?? "",
+        });
+      }
+    }
+
+    const pkgCountCache = new Map<string, number>();
+    const pkgCount = async (packageId: string | null): Promise<number> => {
+      if (!packageId) return 1;
+      const cached = pkgCountCache.get(packageId);
+      if (cached !== undefined) return cached;
+      const n = await resolvePackageItemCount(supabase, packageId);
+      pkgCountCache.set(packageId, n);
+      return n;
+    };
+
+    // productId -> label(中文属性/名称) -> [{ pkgCount, qty }]
+    const byProduct = new Map<
+      string,
+      Map<string, Array<{ pkgCount: number; qty: number }>>
+    >();
+    for (const g of gifts) {
+      const ref = productMap.get(g.gift_product_id as string);
+      if (!ref) continue;
+      const label = ref.sku_code.trim() || ref.name.trim();
+      if (!label) continue;
+      const qty = Math.max(1, Math.floor(Number(g.quantity) || 1));
+      const pc = await pkgCount((g.package_id as string | null) ?? null);
+      let m = byProduct.get(g.product_id as string);
+      if (!m) {
+        m = new Map();
+        byProduct.set(g.product_id as string, m);
+      }
+      const arr = m.get(label) ?? [];
+      arr.push({ pkgCount: pc, qty });
+      m.set(label, arr);
+    }
+
+    return (productId: string) => {
+      const m = byProduct.get(productId);
+      if (!m) return undefined;
+      return (label, giftQty) => {
+        const candidates = m.get(label);
+        if (!candidates || candidates.length === 0) return undefined;
+        const distinct = new Set(candidates.map((c) => c.pkgCount));
+        if (distinct.size === 1) return candidates[0]!.pkgCount;
+        const byQty = candidates.filter((c) => c.qty === giftQty);
+        if (byQty.length > 0 && new Set(byQty.map((c) => c.pkgCount)).size === 1) {
+          return byQty[0]!.pkgCount;
+        }
+        return Math.max(...candidates.map((c) => c.pkgCount));
+      };
+    };
+  } catch {
+    return () => undefined;
+  }
+}
+
+/**
+ * 为订单赠品快照补齐缺失的 package_count（仅用于返回前端展示对象，不落库）。
+ * 已带合法 package_count 的条目保持不变；补不到则原样返回，前端按 ×1 兜底。
+ */
+function withResolvedGiftPkgCount(
+  giftSnapshot: unknown,
+  lookup?: GiftPkgLookup,
+): unknown {
+  if (!lookup) return giftSnapshot;
+  let items: unknown = giftSnapshot;
+  if (typeof items === "string" && items.trim()) {
+    try {
+      items = JSON.parse(items);
+    } catch {
+      return giftSnapshot;
+    }
+  }
+  if (!Array.isArray(items)) return giftSnapshot;
+  return items.map((raw) => {
+    if (!raw || typeof raw !== "object") return raw;
+    const item = raw as Record<string, unknown>;
+    const existing = Number(item.package_count);
+    if (Number.isFinite(existing) && existing > 0) return item;
+    const label =
+      (typeof item.sku_code === "string" ? item.sku_code.trim() : "") ||
+      (typeof item.name === "string" ? item.name.trim() : "");
+    if (!label) return item;
+    const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
+    const resolved = lookup(label, qty);
+    if (resolved && resolved > 0) {
+      return { ...item, package_count: Math.floor(resolved) };
+    }
+    return item;
+  });
+}
+
+/**
+ * 赠品快照 → 合并后的「中文属性 + 件数」列表。
+ * 快照形如 [{ sku_code, name, quantity, package_count }]，缺 sku_code 时回退赠品名。
+ * 件数 = 赠品数量 × 赠品自身套餐内件数（package_count，不乘购买数量）。
+ * 快照缺 package_count 时用 lookup 按赠品配置解析真实套餐内件数，仍取不到再兜底 1。
+ * 注：每条快照各自带套餐内件数（不同赠品套餐件数可能不同），不能再统一乘订单套餐件数。
+ */
+function mergeGiftSkuUnits(
+  giftSnapshot: unknown,
+  lookup?: GiftPkgLookup,
+): Array<{ label: string; units: number }> {
+  let items: unknown;
+  if (Array.isArray(giftSnapshot)) {
+    items = giftSnapshot;
+  } else if (typeof giftSnapshot === "string" && giftSnapshot.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(giftSnapshot);
+      if (Array.isArray(parsed)) items = parsed;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(items) || items.length === 0) return [];
+
+  // 同一赠品商品可能配置多次（不同套餐 / 数量），按文案合并数量
+  const merged = new Map<string, number>();
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as {
+      sku_code?: unknown;
+      name?: unknown;
+      quantity?: unknown;
+      package_count?: unknown;
+    };
+    const label = asText(item.sku_code) || asText(item.name);
+    if (!label) continue;
+    const perUnit =
+      typeof item.quantity === "number"
+        ? item.quantity
+        : Number(item.quantity);
+    const giftQty =
+      Number.isFinite(perUnit) && perUnit > 0 ? Math.floor(perUnit) : 1;
+    const rawUnits =
+      typeof item.package_count === "number"
+        ? item.package_count
+        : Number(item.package_count);
+    let pkgUnits: number;
+    if (Number.isFinite(rawUnits) && rawUnits > 0) {
+      pkgUnits = Math.floor(rawUnits);
+    } else {
+      const resolved = lookup?.(label, giftQty);
+      pkgUnits = resolved && resolved > 0 ? Math.floor(resolved) : 1;
+    }
+    merged.set(label, (merged.get(label) ?? 0) + giftQty * pkgUnits);
+  }
+  return [...merged.entries()].map(([label, units]) => ({ label, units }));
+}
+
+/**
+ * 「中文属性*数量」：主品与赠品统一为「SKU * 件数」，用「 | 」拼接。
+ * 例：CERAGLOW-YC * 1 | jagungin * 2 | whg-8dz * 6
+ * 主品件数 = 套餐内件数 × 购买数量；赠品件数 = 赠品自身套餐内件数 × 赠品数量（不乘购买数量）。
+ */
+function formatSkuQuantityWithGifts(
+  row: {
+    sku_code?: unknown;
+    quantity?: unknown;
+    package_count?: unknown;
+    gift_snapshot?: unknown;
+  },
+  giftLookup?: GiftPkgLookup,
+): string {
+  const parts: string[] = [];
+  const base = formatSkuQuantity(row);
+  if (base) parts.push(base);
+  for (const { label, units } of mergeGiftSkuUnits(
+    row.gift_snapshot,
+    giftLookup,
+  )) {
+    parts.push(`${label} * ${units}`);
+  }
+  return parts.join(" | ");
+}
+
+/**
+ * 按商品当前赠品配置重建订单赠品快照（与下单口径一致：每单商品件数）。
+ * 更换商品时调用，避免订单仍带旧商品的赠品；无赠品返回 null。
+ */
+async function rebuildGiftSnapshot(
+  supabase: ServiceClient,
+  productId: string,
+): Promise<
+  Array<{
+    sku_code: string | null;
+    name: string | null;
+    quantity: number;
+    package_count: number;
+  }> | null
+> {
+  const { data: gifts, error } = await supabase
+    .from("product_gifts")
+    .select("gift_product_id, quantity, package_id")
+    .eq("product_id", productId)
+    .order("sort_order", { ascending: true });
+  if (error) throw new Error(error.message);
+  if (!gifts || gifts.length === 0) return null;
+
+  const giftProductIds = [
+    ...new Set(
+      gifts
+        .map((g) => g.gift_product_id as string)
+        .filter((id) => typeof id === "string" && id.length > 0),
+    ),
+  ];
+  if (giftProductIds.length === 0) return null;
+
+  const { data: products, error: productsError } = await supabase
+    .from("products")
+    .select("id, name, sku_code, status")
+    .in("id", giftProductIds);
+  if (productsError) throw new Error(productsError.message);
+
+  const productMap = new Map(
+    (products ?? []).map((p) => [p.id as string, p]),
+  );
+  // 赠品所选套餐的套餐内件数（缓存，避免重复查询）
+  const packageCountCache = new Map<string, number>();
+  const giftPkgCount = async (packageId: string | null): Promise<number> => {
+    if (!packageId) return 1;
+    const cached = packageCountCache.get(packageId);
+    if (cached !== undefined) return cached;
+    const count = await resolvePackageItemCount(supabase, packageId);
+    packageCountCache.set(packageId, count);
+    return count;
+  };
+
+  const merged = new Map<
+    string,
+    {
+      sku_code: string | null;
+      name: string | null;
+      quantity: number;
+      package_count: number;
+    }
+  >();
+  for (const gift of gifts) {
+    const ref = productMap.get(gift.gift_product_id as string);
+    if (!ref) continue;
+    if (ref.status !== "on_sale") continue;
+    const sku = typeof ref.sku_code === "string" ? ref.sku_code.trim() : "";
+    const name = typeof ref.name === "string" ? ref.name.trim() : "";
+    if (!sku && !name) continue;
+    const quantity = Math.max(1, Math.floor(Number(gift.quantity) || 1));
+    const packageCount = await giftPkgCount(
+      (gift.package_id as string | null) ?? null,
+    );
+    const key = `${sku || name}|${packageCount}`;
+    const exist = merged.get(key);
+    if (exist) {
+      exist.quantity += quantity;
+    } else {
+      merged.set(key, {
+        sku_code: sku || null,
+        name: name || null,
+        quantity,
+        package_count: packageCount,
+      });
+    }
+  }
+  const list = [...merged.values()];
+  return list.length > 0 ? list : null;
 }
 
 /**
@@ -1852,6 +2181,11 @@ ordersRoutes.post("/logistics-export", async (c) => {
   });
   if (error) return c.json({ error }, 500);
 
+  const rowProductIds = data
+    .map((row) => (typeof row.product_id === "string" ? row.product_id : ""))
+    .filter(Boolean);
+  const giftLookup = await buildGiftPkgLookup(supabase, rowProductIds);
+
   const rows = data.map((row) => {
     const province = asText(row.shipping_province);
     const city = asText(row.shipping_city);
@@ -1864,13 +2198,15 @@ ordersRoutes.post("/logistics-export", async (c) => {
       .join(",");
     const codAmount = asNumberOrEmpty(row.cod_amount);
     const totalAmount = asNumberOrEmpty(row.total_amount);
+    const productId =
+      typeof row.product_id === "string" ? row.product_id : "";
 
     return {
       customer_name: asText(row.customer_name),
       customer_phone: asText(row.customer_phone),
       shipping_district: district,
       shipping_address: shippingAddress,
-      sku_quantity: formatSkuQuantity(row),
+      sku_quantity: formatSkuQuantityWithGifts(row, giftLookup(productId)),
       remark: asText(row.remark),
       order_no: asText(row.order_no),
       cod_amount: codAmount === "" ? totalAmount : codAmount,
@@ -1958,6 +2294,14 @@ ordersRoutes.post("/full-export", async (c) => {
       )
       .filter(Boolean),
   );
+  const giftLookup = await buildGiftPkgLookup(
+    supabase,
+    withCurrency
+      .map((row) =>
+        typeof row.product_id === "string" ? row.product_id : "",
+      )
+      .filter(Boolean),
+  );
 
   const rows = withCurrency.map((row) => {
     const status = asText(row.status) as OrderStatus;
@@ -1999,7 +2343,7 @@ ordersRoutes.post("/full-export", async (c) => {
       package_name: asText(row.package_name),
       package_name_external: asText(row.package_name_external),
       sku_code: asText(row.sku_code),
-      sku_quantity: formatSkuQuantity(row),
+      sku_quantity: formatSkuQuantityWithGifts(row, giftLookup(productId)),
       unit_price: asNumberOrEmpty(row.unit_price),
       quantity: orderPurchaseQty(row),
       package_count: asNumberOrEmpty(row.package_count),
@@ -2101,7 +2445,20 @@ ordersRoutes.get("/:id", async (c) => {
     ...order,
     owner_member: fromProduct || stored || null,
   });
-  return c.json(await attachOrderCurrencyOne(supabase, withActors));
+  const enriched = await attachOrderCurrencyOne(supabase, withActors);
+  const productId =
+    typeof order.product_id === "string" ? order.product_id : "";
+  const giftLookup = await buildGiftPkgLookup(
+    supabase,
+    productId ? [productId] : [],
+  );
+  return c.json({
+    ...enriched,
+    gift_snapshot: withResolvedGiftPkgCount(
+      enriched.gift_snapshot,
+      giftLookup(productId),
+    ),
+  });
 });
 
 function optionalTrimmedString(
@@ -2118,6 +2475,87 @@ function requiredTrimmedString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const t = value.trim();
   return t || null;
+}
+
+/** 编辑订单时写入的赠品快照；空列表存 null */
+function parseGiftSnapshotInput(
+  value: unknown,
+):
+  | {
+      ok: true;
+      value: Array<{
+        sku_code: string | null;
+        name: string | null;
+        package_name: string | null;
+        quantity: number;
+        package_count?: number;
+      }> | null;
+    }
+  | { ok: false; error: string } {
+  if (value === null) return { ok: true, value: null };
+  if (!Array.isArray(value)) return { ok: false, error: "赠品格式无效" };
+  if (value.length > 20) return { ok: false, error: "赠品最多 20 条" };
+  const list: Array<{
+    sku_code: string | null;
+    name: string | null;
+    package_name: string | null;
+    quantity: number;
+    package_count?: number;
+  }> = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const raw = value[index];
+    if (!raw || typeof raw !== "object") {
+      return { ok: false, error: `第 ${index + 1} 条赠品无效` };
+    }
+    const row = raw as {
+      sku_code?: unknown;
+      name?: unknown;
+      package_name?: unknown;
+      quantity?: unknown;
+      package_count?: unknown;
+    };
+    const sku = typeof row.sku_code === "string" ? row.sku_code.trim() : "";
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    const packageName =
+      typeof row.package_name === "string" ? row.package_name.trim() : "";
+    if (sku.length > 64 || name.length > 120 || packageName.length > 120) {
+      return { ok: false, error: `第 ${index + 1} 条赠品内容过长` };
+    }
+    if (!sku && !name) {
+      return {
+        ok: false,
+        error: `第 ${index + 1} 条赠品需填写名称或中文属性`,
+      };
+    }
+    const qty =
+      typeof row.quantity === "number" ? row.quantity : Number(row.quantity);
+    if (!Number.isInteger(qty) || qty <= 0 || qty > 9999) {
+      return { ok: false, error: `第 ${index + 1} 条赠品数量须为 1–9999 的整数` };
+    }
+    const rawPkgCount =
+      typeof row.package_count === "number"
+        ? row.package_count
+        : Number(row.package_count);
+    const packageCount =
+      Number.isFinite(rawPkgCount) && rawPkgCount > 0
+        ? Math.min(9999, Math.floor(rawPkgCount))
+        : undefined;
+    const entry: {
+      sku_code: string | null;
+      name: string | null;
+      package_name: string | null;
+      quantity: number;
+      package_count?: number;
+    } = {
+      sku_code: sku || null,
+      name: name || null,
+      package_name: packageName || null,
+      quantity: qty,
+    };
+    if (packageCount !== undefined) entry.package_count = packageCount;
+    list.push(entry);
+  }
+  return { ok: true, value: list.length > 0 ? list : null };
 }
 
 /** 套餐内商品件数：SUM(item.quantity)，至少为 1 */
@@ -2300,6 +2738,18 @@ ordersRoutes.patch("/:id", async (c) => {
         : null;
     touched = true;
 
+    // 换商品且未单独提交赠品时，按新商品当前赠品配置重建快照
+    if (productIdChanging && body.gift_snapshot === undefined) {
+      try {
+        patch.gift_snapshot = await rebuildGiftSnapshot(supabase, product.id);
+      } catch (e) {
+        return c.json(
+          { error: e instanceof Error ? e.message : "读取商品赠品失败" },
+          500,
+        );
+      }
+    }
+
     const { data: packages, error: packagesError } = await supabase
       .from("product_packages")
       .select("id, name, name_external, original_price, discount_price")
@@ -2368,6 +2818,13 @@ ordersRoutes.patch("/:id", async (c) => {
     }
 
     patch.weight = Number((productWeight * packageCount).toFixed(2));
+  }
+
+  if (body.gift_snapshot !== undefined) {
+    const parsedGifts = parseGiftSnapshotInput(body.gift_snapshot);
+    if (!parsedGifts.ok) return c.json({ error: parsedGifts.error }, 400);
+    patch.gift_snapshot = parsedGifts.value;
+    touched = true;
   }
 
   const applyTotalAmount = (totalAmount: number) => {
@@ -2465,6 +2922,7 @@ ordersRoutes.patch("/:id", async (c) => {
     shipping_order_no: before.shipping_order_no,
     owner_member: before.owner_member,
     remark: before.remark,
+    gift_snapshot: before.gift_snapshot ?? null,
   };
   const afterSnap: Record<string, unknown> = {
     customer_name: data.customer_name,
@@ -2485,6 +2943,7 @@ ordersRoutes.patch("/:id", async (c) => {
     shipping_order_no: data.shipping_order_no,
     owner_member: data.owner_member,
     remark: data.remark,
+    gift_snapshot: data.gift_snapshot ?? null,
   };
   const fieldDiffs = buildFieldDiffs(beforeSnap, afterSnap);
 

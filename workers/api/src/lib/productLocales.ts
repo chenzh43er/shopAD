@@ -70,6 +70,10 @@ function packageLocalesPath(productId: string) {
   return `packages/${productId}.json`;
 }
 
+function giftLocalesPath(productId: string) {
+  return `gifts/${productId}.json`;
+}
+
 /** 前端草稿兜底：只保留语言内容字段，防止 product_id/locale 污染 */
 function cleanFallback(fallback?: Record<string, unknown>) {
   if (!fallback || typeof fallback !== "object") return {};
@@ -107,6 +111,8 @@ async function uploadJson(
   const bytes = new TextEncoder().encode(JSON.stringify(body, null, 0));
   const { error } = await supabase.storage.from(BUCKET).upload(path, bytes, {
     contentType: "application/json",
+    // 语言 JSON 会被店面按语言实时读取；禁用 CDN 缓存，避免覆盖后仍返回旧内容
+    cacheControl: "0",
     upsert: true,
   });
   if (error) throw new Error(error.message);
@@ -149,6 +155,37 @@ export async function listProductLocales(supabase: Supabase, productId: string) 
   }
   rows.sort((a, b) => String(a.locale).localeCompare(String(b.locale)));
   return rows;
+}
+
+/** 批量读取商品各语言版本的「商品标题(外部)」：productId → locale → title_external。 */
+export async function loadProductTitleExternalLocales(
+  supabase: Supabase,
+  productIds: string[],
+): Promise<Map<string, Record<string, string>>> {
+  const result = new Map<string, Record<string, string>>();
+  const ids = [...new Set(productIds)].filter(
+    (id): id is string => typeof id === "string" && id.length > 0,
+  );
+  if (ids.length === 0) return result;
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const rows = await listProductLocales(supabase, id);
+        const map: Record<string, string> = {};
+        for (const row of rows) {
+          const title =
+            typeof row.title_external === "string"
+              ? row.title_external.trim()
+              : "";
+          if (title) map[String(row.locale)] = title;
+        }
+        if (Object.keys(map).length > 0) result.set(id, map);
+      } catch {
+        /* 单个商品语言读取失败不影响其他 */
+      }
+    }),
+  );
+  return result;
 }
 
 export function validateLocaleCode(
@@ -535,4 +572,169 @@ export async function saveAllPackageLocales(
   } else {
     await uploadJson(supabase, path, cleaned);
   }
+}
+
+/** gifts/{productId}.json 中区块总标题的保留键 */
+export const GIFT_SECTION_KEY = "_section";
+
+/** giftId -> locale -> gift_name */
+type GiftLocaleMap = Record<string, Record<string, { gift_name: string }>>;
+
+/** locale -> { title } */
+type GiftSectionTitleMap = Record<string, { title: string }>;
+
+/** Storage 中的赠品语言文件（含可选总标题） */
+type GiftLocalesFile = GiftLocaleMap & {
+  [GIFT_SECTION_KEY]?: GiftSectionTitleMap;
+};
+
+function isGiftSectionKey(key: string) {
+  return key === GIFT_SECTION_KEY;
+}
+
+export async function listGiftLocalesByGiftIds(
+  supabase: Supabase,
+  giftIds: string[],
+  productId?: string,
+) {
+  const map = new Map<string, Record<string, unknown>[]>();
+  if (giftIds.length === 0 || !productId) return map;
+
+  const stored = await downloadJson<GiftLocalesFile>(
+    supabase,
+    giftLocalesPath(productId),
+  );
+  if (!stored) return map;
+
+  for (const giftId of giftIds) {
+    if (isGiftSectionKey(giftId)) continue;
+    const locales = stored[giftId];
+    if (!locales || typeof locales !== "object") continue;
+    const rows: Record<string, unknown>[] = [];
+    for (const [locale, value] of Object.entries(locales)) {
+      const giftName =
+        value && typeof value === "object" && "gift_name" in value
+          ? String((value as { gift_name?: string }).gift_name ?? "")
+          : "";
+      rows.push({
+        gift_id: giftId,
+        locale,
+        gift_name: giftName,
+      });
+    }
+    map.set(giftId, rows);
+  }
+  return map;
+}
+
+/** 读取赠品区块总标题的多语言覆盖：locale → title */
+export async function loadGiftSectionTitles(
+  supabase: Supabase,
+  productId: string,
+): Promise<Record<string, string>> {
+  const stored = await downloadJson<GiftLocalesFile>(
+    supabase,
+    giftLocalesPath(productId),
+  );
+  const section = stored?.[GIFT_SECTION_KEY];
+  if (!section || typeof section !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [locale, value] of Object.entries(section)) {
+    const title =
+      value && typeof value === "object"
+        ? String((value as { title?: string }).title ?? "").trim()
+        : "";
+    if (title) out[locale] = title;
+  }
+  return out;
+}
+
+/**
+ * 整商品赠品语言一次性写入（replace-all 赠品后调用）。
+ * `sectionTitles === undefined`：保留文件中已有的 `_section`；
+ * 传入对象（可为 {}）：整段替换总标题多语言。
+ */
+export async function saveAllGiftLocales(
+  supabase: Supabase,
+  productId: string,
+  byGiftId: GiftLocaleMap,
+  sectionTitles?: Record<string, string> | null,
+) {
+  const path = giftLocalesPath(productId);
+  const existing =
+    sectionTitles === undefined
+      ? await downloadJson<GiftLocalesFile>(supabase, path)
+      : null;
+  const cleaned: GiftLocalesFile = {};
+  for (const [giftId, locales] of Object.entries(byGiftId)) {
+    if (isGiftSectionKey(giftId)) continue;
+    const next: Record<string, { gift_name: string }> = {};
+    for (const [localeRaw, value] of Object.entries(locales || {})) {
+      const check = validateLocaleCode(localeRaw);
+      if (!check.ok) continue;
+      const giftName = value?.gift_name?.trim() || "";
+      if (!giftName) continue;
+      next[check.locale] = { gift_name: giftName };
+    }
+    if (Object.keys(next).length > 0) cleaned[giftId] = next;
+  }
+
+  if (sectionTitles !== undefined && sectionTitles !== null) {
+    const section: GiftSectionTitleMap = {};
+    for (const [localeRaw, titleRaw] of Object.entries(sectionTitles)) {
+      const check = validateLocaleCode(localeRaw);
+      if (!check.ok) continue;
+      const title = titleRaw.trim();
+      if (!title) continue;
+      section[check.locale] = { title };
+    }
+    if (Object.keys(section).length > 0) {
+      cleaned[GIFT_SECTION_KEY] = section;
+    }
+  } else if (existing?.[GIFT_SECTION_KEY]) {
+    cleaned[GIFT_SECTION_KEY] = existing[GIFT_SECTION_KEY];
+  }
+
+  if (Object.keys(cleaned).length === 0) {
+    await removePath(supabase, path);
+  } else {
+    await uploadJson(supabase, path, cleaned);
+  }
+}
+
+/** 复制商品时：按新旧 gift id 映射复制赠品语言覆盖（含总标题） */
+export async function copyGiftLocales(
+  supabase: Supabase,
+  fromProductId: string,
+  toProductId: string,
+  oldToNewGiftId: Map<string, string>,
+) {
+  const stored = await downloadJson<GiftLocalesFile>(
+    supabase,
+    giftLocalesPath(fromProductId),
+  );
+  if (!stored) return;
+  const next: GiftLocaleMap = {};
+  for (const [oldId, locales] of Object.entries(stored)) {
+    if (isGiftSectionKey(oldId)) continue;
+    const newId = oldToNewGiftId.get(oldId);
+    if (!newId || !locales) continue;
+    next[newId] = locales as Record<string, { gift_name: string }>;
+  }
+  const sectionTitles: Record<string, string> = {};
+  for (const [locale, value] of Object.entries(
+    stored[GIFT_SECTION_KEY] ?? {},
+  )) {
+    const title = value?.title?.trim();
+    if (title) sectionTitles[locale] = title;
+  }
+  if (oldToNewGiftId.size === 0 && Object.keys(sectionTitles).length === 0) {
+    return;
+  }
+  await saveAllGiftLocales(
+    supabase,
+    toProductId,
+    next,
+    Object.keys(sectionTitles).length > 0 ? sectionTitles : null,
+  );
 }

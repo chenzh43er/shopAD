@@ -306,6 +306,8 @@ export interface Product {
   sku_display: string | null;
   /** 是否开启套餐 */
   packages_enabled: boolean;
+  /** 赠品区块总标题（可空；为空时店面用默认文案） */
+  gifts_title?: string | null;
   /** 虚拟销量（落地页展示，后台手填） */
   sales_count: number;
   /** 默认重量（物流导出） */
@@ -527,6 +529,84 @@ export interface UpsertProductPackageInput {
   }>;
 }
 
+/** 赠品多语言名称覆盖（存于 Storage gifts/{productId}.json） */
+export interface ProductGiftLocale {
+  gift_id: string;
+  locale: string;
+  gift_name: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** 商品赠品行（赠品本身是另一个商品，可指定其套餐） */
+export interface ProductGift {
+  id: string;
+  product_id: string;
+  gift_product_id: string;
+  /** 赠品选用的套餐（可空） */
+  package_id: string | null;
+  /** 赠品数量（每单商品件数） */
+  quantity: number;
+  /** 赠品自定义显示名称（可空，为空时用赠品商品标题(外部)） */
+  gift_name?: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  /** 多语言名称覆盖 */
+  locales?: ProductGiftLocale[];
+  /** 赠品商品概要 */
+  gift_product?: {
+    id: string;
+    name: string;
+    /** 商品标题(外部) */
+    title_external: string | null;
+    /** 各语言版本的商品标题(外部)，key 如 en；用于赠品名称的多语言默认值 */
+    title_external_locales?: Record<string, string> | null;
+    cover_url: string | null;
+    sku_code: string | null;
+    link_suffix: string | null;
+    packages_enabled: boolean;
+  } | null;
+  /** 赠品套餐概要（按 package_id 关联） */
+  package?: {
+    id: string;
+    name: string;
+    name_external: string;
+  } | null;
+}
+
+export interface UpsertProductGiftInput {
+  gift_product_id: string;
+  package_id?: string | null;
+  quantity: number;
+  /** 赠品自定义显示名称（可空，为空时用赠品商品标题(外部)） */
+  gift_name?: string | null;
+  /** 按 locale 覆盖赠品名称；key 如 en */
+  locales?: Record<string, { gift_name?: string }>;
+  sort_order?: number;
+}
+
+/** 保存商品赠品时一并提交的区块总标题 */
+export interface UpsertProductGiftsBody {
+  gifts: UpsertProductGiftInput[];
+  /** 默认语言下的赠品总标题（可空） */
+  gifts_title?: string | null;
+  /** 多语言赠品总标题；key 如 en */
+  gifts_title_locales?: Record<string, string>;
+}
+
+/** 订单赠品快照 */
+export interface OrderGiftSnapshot {
+  sku_code: string | null;
+  name: string | null;
+  /** 赠品套餐名（展示用，可空） */
+  package_name?: string | null;
+  /** 赠品数量（每份赠品件数） */
+  quantity: number;
+  /** 套餐内件数（赠品所选套餐的明细件数之和；物流导出按「套餐内件数 × 赠品数量」计件） */
+  package_count?: number | null;
+}
+
 export interface Order {
   id: string;
   order_no: string;
@@ -595,6 +675,8 @@ export interface Order {
   quantity: number;
   /** 下单时中文属性码快照 */
   sku_code: string | null;
+  /** 下单时赠品快照（每单商品件数；导出时再乘购买份数） */
+  gift_snapshot: OrderGiftSnapshot[] | null;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
@@ -941,4 +1023,9 @@ export interface UpdateOrderInput {
   remark?: string | null;
   /** 手动调整预估总金额；未传时数量/商品/套餐变更仍按单价×数量重算 */
   total_amount?: number;
+  /**
+   * 订单赠品快照。传空数组或 null 表示清空。
+   * 数量为每购买 1 份的赠品件数。
+   */
+  gift_snapshot?: OrderGiftSnapshot[] | null;
 }

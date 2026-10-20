@@ -24,6 +24,7 @@ import {
 } from "@shopad/shared";
 import { apiFetch } from "../lib/api";
 import { formatMoney } from "../lib/formatMoney";
+import { buildGiftDisplayItems } from "../lib/formatGifts";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { AuditLogPanel, formatActor } from "../components/AuditLogPanel";
 import { OrderEditModal } from "../components/OrderEditModal";
@@ -342,6 +343,7 @@ export function OrderDetailPage() {
     order.status === "awaiting_shipment";
   const canRevert = canRevertCodOrder(paymentType, order.status);
   const lineTotal = Number(order.unit_price) * Number(order.quantity || 0);
+  const giftItems = buildGiftDisplayItems(order.gift_snapshot);
   const backPath = fromPath || resolveCodListPath(order);
 
   return (
@@ -415,6 +417,19 @@ export function OrderDetailPage() {
             : "—"}
         </Descriptions.Item>
         <Descriptions.Item label="购买数量">{order.quantity}</Descriptions.Item>
+        <Descriptions.Item label="赠品" span={2}>
+          {giftItems.length > 0 ? (
+            <Space size={4} wrap>
+              {giftItems.map((gift) => (
+                <Tag key={gift.label} color="gold">
+                  {gift.label}*{gift.quantity}
+                </Tag>
+              ))}
+            </Space>
+          ) : (
+            "—"
+          )}
+        </Descriptions.Item>
         <Descriptions.Item label="单价">
           {formatMoney(order.unit_price, order.currency)}
         </Descriptions.Item>

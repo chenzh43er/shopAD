@@ -13,6 +13,7 @@ const ACTION_LABELS: Record<string, string> = {
   delete: "删除",
   remark_update: "备注修改",
   packages_update: "套餐更新",
+  gifts_update: "赠品更新",
   order_update: "订单修改",
   locale_create: "新增语言",
   locale_update: "更新语言",
@@ -27,6 +28,7 @@ const ACTION_COLORS: Record<string, string> = {
   delete: "red",
   remark_update: "default",
   packages_update: "purple",
+  gifts_update: "gold",
   order_update: "cyan",
   locale_create: "green",
   locale_update: "blue",
@@ -95,6 +97,11 @@ const FIELD_LABELS: Record<string, string> = {
   reject_reason: "拒绝原因",
   review_status: "审核状态",
   payment_type: "支付方式",
+  gifts: "赠品",
+  gift_count: "赠品数量",
+  gift_added: "新增赠品",
+  gift_removed: "删除赠品",
+  gift_snapshot: "赠品快照",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -129,6 +136,12 @@ function fieldLabel(field: string): string {
     const pkgName = packageField[1]!;
     const sub = packageField[2]!;
     return `套餐「${pkgName}」${FIELD_LABELS[sub] ?? sub}`;
+  }
+  const giftField = /^gift\.(.+)\.(.+)$/.exec(field);
+  if (giftField) {
+    const giftName = giftField[1]!;
+    const sub = giftField[2]!;
+    return `赠品「${giftName}」${FIELD_LABELS[sub] ?? sub}`;
   }
   return field;
 }
@@ -203,10 +216,18 @@ function formatScalar(value: unknown): string {
 
 function formatDiffLine(d: FieldDiff): string {
   const label = fieldLabel(d.field);
-  if (d.field === "package_added" || d.field === "locale") {
+  if (
+    d.field === "package_added" ||
+    d.field === "gift_added" ||
+    d.field === "locale"
+  ) {
     return `${label}：${formatScalar(d.to)}`;
   }
-  if (d.field === "package_removed" || d.field === "removed_locale") {
+  if (
+    d.field === "package_removed" ||
+    d.field === "gift_removed" ||
+    d.field === "removed_locale"
+  ) {
     return `${label}：${formatScalar(d.from)}`;
   }
   const baseField = d.field.includes(".")
@@ -296,6 +317,9 @@ function formatChangeCell(row: AuditLog): string {
     }
     if (row.action === "packages_update") {
       return `套餐数量：${formatScalar(row.from_value)} → ${formatScalar(row.to_value)}（历史未记明细）`;
+    }
+    if (row.action === "gifts_update") {
+      return `赠品数量：${formatScalar(row.from_value)} → ${formatScalar(row.to_value)}（历史未记明细）`;
     }
     const label =
       row.action === "status_change" ||

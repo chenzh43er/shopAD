@@ -346,3 +346,16 @@ a {
 .ant-table-tbody > tr > td {
   white-space: nowrap;
 }
+
+/* 赠品搜索下拉：选项可换行，避免标题和标签被裁切 */
+.gift-product-search-popup.ant-select-dropdown {
+  width: max-content !important;
+  min-width: 520px;
+  max-width: min(92vw, 880px);
+}
+
+.gift-product-search-popup .ant-select-item-option-content {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+}

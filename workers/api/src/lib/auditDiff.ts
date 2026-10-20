@@ -51,16 +51,48 @@ const PRODUCT_FIELD_LABELS: Record<string, string> = {
   owner_member: "归属成员",
   shipping_order_no: "发货订单号",
   remark: "备注",
+  gift_snapshot: "赠品",
+  gifts: "赠品",
+  gift_count: "赠品数量",
+  gift_added: "新增赠品",
+  gift_removed: "删除赠品",
 };
 
 export function fieldLabelZh(field: string): string {
   return PRODUCT_FIELD_LABELS[field] ?? field;
 }
 
+function formatGiftSnapshotBrief(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return "—";
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      const row = item as { sku_code?: unknown; name?: unknown; quantity?: unknown };
+      const label =
+        (typeof row.sku_code === "string" ? row.sku_code.trim() : "") ||
+        (typeof row.name === "string" ? row.name.trim() : "");
+      const qty = Number(row.quantity);
+      if (!label) return "";
+      return `${label}*${Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1}`;
+    })
+    .filter(Boolean)
+    .join("，") || "—";
+}
+
 export function summarizeFieldDiffs(diffs: AuditFieldDiff[]): string {
   if (diffs.length === 0) return "无字段差异";
   return diffs
-    .map((d) => `${fieldLabelZh(d.field)}: ${formatBrief(d.from)} → ${formatBrief(d.to)}`)
+    .map((d) => {
+      const from =
+        d.field === "gift_snapshot"
+          ? formatGiftSnapshotBrief(d.from)
+          : formatBrief(d.from);
+      const to =
+        d.field === "gift_snapshot"
+          ? formatGiftSnapshotBrief(d.to)
+          : formatBrief(d.to);
+      return `${fieldLabelZh(d.field)}: ${from} → ${to}`;
+    })
     .join("；");
 }
 
@@ -313,6 +345,129 @@ export function buildPackageUpdateDiffs(
 
   if (lines.length === 0) {
     lines.push("套餐内容已保存（无字段级差异）");
+  }
+
+  return { diffs, summary: lines.join("；") };
+}
+
+export type GiftSnapshot = {
+  gift_product_id: string;
+  gift_product_name: string;
+  /** 赠品自定义显示名称（可空） */
+  gift_name: string | null;
+  package_id: string | null;
+  package_name: string | null;
+  quantity: number;
+};
+
+export function giftSnapshot(gift: {
+  gift_product_id?: string | null;
+  gift_product_name?: string | null;
+  gift_name?: string | null;
+  package_id?: string | null;
+  package_name?: string | null;
+  quantity?: number | null;
+}): GiftSnapshot {
+  return {
+    gift_product_id: String(gift.gift_product_id ?? ""),
+    gift_product_name: (gift.gift_product_name ?? "").trim() || "未知赠品商品",
+    gift_name: (gift.gift_name ?? "").trim() || null,
+    package_id: gift.package_id ?? null,
+    package_name: (gift.package_name ?? "").trim() || null,
+    quantity: Math.floor(Number(gift.quantity ?? 1)) || 1,
+  };
+}
+
+function giftGroupKey(gift: GiftSnapshot): string {
+  return `${gift.gift_product_id}|${gift.package_id ?? ""}`;
+}
+
+function giftLabel(gift: GiftSnapshot): string {
+  const pkg = gift.package_name ? ` 套餐「${gift.package_name}」` : " 未指定套餐";
+  const name = gift.gift_name ? `${gift.gift_product_name}（${gift.gift_name}）` : gift.gift_product_name;
+  return `赠品「${name}」${pkg} ×${gift.quantity}`;
+}
+
+/**
+ * 对比赠品全量替换前后，生成可读变更摘要与明细。
+ * 同一赠品商品可重复（不同套餐/数量），故按「商品 + 套餐」分组后再比数量。
+ */
+export function buildGiftUpdateDiffs(
+  beforeList: GiftSnapshot[],
+  afterList: GiftSnapshot[],
+): { diffs: AuditFieldDiff[]; summary: string } {
+  const diffs: AuditFieldDiff[] = [];
+  const lines: string[] = [];
+
+  if (beforeList.length !== afterList.length) {
+    diffs.push({
+      field: "gift_count",
+      from: beforeList.length,
+      to: afterList.length,
+    });
+    lines.push(`赠品数量: ${beforeList.length} → ${afterList.length}`);
+  }
+
+  const beforeGroups = new Map<string, GiftSnapshot[]>();
+  for (const gift of beforeList) {
+    const key = giftGroupKey(gift);
+    const list = beforeGroups.get(key) ?? [];
+    list.push(gift);
+    beforeGroups.set(key, list);
+  }
+  const afterGroups = new Map<string, GiftSnapshot[]>();
+  for (const gift of afterList) {
+    const key = giftGroupKey(gift);
+    const list = afterGroups.get(key) ?? [];
+    list.push(gift);
+    afterGroups.set(key, list);
+  }
+
+  for (const [key, afterRows] of afterGroups) {
+    const beforeRows = beforeGroups.get(key);
+    if (!beforeRows) {
+      for (const row of afterRows) {
+        diffs.push({ field: "gift_added", from: null, to: giftLabel(row) });
+        lines.push(`新增${giftLabel(row)}`);
+      }
+      continue;
+    }
+    const beforeQty = beforeRows.map((r) => r.quantity).sort((a, b) => a - b);
+    const afterQty = afterRows.map((r) => r.quantity).sort((a, b) => a - b);
+    const beforeName = beforeRows[0]?.gift_name ?? null;
+    const afterName = afterRows[0]?.gift_name ?? null;
+    if (beforeName !== afterName) {
+      diffs.push({
+        field: `gift.${afterRows[0]!.gift_product_name}.name`,
+        from: beforeName,
+        to: afterName,
+      });
+      lines.push(
+        `修改赠品「${afterRows[0]!.gift_product_name}」名称: ${beforeName ?? "（默认）"} → ${afterName ?? "（默认）"}`,
+      );
+    }
+    if (valuesEqual(beforeQty, afterQty)) continue;
+    const label = afterRows[0]!.gift_product_name;
+    diffs.push({
+      field: `gift.${label}.quantity`,
+      from: beforeQty.join("、"),
+      to: afterQty.join("、"),
+    });
+    lines.push(
+      `修改赠品「${label}」数量: ${beforeQty.join("、")} → ${afterQty.join("、")}`,
+    );
+  }
+
+  for (const [key, beforeRows] of beforeGroups) {
+    if (afterGroups.has(key)) continue;
+    for (const row of beforeRows) {
+      diffs.push({ field: "gift_removed", from: giftLabel(row), to: null });
+      lines.push(`删除${giftLabel(row)}`);
+    }
+  }
+
+  if (lines.length === 0) {
+    lines.push("赠品内容已保存（无字段级差异）");
   }
 
   return { diffs, summary: lines.join("；") };

@@ -12,7 +12,13 @@ import {
   listAuditLogs,
   writeAuditLog,
 } from "../lib/audit";
-import { buildFieldDiffs, buildLocaleAudit, summarizeFieldDiffs } from "../lib/auditDiff";
+import {
+  buildFieldDiffs,
+  buildGiftUpdateDiffs,
+  buildLocaleAudit,
+  giftSnapshot,
+  summarizeFieldDiffs,
+} from "../lib/auditDiff";
 import {
   assertProductAccess,
   assertRegionAccess,
@@ -24,6 +30,7 @@ import {
   syncProductOwners,
 } from "../lib/access";
 import {
+  copyGiftLocales,
   copyProductLocales,
   deleteProductLocale,
   listProductLocales,
@@ -836,6 +843,10 @@ productsRoutes.post("/:id/copy", async (c) => {
     sku_code: source.sku_code ?? null,
     sku_display: source.sku_display ?? null,
     packages_enabled: Boolean(source.packages_enabled),
+    gifts_title:
+      typeof source.gifts_title === "string"
+        ? source.gifts_title.trim() || null
+        : null,
     sales_count: Math.max(0, Math.floor(Number(source.sales_count ?? 0))),
     weight: Number(source.weight ?? 1),
     region_id: source.region_id ?? null,
@@ -1006,6 +1017,167 @@ productsRoutes.post("/:id/copy", async (c) => {
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : "复制语言内容失败" },
+      500,
+    );
+  }
+
+  // 复制赠品：赠品商品保持不变；若赠品套餐属于被复制的商品，则映射到新套餐
+  try {
+    const { data: gifts, error: giftsError } = await supabase
+      .from("product_gifts")
+      .select("*")
+      .eq("product_id", id)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (giftsError) {
+      if (
+        !/schema cache|could not find the table|does not exist/i.test(
+          giftsError.message,
+        )
+      ) {
+        return c.json({ error: giftsError.message }, 500);
+      }
+    } else if ((gifts ?? []).length > 0) {
+      // 旧套餐 → 新套餐：按 sort_order 对齐
+      const packageIdMap = new Map<string, string>();
+      const { data: oldPkgs } = await supabase
+        .from("product_packages")
+        .select("id, sort_order")
+        .eq("product_id", id)
+        .order("sort_order", { ascending: true });
+      const { data: newPkgs } = await supabase
+        .from("product_packages")
+        .select("id, sort_order")
+        .eq("product_id", created.id)
+        .order("sort_order", { ascending: true });
+      const newPkgBySort = new Map(
+        (newPkgs ?? []).map((p) => [p.sort_order as number, p.id as string]),
+      );
+      for (const pkg of oldPkgs ?? []) {
+        const mapped = newPkgBySort.get(pkg.sort_order as number);
+        if (mapped) packageIdMap.set(pkg.id as string, mapped);
+      }
+
+      // 同一赠品商品可重复，唯一性按「商品+套餐+数量」组合，复制时去重
+      const seenCombos = new Set<string>();
+      const giftRows = (gifts ?? [])
+        .map((gift, index) => {
+          const pkgId = (gift.package_id as string | null) ?? null;
+          // 套餐属于被复制的商品 → 映射到新套餐；属于其他商品 → 原样保留
+          const mappedPkg = pkgId
+            ? (packageIdMap.get(pkgId) ?? pkgId)
+            : null;
+          const quantity = (gift.quantity as number) ?? 1;
+          const combo = `${gift.gift_product_id}|${mappedPkg ?? ""}|${quantity}`;
+          if (seenCombos.has(combo)) return null;
+          seenCombos.add(combo);
+          const row: Record<string, unknown> = {
+            product_id: created.id,
+            gift_product_id: gift.gift_product_id as string,
+            package_id: mappedPkg,
+            quantity,
+            sort_order: (gift.sort_order as number) ?? index,
+          };
+          const customName =
+            typeof gift.gift_name === "string" ? gift.gift_name.trim() : "";
+          if (customName) row.gift_name = customName;
+          return row;
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+
+      if (giftRows.length > 0) {
+        const { error: giftInsErr } = await supabase
+          .from("product_gifts")
+          .insert(giftRows);
+        if (giftInsErr) return c.json({ error: giftInsErr.message }, 500);
+
+        // 按 sort_order 映射旧 → 新 gift id，复制多语言名称
+        const { data: newGifts } = await supabase
+          .from("product_gifts")
+          .select("id, sort_order")
+          .eq("product_id", created.id)
+          .order("sort_order", { ascending: true });
+        const newGiftBySort = new Map(
+          (newGifts ?? []).map((g) => [
+            g.sort_order as number,
+            g.id as string,
+          ]),
+        );
+        const oldToNewGiftId = new Map<string, string>();
+        for (const gift of gifts ?? []) {
+          const mapped = newGiftBySort.get(
+            (gift.sort_order as number) ?? 0,
+          );
+          if (mapped) oldToNewGiftId.set(gift.id as string, mapped);
+        }
+        try {
+          await copyGiftLocales(supabase, id, created.id, oldToNewGiftId);
+        } catch (e) {
+          console.warn(
+            "copy gift locales failed:",
+            e instanceof Error ? e.message : e,
+          );
+        }
+
+        // 记录复制后的赠品到操作日志
+        const giftProductIds = [
+          ...new Set(giftRows.map((r) => r.gift_product_id)),
+        ];
+        const giftPkgIds = [
+          ...new Set(
+            giftRows
+              .map((r) => r.package_id)
+              .filter((pid): pid is string => typeof pid === "string"),
+          ),
+        ];
+        const giftNameMap = new Map<string, string>();
+        if (giftProductIds.length > 0) {
+          const { data: giftProducts } = await supabase
+            .from("products")
+            .select("id, name")
+            .in("id", giftProductIds);
+          for (const p of giftProducts ?? []) {
+            giftNameMap.set(p.id as string, (p.name as string) ?? "");
+          }
+        }
+        const giftPkgNameMap = new Map<string, string>();
+        if (giftPkgIds.length > 0) {
+          const { data: giftPkgs } = await supabase
+            .from("product_packages")
+            .select("id, name")
+            .in("id", giftPkgIds);
+          for (const p of giftPkgs ?? []) {
+            giftPkgNameMap.set(p.id as string, (p.name as string) ?? "");
+          }
+        }
+        const copiedGiftSnapshots = giftRows.map((r) =>
+          giftSnapshot({
+            gift_product_id: r.gift_product_id as string,
+            gift_product_name: giftNameMap.get(r.gift_product_id as string),
+            gift_name: (r.gift_name as string | null) ?? null,
+            package_id: (r.package_id as string | null) ?? null,
+            package_name: r.package_id
+              ? giftPkgNameMap.get(r.package_id as string)
+              : null,
+            quantity: r.quantity as number,
+          }),
+        );
+        const giftDiff = buildGiftUpdateDiffs([], copiedGiftSnapshots);
+        await writeAuditLog(supabase, {
+          entityType: "product",
+          entityId: created.id,
+          action: "gifts_update",
+          actor,
+          fromValue: "0",
+          toValue: String(copiedGiftSnapshots.length),
+          changes: { fields: giftDiff.diffs },
+          remark: `复制商品时一并复制赠品：${giftDiff.summary}`,
+        });
+      }
+    }
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : "复制赠品失败" },
       500,
     );
   }

@@ -41,6 +41,7 @@ import {
 import type { ShipExcelRow } from "../lib/parseShipText";
 import { parseShipText } from "../lib/parseShipText";
 import { formatMoney } from "../lib/formatMoney";
+import { formatGiftSummary } from "../lib/formatGifts";
 import { INPUT_LIMITS } from "../lib/inputLimits";
 import { formatActor } from "../components/AuditLogPanel";
 import { OrderDateTimeFilter } from "../components/OrderDateTimeFilter";
@@ -248,6 +249,7 @@ export function OrdersPage() {
   const [filterProductsLoading, setFilterProductsLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [sortOrder, setSortOrder] = useState<"ascend" | "descend">("descend");
   const [total, setTotal] = useState(0);
   const [data, setData] = useState<Order[]>([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
@@ -360,6 +362,7 @@ export function OrdersPage() {
         pageSize: String(pageSize),
         payment_type: filters.paymentType,
         region_id: regionId,
+        sort: sortOrder === "ascend" ? "created_at.asc" : "created_at.desc",
       });
 
       // 批量查询仍沿用当前 Tab 的 status / review_status，不跳转到全部订单
@@ -492,6 +495,7 @@ export function OrdersPage() {
     dateRange,
     regionId,
     productIds,
+    sortOrder,
   ]);
 
   useEffect(() => {
@@ -1531,6 +1535,22 @@ export function OrdersPage() {
       render: (v: string | null) => <CellEllipsis text={v} maxWidth={104} />,
     },
     {
+      title: "赠品",
+      dataIndex: "gift_snapshot",
+      width: 140,
+      ellipsis: true,
+      onCell: () => ellipsisCell(140),
+      onHeaderCell: () => ellipsisCell(140),
+      render: (v: unknown) => {
+        const text = formatGiftSummary(v);
+        return text ? (
+          <CellEllipsis text={text} maxWidth={124} />
+        ) : (
+          <span style={{ color: "#999" }}>—</span>
+        );
+      },
+    },
+    {
       title: "客户",
       dataIndex: "customer_name",
       width: 96,
@@ -1552,6 +1572,8 @@ export function OrdersPage() {
       title: "订单创建日期",
       dataIndex: "created_at",
       width: 150,
+      sorter: true,
+      sortOrder: sortOrder === "ascend" ? "ascend" : "descend",
       render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
     },
     {
@@ -2480,6 +2502,13 @@ export function OrdersPage() {
             setPage(p);
             setPageSize(Math.min(ps, 500));
           },
+        }}
+        onChange={(_pagination, _filters, sorter) => {
+          const s = Array.isArray(sorter) ? sorter[0] : sorter;
+          if (s?.field === "created_at") {
+            setSortOrder(s.order === "ascend" ? "ascend" : "descend");
+            setPage(1);
+          }
         }}
       />
       <OrderEditModal
