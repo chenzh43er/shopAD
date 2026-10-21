@@ -63,8 +63,9 @@ export async function notifyStorefrontRevalidate(
     hosts?: Array<string | null | undefined>;
   },
 ): Promise<void> {
-  const secret = env.STOREFRONT_REVALIDATE_SECRET?.trim();
-  if (!secret) return;
+  const secretRaw = env.STOREFRONT_REVALIDATE_SECRET?.trim();
+  if (!secretRaw) return;
+  const secret: string = secretRaw;
 
   const suffixes = normalizeSuffixes(opts.linkSuffixes);
   if (suffixes.length === 0) return;
@@ -81,29 +82,52 @@ export async function notifyStorefrontRevalidate(
     return;
   }
 
+  async function postRevalidate(
+    base: string,
+    linkSuffix: string,
+  ): Promise<boolean> {
+    const res = await fetch(`${base}/api/revalidate`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-revalidate-secret": secret,
+      },
+      body: JSON.stringify({ linkSuffix }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.warn(
+        `storefront revalidate ${base} ${linkSuffix}: ${res.status} ${text.slice(0, 200)}`,
+      );
+      return false;
+    }
+    return true;
+  }
+
   await Promise.all(
     uniqueBases.flatMap((base) =>
       suffixes.map(async (linkSuffix) => {
         try {
-          const res = await fetch(`${base}/api/revalidate`, {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              "x-revalidate-secret": secret,
-            },
-            body: JSON.stringify({ linkSuffix }),
-          });
-          if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            console.warn(
-              `storefront revalidate ${base} ${linkSuffix}: ${res.status} ${text.slice(0, 200)}`,
-            );
+          const ok = await postRevalidate(base, linkSuffix);
+          // 失败再试一次，降低赠品等刚保存后仍读到旧 ISR 的概率
+          if (!ok) {
+            await new Promise((r) => setTimeout(r, 300));
+            await postRevalidate(base, linkSuffix);
           }
         } catch (e) {
           console.warn(
             `storefront revalidate ${base} ${linkSuffix} failed:`,
             e instanceof Error ? e.message : e,
           );
+          try {
+            await new Promise((r) => setTimeout(r, 300));
+            await postRevalidate(base, linkSuffix);
+          } catch (retryErr) {
+            console.warn(
+              `storefront revalidate retry ${base} ${linkSuffix} failed:`,
+              retryErr instanceof Error ? retryErr.message : retryErr,
+            );
+          }
         }
       }),
     ),
