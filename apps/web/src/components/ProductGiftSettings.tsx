@@ -65,6 +65,8 @@ type DraftGift = {
   key: string;
   gift_product: LookupProduct | null;
   package_id: string | null;
+  /** 已选套餐名称（接口回填 / 添加时快照，避免 packages_enabled=false 时列表空白） */
+  package_name: string | null;
   quantity: number;
   /** 赠品自定义显示名称（为空时用赠品商品标题(外部)） */
   gift_name: string;
@@ -75,6 +77,7 @@ type DraftGift = {
   /** 进入编辑前的原值，取消编辑时回滚 */
   origin?: {
     package_id: string | null;
+    package_name: string | null;
     quantity: number;
     gift_name: string;
     locales: Record<string, string>;
@@ -184,17 +187,19 @@ export function ProductGiftSettings({
 
   const loadPackages = useCallback(
     async (product: LookupProduct) => {
-      if (!product.packages_enabled) {
+      // 赠品场景：商品可能未开启「套餐售卖」，但仍有 product_packages 可选；
+      // 不能因 packages_enabled=false 就跳过加载，否则列表会误显示「未启用套餐」。
+      if (packages[product.id]) return;
+      if (!product.link_suffix) {
         setPackages((prev) => ({ ...prev, [product.id]: [] }));
         return;
       }
-      if (packages[product.id]) return;
       try {
         const res = await apiFetch<{
           data: { product: LookupProduct; packages: LookupPackage[] };
         }>(
           `/api/products/lookup?link_suffix=${encodeURIComponent(
-            product.link_suffix ?? "",
+            product.link_suffix,
           )}&owner_product_id=${encodeURIComponent(productId)}`,
         );
         setPackages((prev) => ({
@@ -233,6 +238,7 @@ export function ProductGiftSettings({
             }
           : null,
         package_id: gift.package_id,
+        package_name: gift.package?.name?.trim() || null,
         quantity: gift.quantity,
         gift_name: (gift.gift_name ?? "").trim(),
         locales: localesFromApi(gift.locales as ProductGiftLocale[]),
@@ -362,12 +368,16 @@ export function ProductGiftSettings({
       message.error("该商品 + 套餐 + 数量组合已存在");
       return;
     }
+    const selectedPkgName =
+      (selected.packages ?? []).find((p) => p.id === selectedPackageId)
+        ?.name ?? null;
     const next = [
       ...gifts,
       {
         key: newKey(),
         gift_product: product,
         package_id: selectedPackageId,
+        package_name: selectedPkgName,
         quantity: selectedQuantity,
         gift_name: "",
         locales: {},
@@ -382,6 +392,7 @@ export function ProductGiftSettings({
 
   /** 进入编辑：记录原值以便取消 */
   const startEdit = (row: DraftGift) => {
+    if (row.gift_product) void loadPackages(row.gift_product);
     setGifts((prev) =>
       prev.map((g) =>
         g.key === row.key
@@ -390,6 +401,7 @@ export function ProductGiftSettings({
               editing: true,
               origin: {
                 package_id: g.package_id,
+                package_name: g.package_name,
                 quantity: g.quantity,
                 gift_name: g.gift_name,
                 locales: { ...g.locales },
@@ -410,6 +422,7 @@ export function ProductGiftSettings({
               editing: false,
               origin: null,
               package_id: g.origin?.package_id ?? null,
+              package_name: g.origin?.package_name ?? null,
               quantity: g.origin?.quantity ?? g.quantity,
               gift_name: g.origin?.gift_name ?? g.gift_name,
               locales: g.origin?.locales ?? g.locales,
@@ -1108,16 +1121,34 @@ export function ProductGiftSettings({
               const product = row.gift_product;
               if (!product) return "-";
               const options = packages[product.id] ?? [];
-              if (!product.packages_enabled || options.length === 0) {
+              const chosen = options.find((p) => p.id === row.package_id);
+              const displayName =
+                chosen?.name ??
+                (row.package_id ? row.package_name : null);
+
+              if (!row.editing || editingLocale) {
+                if (displayName) return displayName;
+                if (row.package_id) {
+                  return (
+                    <span style={{ color: "#999" }}>套餐已选（名称加载中）</span>
+                  );
+                }
+                if (options.length === 0) {
+                  return (
+                    <span style={{ color: "#999" }}>
+                      {product.packages_enabled ? "无可用套餐" : "未启用套餐"}
+                    </span>
+                  );
+                }
+                return "未选择套餐";
+              }
+
+              if (options.length === 0) {
                 return (
                   <span style={{ color: "#999" }}>
                     {product.packages_enabled ? "无可用套餐" : "未启用套餐"}
                   </span>
                 );
-              }
-              if (!row.editing || editingLocale) {
-                const chosen = options.find((p) => p.id === row.package_id);
-                return chosen ? chosen.name : "未选择套餐";
               }
               return (
                 <Select
@@ -1128,9 +1159,14 @@ export function ProductGiftSettings({
                     value: pkg.id,
                     label: pkg.name,
                   }))}
-                  onChange={(value) =>
-                    updateGift(row.key, { package_id: value ?? null })
-                  }
+                  onChange={(value) => {
+                    const name =
+                      options.find((p) => p.id === value)?.name ?? null;
+                    updateGift(row.key, {
+                      package_id: value ?? null,
+                      package_name: name,
+                    });
+                  }}
                 />
               );
             },
