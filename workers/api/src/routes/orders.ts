@@ -1987,8 +1987,8 @@ function mergeGiftSkuUnits(
 }
 
 /**
- * 「中文属性*数量」：主品与赠品统一为「SKU * 件数」，用「 | 」拼接。
- * 例：CERAGLOW-YC * 1 | jagungin * 2 | whg-8dz * 6
+ * 「中文属性*数量」：主品与赠品统一为「SKU * 件数」，用「 + 」拼接。
+ * 例：CERAGLOW-YC * 1 + jagungin * 2 + whg-8dz * 6
  * 主品件数 = 套餐内件数 × 购买数量；赠品件数 = 赠品自身套餐内件数 × 赠品数量（不乘购买数量）。
  */
 function formatSkuQuantityWithGifts(
@@ -2009,7 +2009,7 @@ function formatSkuQuantityWithGifts(
   )) {
     parts.push(`${label} * ${units}`);
   }
-  return parts.join(" | ");
+  return parts.join(" + ");
 }
 
 /**
