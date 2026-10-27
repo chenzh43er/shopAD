@@ -970,6 +970,87 @@ productsRoutes.post("/:id/copy", async (c) => {
       }
     }
 
+    // 复制套餐独立属性：后端SKU不能跨商品重复，自动生成「原SKU-新后缀」编码，后续可再修改
+    if (oldToNewPkg.size > 0) {
+      const oldPkgIds = [...oldToNewPkg.keys()];
+      try {
+        const { data: oldSkus, error: skuReadError } = await supabase
+          .from("product_package_skus")
+          .select("*")
+          .in("package_id", oldPkgIds)
+          .order("sort_order", { ascending: true });
+        if (skuReadError) {
+          if (
+            !/schema cache|could not find the table|does not exist/i.test(
+              skuReadError.message,
+            )
+          ) {
+            return c.json({ error: skuReadError.message }, 500);
+          }
+        } else if ((oldSkus ?? []).length > 0) {
+          const takenCodes = new Set<string>();
+          const { data: attrCodes } = await supabase
+            .from("product_package_skus")
+            .select("sku_code");
+          for (const row of attrCodes ?? []) {
+            const code = (row.sku_code as string | null)?.trim().toLowerCase();
+            if (code) takenCodes.add(code);
+          }
+          const { data: legacyCodes } = await supabase
+            .from("products")
+            .select("sku_code")
+            .not("sku_code", "is", null);
+          for (const row of legacyCodes ?? []) {
+            const code = (row.sku_code as string | null)?.trim().toLowerCase();
+            if (code) takenCodes.add(code);
+          }
+          const makeCode = (base: string) => {
+            const normalizedBase = base.trim() || "sku";
+            const suffix = linkSuffix.replace(/\s+/g, "") || "copy";
+            let candidate = `${normalizedBase}-${suffix}`;
+            let attempt = 2;
+            while (takenCodes.has(candidate.toLowerCase())) {
+              candidate = `${normalizedBase}-${suffix}-${attempt}`;
+              attempt += 1;
+            }
+            takenCodes.add(candidate.toLowerCase());
+            return candidate;
+          };
+          const skuRows = (oldSkus ?? [])
+            .map((sku) => {
+              const newPkgId = oldToNewPkg.get(sku.package_id as string);
+              if (!newPkgId) return null;
+              return {
+                package_id: newPkgId,
+                sku_display: sku.sku_display as string,
+                sku_code: makeCode(String(sku.sku_code ?? "")),
+                image_url: (sku.image_url as string | null) ?? null,
+                sort_order: (sku.sort_order as number) ?? 0,
+              };
+            })
+            .filter((row): row is NonNullable<typeof row> => row !== null);
+          if (skuRows.length > 0) {
+            const { error: skuInsertError } = await supabase
+              .from("product_package_skus")
+              .insert(skuRows);
+            if (
+              skuInsertError &&
+              !/schema cache|could not find the table|does not exist/i.test(
+                skuInsertError.message,
+              )
+            ) {
+              return c.json({ error: skuInsertError.message }, 500);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(
+          "copy package skus failed:",
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
+
     // 复制套餐语言覆盖（按新旧 package id 映射；表不存在时跳过，保证老库可复制）
     if (oldToNewPkg.size > 0) {
       const oldPkgIds = [...oldToNewPkg.keys()];

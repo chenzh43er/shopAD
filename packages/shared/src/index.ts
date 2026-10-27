@@ -448,16 +448,52 @@ export type UpsertProductLocaleInput = {
   detail_image_urls?: string[];
 };
 
-/** 套餐多语言覆盖（名称 + 图片） */
+/** 独立属性在某个语言下的名称/图片覆盖 */
+export interface ProductPackageSkuLocale {
+  /** 前端显示SKU名称（该语言） */
+  sku_display?: string | null;
+  /** 该语言的属性图片 */
+  image_url?: string | null;
+}
+
+/** 套餐多语言覆盖（名称 + 图片，可含独立属性名称/图片） */
 export interface ProductPackageLocale {
   package_id: string;
   locale: string;
   name: string;
   name_external: string;
   image_url?: string | null;
+  /** sku_code → 该语言的属性名称/图片覆盖 */
+  skus?: Record<string, ProductPackageSkuLocale> | null;
   created_at?: string;
   updated_at?: string;
 }
+
+/** 套餐独立属性（开启「独立选属性」后可用）：前端SKU名称 + 后端SKU + 图片 */
+export interface ProductPackageSku {
+  id: string;
+  package_id: string;
+  /** 前端显示SKU名称（同一套餐内唯一） */
+  sku_display: string;
+  /** 后端SKU / 中文属性（同一商品内可跨套餐重复，不同商品之间唯一） */
+  sku_code: string;
+  /** 该属性对应的图片 */
+  image_url: string | null;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** 保存套餐独立属性时的入参（随套餐整组保存） */
+export interface UpsertProductPackageSkuInput {
+  sku_display: string;
+  sku_code: string;
+  image_url?: string | null;
+  sort_order?: number;
+}
+
+/** 单个套餐可配置的独立属性上限 */
+export const MAX_PACKAGE_SKUS = 50;
 
 /** 商品套餐（售价在套餐层，不在 SKU） */
 export interface ProductPackage {
@@ -475,6 +511,8 @@ export interface ProductPackage {
   summary: string | null;
   /** 套餐图片 */
   image_url: string | null;
+  /** 独立属性标题（落地页属性选择区标题，可空） */
+  sku_title?: string | null;
   /** 是否前端可见 */
   is_visible: boolean;
   sort_order: number;
@@ -504,6 +542,8 @@ export interface ProductPackageItemWithProduct extends ProductPackageItem {
 
 export interface ProductPackageWithItems extends ProductPackage {
   items: ProductPackageItemWithProduct[];
+  /** 套餐独立属性（开启「独立选属性」后使用） */
+  skus?: ProductPackageSku[];
 }
 
 export interface UpsertProductPackageInput {
@@ -513,12 +553,25 @@ export interface UpsertProductPackageInput {
   discount_price?: number | null;
   summary?: string | null;
   image_url?: string | null;
+  /** 独立属性标题（落地页属性选择区标题，可空） */
+  sku_title?: string | null;
   is_visible?: boolean;
   sort_order?: number;
+  /** 套餐独立属性（随套餐整组保存） */
+  skus?: UpsertProductPackageSkuInput[];
   /** 按 locale 覆盖名称/图片；key 如 en */
   locales?: Record<
     string,
-    { name?: string; name_external?: string; image_url?: string | null }
+    {
+      name?: string;
+      name_external?: string;
+      image_url?: string | null;
+      /** sku_code → 该语言的属性名称/图片覆盖 */
+      skus?: Record<
+        string,
+        { sku_display?: string | null; image_url?: string | null }
+      >;
+    }
   >;
   items?: Array<{
     id?: string;
@@ -595,7 +648,18 @@ export interface UpsertProductGiftsBody {
   gifts_title_locales?: Record<string, string>;
 }
 
-/** 订单赠品快照 */
+/** 订单独立属性快照（套餐内每个商品选择的后端SKU） */
+export interface OrderSkuSnapshot {
+  sku_code: string;
+  /** 前端显示名称快照 */
+  sku_display: string | null;
+  /** 该属性总件数 */
+  quantity: number;
+}
+
+/**
+ * 赠品快照
+ */
 export interface OrderGiftSnapshot {
   sku_code: string | null;
   name: string | null;
@@ -675,6 +739,8 @@ export interface Order {
   quantity: number;
   /** 下单时中文属性码快照 */
   sku_code: string | null;
+  /** 下单时套餐独立属性快照（每个商品选择的后端SKU） */
+  sku_snapshot: OrderSkuSnapshot[] | null;
   /** 下单时赠品快照（每单商品件数；导出时再乘购买份数） */
   gift_snapshot: OrderGiftSnapshot[] | null;
   created_by: string | null;

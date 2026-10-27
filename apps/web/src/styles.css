@@ -359,3 +359,77 @@ a {
   overflow: visible;
   text-overflow: unset;
 }
+
+/* 套餐设置：独立属性展示在套餐行下方，收起展开图标列的占位 */
+.package-table .ant-table-expand-icon-col {
+  width: 0 !important;
+  min-width: 0 !important;
+}
+
+.package-table .ant-table-row-expand-icon-cell {
+  width: 0 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border-bottom: none !important;
+}
+
+.package-table .ant-table-expanded-row > td {
+  padding: 0 16px 12px !important;
+  background: #fff !important;
+  border-bottom: 1px solid #f0f0f0;
+  overflow: hidden;
+}
+
+.package-table .ant-table-expanded-row:hover > td {
+  background: #fff !important;
+}
+
+/* 套餐独立属性子表格：限制在套餐行宽度内，避免溢出 */
+.package-sku-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+.package-sku-table .ant-table,
+.package-sku-table .ant-table-container,
+.package-sku-table .ant-table-content {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+
+.package-sku-table .ant-table-content {
+  overflow-x: hidden;
+}
+
+.package-sku-table .ant-table-content table {
+  width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+
+.package-sku-table .ant-table {
+  background: transparent;
+}
+
+.package-sku-table .ant-table-container {
+  border: 1px solid #e6eef7;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.package-sku-table .ant-table-thead > tr > th {
+  background: #eef4fb;
+  color: #5b6b7c;
+  font-weight: 500;
+  padding: 6px 10px;
+}
+
+.package-sku-table .ant-table-tbody > tr > td {
+  padding: 6px 10px;
+  vertical-align: middle;
+}
+
+.package-sku-table .ant-table-tbody > tr:last-child > td {
+  border-bottom: none;
+}

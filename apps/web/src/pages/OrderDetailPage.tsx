@@ -56,6 +56,26 @@ const reviewColor: Record<ReviewStatus, string> = {
   rejected: "error",
 };
 
+/** 独立属性订单显示「1-红色 2-蓝色 2件」，旧订单保留 SKU * 件数 */
+function formatSkuAttributeText(order: Order): string {
+  const snapshot = order.sku_snapshot;
+  if (Array.isArray(snapshot) && snapshot.length > 0) {
+    const labels = snapshot
+      .map((item, index) => `${index + 1}-${item.sku_code}`)
+      .join(" ");
+    const total = snapshot.reduce(
+      (sum, item) => sum + Math.max(1, Number(item.quantity) || 1),
+      0,
+    );
+    return `${labels} ${total}件`;
+  }
+  if (!order.sku_code) return "—";
+  const units =
+    Math.max(1, Number(order.package_count) || 1) *
+    Math.max(1, Number(order.quantity) || 1);
+  return `${order.sku_code} * ${units}`;
+}
+
 type ShipperFormValues = {
   name: string;
   phone?: string;
@@ -412,9 +432,7 @@ export function OrderDetailPage() {
             : "—"}
         </Descriptions.Item>
         <Descriptions.Item label="中文属性">
-          {order.sku_code
-            ? `${order.sku_code} * ${Math.max(1, Number(order.package_count) || 1) * Math.max(1, Number(order.quantity) || 1)}`
-            : "—"}
+          {formatSkuAttributeText(order)}
         </Descriptions.Item>
         <Descriptions.Item label="购买数量">{order.quantity}</Descriptions.Item>
         <Descriptions.Item label="赠品" span={2}>

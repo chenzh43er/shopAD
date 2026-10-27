@@ -55,6 +55,7 @@ const FIELD_LABELS: Record<string, string> = {
   sku_code: "中文属性",
   sku_display: "SKU 展示",
   packages_enabled: "开启套餐",
+  skus: "独立属性SKU",
   sales_count: "虚拟销量",
   weight: "重量",
   region_id: "地区",

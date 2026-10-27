@@ -447,14 +447,46 @@ export async function copyProductLocales(
   }
 }
 
-/** packageId -> locale -> names / image */
-type PackageLocaleMap = Record<
-  string,
-  Record<
-    string,
-    { name: string; name_external: string; image_url?: string | null }
-  >
->;
+type PackageSkuLocaleEntry = {
+  sku_display?: string | null;
+  image_url?: string | null;
+};
+
+type PackageLocaleEntry = {
+  name: string;
+  name_external: string;
+  image_url?: string | null;
+  /** sku_code → 该语言的属性名称/图片覆盖 */
+  skus?: Record<string, PackageSkuLocaleEntry>;
+};
+
+/** packageId -> locale -> names / image / 属性名称图片 */
+type PackageLocaleMap = Record<string, Record<string, PackageLocaleEntry>>;
+
+/** 清理某语言的独立属性名称/图片覆盖 */
+function cleanPackageSkuLocales(
+  value: unknown,
+): Record<string, PackageSkuLocaleEntry> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const out: Record<string, PackageSkuLocaleEntry> = {};
+  for (const [codeRaw, raw] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    const code = codeRaw.trim();
+    if (!code || !raw || typeof raw !== "object") continue;
+    const item = raw as Record<string, unknown>;
+    const skuDisplay =
+      typeof item.sku_display === "string" ? item.sku_display.trim() : "";
+    const imageUrl =
+      typeof item.image_url === "string" ? item.image_url.trim() : "";
+    if (!skuDisplay && !imageUrl) continue;
+    out[code] = {
+      ...(skuDisplay ? { sku_display: skuDisplay } : {}),
+      ...(imageUrl ? { image_url: imageUrl } : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 export async function listPackageLocalesByPackageIds(
   supabase: Supabase,
@@ -482,6 +514,7 @@ export async function listPackageLocalesByPackageIds(
             name: value?.name ?? "",
             name_external: value?.name_external ?? "",
             image_url: value?.image_url ?? null,
+            skus: value?.skus ?? {},
           });
         }
         map.set(pkgId, rows);
@@ -499,7 +532,15 @@ export async function replacePackageLocales(
   locales:
     | Record<
         string,
-        { name?: string; name_external?: string; image_url?: string | null }
+        {
+          name?: string;
+          name_external?: string;
+          image_url?: string | null;
+          skus?: Record<
+            string,
+            { sku_display?: string | null; image_url?: string | null }
+          >;
+        }
       >
     | undefined,
   productId: string,
@@ -511,21 +552,20 @@ export async function replacePackageLocales(
   if (!locales || Object.keys(locales).length === 0) {
     delete current[packageId];
   } else {
-    const next: Record<
-      string,
-      { name: string; name_external: string; image_url?: string | null }
-    > = {};
+    const next: Record<string, PackageLocaleEntry> = {};
     for (const [localeRaw, value] of Object.entries(locales)) {
       const check = validateLocaleCode(localeRaw);
       if (!check.ok) continue;
       const name = value?.name?.trim() || "";
       const nameExternal = value?.name_external?.trim() || "";
       const imageUrl = value?.image_url?.trim() || null;
-      if (!name && !nameExternal && !imageUrl) continue;
+      const skus = cleanPackageSkuLocales(value?.skus);
+      if (!name && !nameExternal && !imageUrl && !skus) continue;
       next[check.locale] = {
         name,
         name_external: nameExternal,
         image_url: imageUrl,
+        ...(skus ? { skus } : {}),
       };
     }
     if (Object.keys(next).length === 0) delete current[packageId];
@@ -548,21 +588,20 @@ export async function saveAllPackageLocales(
   const path = packageLocalesPath(productId);
   const cleaned: PackageLocaleMap = {};
   for (const [pkgId, locales] of Object.entries(byPackageId)) {
-    const next: Record<
-      string,
-      { name: string; name_external: string; image_url?: string | null }
-    > = {};
+    const next: Record<string, PackageLocaleEntry> = {};
     for (const [localeRaw, value] of Object.entries(locales || {})) {
       const check = validateLocaleCode(localeRaw);
       if (!check.ok) continue;
       const name = value?.name?.trim() || "";
       const nameExternal = value?.name_external?.trim() || "";
       const imageUrl = value?.image_url?.trim() || null;
-      if (!name && !nameExternal && !imageUrl) continue;
+      const skus = cleanPackageSkuLocales(value?.skus);
+      if (!name && !nameExternal && !imageUrl && !skus) continue;
       next[check.locale] = {
         name,
         name_external: nameExternal,
         image_url: imageUrl,
+        ...(skus ? { skus } : {}),
       };
     }
     if (Object.keys(next).length > 0) cleaned[pkgId] = next;

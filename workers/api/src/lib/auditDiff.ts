@@ -25,6 +25,7 @@ const PRODUCT_FIELD_LABELS: Record<string, string> = {
   sku_code: "中文属性",
   sku_display: "SKU 展示",
   packages_enabled: "开启套餐",
+  skus: "独立属性SKU",
   sales_count: "虚拟销量",
   weight: "重量",
   region_id: "地区",
@@ -160,6 +161,7 @@ export function packageSnapshot(pkg: {
   discount_price?: number | null;
   summary?: string | null;
   image_url?: string | null;
+  sku_title?: string | null;
   is_visible?: boolean | null;
   sort_order?: number | null;
   locales?: Record<
@@ -171,11 +173,21 @@ export function packageSnapshot(pkg: {
     quantity?: number | null;
     independent_attrs?: boolean | null;
   }> | null;
+  skus?: Array<{
+    sku_display?: string | null;
+    sku_code?: string | null;
+    image_url?: string | null;
+  }> | null;
 }) {
   const items = (pkg.items ?? []).map((item) => ({
     ref_product_id: item.ref_product_id ?? null,
     quantity: Number(item.quantity) || 0,
     independent_attrs: Boolean(item.independent_attrs),
+  }));
+  const skus = (pkg.skus ?? []).map((sku) => ({
+    sku_display: (sku.sku_display ?? "").trim(),
+    sku_code: (sku.sku_code ?? "").trim(),
+    image_url: (sku.image_url ?? "").trim() || null,
   }));
   const locales: Record<
     string,
@@ -200,10 +212,13 @@ export function packageSnapshot(pkg: {
       pkg.discount_price == null ? null : Number(pkg.discount_price) || 0,
     summary: (pkg.summary ?? "").trim() || null,
     image_url: (pkg.image_url ?? "").trim() || null,
+    sku_title: (pkg.sku_title ?? "").trim() || null,
     is_visible: pkg.is_visible ?? true,
     sort_order: Number(pkg.sort_order) || 0,
     item_count: items.length,
     items,
+    skus,
+    sku_count: skus.length,
     locales,
     locale_count: Object.keys(locales).length,
   };
@@ -216,10 +231,13 @@ const PACKAGE_SUB_FIELD_LABELS: Record<string, string> = {
   discount_price: "折扣价",
   summary: "说明",
   image_url: "图片",
+  sku_title: "属性标题",
   is_visible: "是否显示",
   sort_order: "排序",
   item_count: "明细件数",
   items: "明细内容",
+  skus: "独立属性",
+  sku_count: "独立属性数",
   locales: "多语言",
   locale_count: "语言数",
 };
@@ -241,6 +259,11 @@ function formatLocalesBrief(
       return `${code}(${parts.join("·")})`;
     })
     .join(", ");
+}
+
+function formatSkusBrief(skus: PackageSnap["skus"]): string {
+  if (!skus || skus.length === 0) return "无";
+  return skus.map((sku) => `${sku.sku_display}(${sku.sku_code})`).join("、");
 }
 
 /** 对比套餐全量替换前后，生成可读变更摘要与明细 */
@@ -288,6 +311,7 @@ export function buildPackageUpdateDiffs(
       "discount_price",
       "summary",
       "image_url",
+      "sku_title",
       "is_visible",
       "sort_order",
       "item_count",
@@ -326,6 +350,16 @@ export function buildPackageUpdateDiffs(
       });
       fieldChanges.push(
         `多语言: ${formatLocalesBrief(before.locales)} → ${formatLocalesBrief(after.locales)}`,
+      );
+    }
+    if (!valuesEqual(before.skus, after.skus)) {
+      diffs.push({
+        field: `package.${after.name}.skus`,
+        from: before.skus,
+        to: after.skus,
+      });
+      fieldChanges.push(
+        `独立属性: ${formatSkusBrief(before.skus)} → ${formatSkusBrief(after.skus)}`,
       );
     }
     if (fieldChanges.length > 0) {

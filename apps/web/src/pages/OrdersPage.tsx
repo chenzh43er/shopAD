@@ -2503,7 +2503,10 @@ export function OrdersPage() {
             setPageSize(Math.min(ps, 500));
           },
         }}
-        onChange={(_pagination, _filters, sorter) => {
+        onChange={(_pagination, _filters, sorter, extra) => {
+          // 翻页也会触发 Table onChange，且 created_at 始终有受控 sortOrder；
+          // 若在此无条件 setPage(1)，会把翻页立刻打回第 1 页。
+          if (extra.action !== "sort") return;
           const s = Array.isArray(sorter) ? sorter[0] : sorter;
           if (s?.field === "created_at") {
             setSortOrder(s.order === "ascend" ? "ascend" : "descend");

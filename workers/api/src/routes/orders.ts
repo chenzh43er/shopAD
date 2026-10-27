@@ -44,13 +44,13 @@ import type { Env, Variables } from "../types";
 /** PostgREST 单次最多约 1000 行；导出用 range 分页拉全量，无业务上限 */
 const EXPORT_FETCH_PAGE = 1000;
 const FINANCE_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, quantity, package_count, gift_snapshot, status";
+  "id, order_no, shipping_order_no, product_id, product_name, created_at, updated_at, total_amount, owner_member, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, status";
 /** 物流导出仅需标红列对应字段；寄件等黑列由前端按模板固定填充 */
 const LOGISTICS_EXPORT_SELECT =
-  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, quantity, package_count, gift_snapshot, remark, cod_amount, total_amount";
+  "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, remark, cod_amount, total_amount";
 /** 全部订单导出：业务可读字段（不含内部 UUID） */
 const FULL_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, unit_price, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, sku_snapshot, unit_price, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
 
 type ExportRangeQuery = {
   range: (
@@ -81,10 +81,10 @@ async function fetchAllExportRows(
 }
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 /** 带地区筛选时用 !inner，避免把地区展开成超大 product_id IN (...) */
 const ORDER_LIST_SELECT_REGION =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
 function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
@@ -1383,7 +1383,7 @@ ordersRoutes.get("/", async (c) => {
   const sortAsc = sortRaw === "created_at.asc";
 
   const supabase = createServiceClient(c.env);
-  const listSelect = regionId ? ORDER_LIST_SELECT_REGION : ORDER_LIST_SELECT;
+  const listSelect: string = regionId ? ORDER_LIST_SELECT_REGION : ORDER_LIST_SELECT;
   let query = supabase
     .from("orders")
     // exact：后台「共 N 条」需准确；estimated 依赖 PG 表统计，插入后长期滞后会冻在旧值
@@ -1490,16 +1490,17 @@ ordersRoutes.get("/", async (c) => {
   const { data, error, count } = await query;
   if (error) return c.json({ error: error.message }, 500);
 
-  const filled = await persistOrderOwnerMembers(supabase, data ?? []);
+  const dataRows = (data ?? []) as unknown as Array<Record<string, unknown>>;
+  const filled = await persistOrderOwnerMembers(supabase, dataRows);
   const giftLookup = await buildGiftPkgLookup(
     supabase,
-    (data ?? [])
+    dataRows
       .map((row) =>
         typeof row.product_id === "string" ? row.product_id : "",
       )
       .filter(Boolean),
   );
-  const dataOut = (data ?? []).map((row) => {
+  const dataOut = dataRows.map((row) => {
     const flat = flattenOrderListRow(row as OrderListEmbedRow);
     const id = typeof flat.id === "string" ? flat.id : "";
     const fromProduct = id ? filled.get(id) : "";
@@ -1796,6 +1797,63 @@ function formatSkuQuantity(row: {
   return `${sku} * ${orderSkuUnits(row)}`;
 }
 
+type ParsedSkuSnapshot = {
+  sku_code: string;
+  sku_display: string | null;
+  quantity: number;
+};
+
+/** 解析订单独立属性快照（兼容 jsonb 数组 / JSON 字符串） */
+function parseSkuSnapshot(raw: unknown): ParsedSkuSnapshot[] {
+  let items: unknown = raw;
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      items = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(items)) return [];
+  const list: ParsedSkuSnapshot[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const skuCode = asText(row.sku_code);
+    if (!skuCode) continue;
+    const rawQty = Number(row.quantity);
+    const quantity =
+      Number.isFinite(rawQty) && rawQty > 0 ? Math.floor(rawQty) : 1;
+    list.push({
+      sku_code: skuCode,
+      sku_display: asText(row.sku_display) || null,
+      quantity,
+    });
+  }
+  return list;
+}
+
+/** 订单导出：1-红色 2-蓝色 */
+function formatSkuSnapshotLabels(snapshot: ParsedSkuSnapshot[]): string {
+  return snapshot
+    .map((item, index) => `${index + 1}-${item.sku_code}`)
+    .join(" ");
+}
+
+/** 订单导出：1-红色 2-蓝色 2件 */
+function formatSkuSnapshotOrder(snapshot: ParsedSkuSnapshot[]): string {
+  if (snapshot.length === 0) return "";
+  const labels = formatSkuSnapshotLabels(snapshot);
+  const totalUnits = snapshot.reduce((sum, item) => sum + item.quantity, 0);
+  return `${labels} ${totalUnits}件`;
+}
+
+/** 物流/财务：1*红色|1*蓝色（赠品追加在后方） */
+function formatSkuSnapshotPipe(snapshot: ParsedSkuSnapshot[]): string {
+  return snapshot
+    .map((item) => `${item.quantity}*${item.sku_code}`)
+    .join("|");
+}
+
 /** 快照缺 package_count 时，按订单商品当前赠品配置解析「赠品套餐内件数」 */
 type GiftPkgLookup = (label: string, giftQty: number) => number | undefined;
 
@@ -1994,19 +2052,28 @@ function mergeGiftSkuUnits(
 function formatSkuQuantityWithGifts(
   row: {
     sku_code?: unknown;
+    sku_snapshot?: unknown;
     quantity?: unknown;
     package_count?: unknown;
     gift_snapshot?: unknown;
   },
   giftLookup?: GiftPkgLookup,
 ): string {
+  const snapshot = parseSkuSnapshot(row.sku_snapshot);
+  const gifts = mergeGiftSkuUnits(row.gift_snapshot, giftLookup);
+
+  if (snapshot.length > 0) {
+    const parts = [formatSkuSnapshotPipe(snapshot)];
+    for (const { label, units } of gifts) {
+      parts.push(`${units}*${label}`);
+    }
+    return parts.join("|");
+  }
+
   const parts: string[] = [];
   const base = formatSkuQuantity(row);
   if (base) parts.push(base);
-  for (const { label, units } of mergeGiftSkuUnits(
-    row.gift_snapshot,
-    giftLookup,
-  )) {
+  for (const { label, units } of gifts) {
     parts.push(`${label} * ${units}`);
   }
   return parts.join(" + ");
@@ -2321,6 +2388,7 @@ ordersRoutes.post("/full-export", async (c) => {
     const ownerFromProduct = productId
       ? productOwnerLabels.get(productId) ?? ""
       : "";
+    const skuSnapshot = parseSkuSnapshot(row.sku_snapshot);
 
     return {
       order_no: asText(row.order_no),
@@ -2342,8 +2410,14 @@ ordersRoutes.post("/full-export", async (c) => {
       product_name: asText(row.product_name),
       package_name: asText(row.package_name),
       package_name_external: asText(row.package_name_external),
-      sku_code: asText(row.sku_code),
-      sku_quantity: formatSkuQuantityWithGifts(row, giftLookup(productId)),
+      sku_code:
+        skuSnapshot.length > 0
+          ? formatSkuSnapshotLabels(skuSnapshot)
+          : asText(row.sku_code),
+      sku_quantity:
+        skuSnapshot.length > 0
+          ? formatSkuSnapshotOrder(skuSnapshot)
+          : formatSkuQuantityWithGifts(row, giftLookup(productId)),
       unit_price: asNumberOrEmpty(row.unit_price),
       quantity: orderPurchaseQty(row),
       package_count: asNumberOrEmpty(row.package_count),
@@ -2818,6 +2892,7 @@ ordersRoutes.patch("/:id", async (c) => {
     }
 
     patch.weight = Number((productWeight * packageCount).toFixed(2));
+    patch.sku_snapshot = null;
   }
 
   if (body.gift_snapshot !== undefined) {
