@@ -897,8 +897,8 @@ export function ProductPackageSettings({
       });
       if (!ok) return;
       setPackages(nextPackages);
-      if (skuEdit?.packageKey === pkg.key) setSkuEdit(null);
-      if (skuTitleEdit?.packageKey === pkg.key) setSkuTitleEdit(null);
+      setSkuEdit(null);
+      setSkuTitleEdit(null);
     };
 
     if (pkg.skus.some(hasSkuContent)) {
