@@ -1807,7 +1807,7 @@ function formatSkuQuantity(row: {
 }): string {
   const sku = asText(row.sku_code);
   if (!sku) return "";
-  return `${sku} * ${orderSkuUnits(row)}`;
+  return `${sku}*${orderSkuUnits(row)}`;
 }
 
 type ParsedSkuSnapshot = {
@@ -1860,11 +1860,11 @@ function formatSkuSnapshotOrder(snapshot: ParsedSkuSnapshot[]): string {
   return `${labels} ${totalUnits}件`;
 }
 
-/** 物流/财务：1*红色|1*蓝色（赠品追加在后方） */
-function formatSkuSnapshotPipe(snapshot: ParsedSkuSnapshot[]): string {
+/** 物流/财务：红色*1+蓝色*1（赠品追加在后方） */
+function formatSkuSnapshotUnits(snapshot: ParsedSkuSnapshot[]): string {
   return snapshot
-    .map((item) => `${item.quantity}*${item.sku_code}`)
-    .join("|");
+    .map((item) => `${item.sku_code}*${item.quantity}`)
+    .join("+");
 }
 
 /** 快照缺 package_count 时，按订单商品当前赠品配置解析「赠品套餐内件数」 */
@@ -2058,8 +2058,8 @@ function mergeGiftSkuUnits(
 }
 
 /**
- * 「中文属性*数量」：主品与赠品统一为「SKU * 件数」，用「 + 」拼接。
- * 例：CERAGLOW-YC * 1 + jagungin * 2 + whg-8dz * 6
+ * 「中文属性*数量」：主品与赠品统一为「SKU*件数」，用「+」拼接。
+ * 例：s121*1+s122*2+whg-8dz*1
  * 主品件数 = 套餐内件数 × 购买数量；赠品件数 = 赠品自身套餐内件数 × 赠品数量（不乘购买数量）。
  */
 function formatSkuQuantityWithGifts(
@@ -2076,20 +2076,20 @@ function formatSkuQuantityWithGifts(
   const gifts = mergeGiftSkuUnits(row.gift_snapshot, giftLookup);
 
   if (snapshot.length > 0) {
-    const parts = [formatSkuSnapshotPipe(snapshot)];
+    const parts = [formatSkuSnapshotUnits(snapshot)];
     for (const { label, units } of gifts) {
-      parts.push(`${units}*${label}`);
+      parts.push(`${label}*${units}`);
     }
-    return parts.join("|");
+    return parts.join("+");
   }
 
   const parts: string[] = [];
   const base = formatSkuQuantity(row);
   if (base) parts.push(base);
   for (const { label, units } of gifts) {
-    parts.push(`${label} * ${units}`);
+    parts.push(`${label}*${units}`);
   }
-  return parts.join(" + ");
+  return parts.join("+");
 }
 
 /**
