@@ -456,6 +456,8 @@ type PackageLocaleEntry = {
   name: string;
   name_external: string;
   image_url?: string | null;
+  /** 独立属性标题（该语言；留空回退默认语言） */
+  sku_title?: string | null;
   /** sku_code → 该语言的属性名称/图片覆盖 */
   skus?: Record<string, PackageSkuLocaleEntry>;
 };
@@ -514,6 +516,7 @@ export async function listPackageLocalesByPackageIds(
             name: value?.name ?? "",
             name_external: value?.name_external ?? "",
             image_url: value?.image_url ?? null,
+            sku_title: value?.sku_title ?? null,
             skus: value?.skus ?? {},
           });
         }
@@ -536,6 +539,7 @@ export async function replacePackageLocales(
           name?: string;
           name_external?: string;
           image_url?: string | null;
+          sku_title?: string | null;
           skus?: Record<
             string,
             { sku_display?: string | null; image_url?: string | null }
@@ -559,12 +563,14 @@ export async function replacePackageLocales(
       const name = value?.name?.trim() || "";
       const nameExternal = value?.name_external?.trim() || "";
       const imageUrl = value?.image_url?.trim() || null;
+      const skuTitle = value?.sku_title?.trim() || "";
       const skus = cleanPackageSkuLocales(value?.skus);
-      if (!name && !nameExternal && !imageUrl && !skus) continue;
+      if (!name && !nameExternal && !imageUrl && !skuTitle && !skus) continue;
       next[check.locale] = {
         name,
         name_external: nameExternal,
         image_url: imageUrl,
+        ...(skuTitle ? { sku_title: skuTitle } : {}),
         ...(skus ? { skus } : {}),
       };
     }
@@ -595,12 +601,14 @@ export async function saveAllPackageLocales(
       const name = value?.name?.trim() || "";
       const nameExternal = value?.name_external?.trim() || "";
       const imageUrl = value?.image_url?.trim() || null;
+      const skuTitle = value?.sku_title?.trim() || "";
       const skus = cleanPackageSkuLocales(value?.skus);
-      if (!name && !nameExternal && !imageUrl && !skus) continue;
+      if (!name && !nameExternal && !imageUrl && !skuTitle && !skus) continue;
       next[check.locale] = {
         name,
         name_external: nameExternal,
         image_url: imageUrl,
+        ...(skuTitle ? { sku_title: skuTitle } : {}),
         ...(skus ? { skus } : {}),
       };
     }

@@ -99,8 +99,17 @@ export function ProductsPage() {
       );
       setData(res.data);
       setTotal(res.total);
+      if (res.page !== page) {
+        setPage(res.page);
+        return;
+      }
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "加载失败");
+      const msg = e instanceof Error ? e.message : "";
+      if (page > 1 && /requested range not satisfiable/i.test(msg)) {
+        setPage(1);
+        return;
+      }
+      message.error(msg || "加载失败");
     } finally {
       setLoading(false);
     }

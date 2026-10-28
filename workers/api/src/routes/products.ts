@@ -41,7 +41,10 @@ import {
   hostFromProductDomain,
   scheduleStorefrontRevalidate,
 } from "../lib/storefrontRevalidate";
-import { createServiceClient } from "../lib/supabase";
+import {
+  createServiceClient,
+  isPostgrestRangeNotSatisfiable,
+} from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
 function parsePage(raw: string | undefined, fallback = 1): number {
@@ -485,6 +488,9 @@ productsRoutes.get("/", async (c) => {
 
   const { data, error, count } = await query;
   if (error) {
+    if (isPostgrestRangeNotSatisfiable(error)) {
+      return c.json({ data: [], total: 0, page: 1, pageSize });
+    }
     return c.json({ error: error.message }, 500);
   }
 

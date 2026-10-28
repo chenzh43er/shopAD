@@ -38,7 +38,10 @@ import {
   attachOrderCurrencyOne,
 } from "../lib/orderCurrency";
 import { requireSuperAdmin } from "../middleware/auth";
-import { createServiceClient } from "../lib/supabase";
+import {
+  createServiceClient,
+  isPostgrestRangeNotSatisfiable,
+} from "../lib/supabase";
 import type { Env, Variables } from "../types";
 
 /** PostgREST 单次最多约 1000 行；导出用 range 分页拉全量，无业务上限 */
@@ -72,7 +75,11 @@ async function fetchAllExportRows(
       from,
       from + EXPORT_FETCH_PAGE - 1,
     );
-    if (error) return { rows: all, error: error.message };
+    if (error) {
+      // 越过末页时 PostgREST 可能 416；视为拉完
+      if (isPostgrestRangeNotSatisfiable(error)) break;
+      return { rows: all, error: error.message };
+    }
     const chunk = (data ?? []) as Record<string, unknown>[];
     all.push(...chunk);
     if (chunk.length < EXPORT_FETCH_PAGE) break;
@@ -1488,7 +1495,13 @@ ordersRoutes.get("/", async (c) => {
   }
 
   const { data, error, count } = await query;
-  if (error) return c.json({ error: error.message }, 500);
+  if (error) {
+    // 页码超出结果集（筛选变少、批量处理后仍停在高页等）→ 回落到第 1 页，避免把 PGRST103 当 500
+    if (isPostgrestRangeNotSatisfiable(error)) {
+      return c.json({ data: [], total: 0, page: 1, pageSize });
+    }
+    return c.json({ error: error.message }, 500);
+  }
 
   const dataRows = (data ?? []) as unknown as Array<Record<string, unknown>>;
   const filled = await persistOrderOwnerMembers(supabase, dataRows);

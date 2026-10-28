@@ -463,6 +463,8 @@ export interface ProductPackageLocale {
   name: string;
   name_external: string;
   image_url?: string | null;
+  /** 独立属性标题（该语言；留空回退默认语言） */
+  sku_title?: string | null;
   /** sku_code → 该语言的属性名称/图片覆盖 */
   skus?: Record<string, ProductPackageSkuLocale> | null;
   created_at?: string;
@@ -566,6 +568,8 @@ export interface UpsertProductPackageInput {
       name?: string;
       name_external?: string;
       image_url?: string | null;
+      /** 独立属性标题（该语言；留空回退默认语言） */
+      sku_title?: string | null;
       /** sku_code → 该语言的属性名称/图片覆盖 */
       skus?: Record<
         string,

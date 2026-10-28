@@ -399,6 +399,11 @@ export function OrdersPage() {
       );
       setData(res.data);
       setTotal(res.total);
+      // API 在页码越界时会回落 page=1；同步本地页码以触发重新加载真实数据
+      if (res.page !== page) {
+        setPage(res.page);
+        return;
+      }
 
       const notifyKind = pendingBatchNotify.current;
       if (notifyKind) {
@@ -474,7 +479,13 @@ export function OrdersPage() {
       }
     } catch (e) {
       pendingBatchNotify.current = null;
-      message.error(e instanceof Error ? e.message : "加载失败");
+      const msg = e instanceof Error ? e.message : "";
+      // 兼容尚未部署 API 修复的旧响应：越界时回第 1 页重试
+      if (page > 1 && /requested range not satisfiable/i.test(msg)) {
+        setPage(1);
+        return;
+      }
+      message.error(msg || "加载失败");
     } finally {
       setLoading(false);
     }

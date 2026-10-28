@@ -3,15 +3,19 @@ import {
   Button,
   Input,
   InputNumber,
+  Modal,
   Space,
   Switch,
   Table,
+  Tooltip,
   Upload,
   message,
 } from "antd";
 import {
+  CopyOutlined,
   DeleteOutlined,
   PlusOutlined,
+  SnippetsOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
 import type {
@@ -54,6 +58,8 @@ type LocaleNames = {
   name: string;
   name_external: string;
   image_url: string | null;
+  /** 独立属性标题（该语言；留空回退默认语言） */
+  sku_title: string;
   /** sku_code → 该语言的属性名称/图片覆盖 */
   skus: Record<string, SkuLocaleOverride>;
 };
@@ -133,7 +139,13 @@ function emptyPackage(): DraftPackage {
 }
 
 function emptyLocaleNames(): LocaleNames {
-  return { name: "", name_external: "", image_url: null, skus: {} };
+  return {
+    name: "",
+    name_external: "",
+    image_url: null,
+    sku_title: "",
+    skus: {},
+  };
 }
 
 function localesFromApi(
@@ -154,6 +166,7 @@ function localesFromApi(
       name: row.name ?? "",
       name_external: row.name_external ?? "",
       image_url: row.image_url ?? null,
+      sku_title: row.sku_title?.trim() || "",
       skus,
     };
   }
@@ -220,6 +233,98 @@ function migrateSkuLocaleCode(
   return { ...pkg, locales };
 }
 
+/** 同一商品内复制/粘贴独立属性的剪贴板快照 */
+type IndependentAttrsClipboard = {
+  fromKey: string;
+  fromName: string;
+  sku_title: string;
+  skus: Array<{
+    sku_display: string;
+    sku_code: string;
+    image_url: string | null;
+  }>;
+  /** locale → sku_code → 覆盖 */
+  localeSkus: Record<string, Record<string, SkuLocaleOverride>>;
+  /** locale → 独立属性标题覆盖 */
+  localeSkuTitles: Record<string, string>;
+};
+
+function snapshotIndependentAttrs(
+  pkg: DraftPackage,
+): IndependentAttrsClipboard | null {
+  const skus = pkg.skus
+    .filter(hasSkuContent)
+    .map((sku) => ({
+      sku_display: sku.sku_display,
+      sku_code: sku.sku_code,
+      image_url: sku.image_url,
+    }));
+  if (skus.length === 0) return null;
+  const sourceCodes = new Set(
+    skus.map((sku) => sku.sku_code.trim()).filter(Boolean),
+  );
+  const localeSkus: Record<string, Record<string, SkuLocaleOverride>> = {};
+  const localeSkuTitles: Record<string, string> = {};
+  for (const [locale, value] of Object.entries(pkg.locales)) {
+    const next: Record<string, SkuLocaleOverride> = {};
+    for (const [code, override] of Object.entries(value.skus ?? {})) {
+      const trimmed = code.trim();
+      if (!trimmed || !sourceCodes.has(trimmed)) continue;
+      next[trimmed] = {
+        sku_display: override.sku_display,
+        image_url: override.image_url,
+      };
+    }
+    if (Object.keys(next).length > 0) localeSkus[locale] = next;
+    const title = value.sku_title?.trim() || "";
+    if (title) localeSkuTitles[locale] = title;
+  }
+  return {
+    fromKey: pkg.key,
+    fromName: pkg.name.trim() || "未命名套餐",
+    sku_title: pkg.sku_title,
+    skus,
+    localeSkus,
+    localeSkuTitles,
+  };
+}
+
+/** 将剪贴板整套独立属性覆盖写入目标套餐（保留目标套餐级名称/图片） */
+function pasteIndependentAttrs(
+  clipboard: IndependentAttrsClipboard,
+  target: DraftPackage,
+): DraftPackage {
+  const skus = clipboard.skus.map((sku) => ({
+    key: newKey(),
+    sku_display: sku.sku_display,
+    sku_code: sku.sku_code,
+    image_url: sku.image_url,
+  }));
+  const locales: Record<string, LocaleNames> = {};
+  for (const [locale, value] of Object.entries(target.locales)) {
+    locales[locale] = { ...value, skus: {}, sku_title: "" };
+  }
+  for (const [locale, overrides] of Object.entries(clipboard.localeSkus)) {
+    const current = locales[locale] ?? emptyLocaleNames();
+    locales[locale] = { ...current, skus: { ...overrides } };
+  }
+  for (const [locale, title] of Object.entries(clipboard.localeSkuTitles)) {
+    const current = locales[locale] ?? emptyLocaleNames();
+    locales[locale] = { ...current, sku_title: title };
+  }
+  return {
+    ...target,
+    independent_attrs: true,
+    sku_title: clipboard.sku_title,
+    skus,
+    locales,
+  };
+}
+
+function packageHasCopyableAttrs(pkg: DraftPackage): boolean {
+  return pkg.independent_attrs && pkg.skus.some(hasSkuContent);
+}
+
 interface Props {
   productId: string;
   /** 套餐明细固定为基本信息保存后的当前商品 */
@@ -257,12 +362,20 @@ export function ProductPackageSettings({
     value: string;
   } | null>(null);
   const [skuUploading, setSkuUploading] = useState(false);
+  /** 同一商品内：复制属性 → 粘贴属性 */
+  const [attrsClipboard, setAttrsClipboard] =
+    useState<IndependentAttrsClipboard | null>(null);
 
   // 切换语言时退出行内编辑，避免把上一语言的输入写到新语言
   useEffect(() => {
     setSkuEdit(null);
     setSkuTitleEdit(null);
   }, [contentLocale]);
+
+  // 切换商品时清空剪贴板
+  useEffect(() => {
+    setAttrsClipboard(null);
+  }, [productId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -453,7 +566,6 @@ export function ProductPackageSettings({
   };
 
   const editSkuTitle = (pkg: DraftPackage) => {
-    if (editingLocale) return;
     if (skuEdit) {
       message.warning("请先保存或取消正在编辑的独立属性");
       return;
@@ -462,7 +574,10 @@ export function ProductPackageSettings({
       message.warning("请先保存或取消正在编辑的属性标题");
       return;
     }
-    setSkuTitleEdit({ packageKey: pkg.key, value: pkg.sku_title });
+    const value = editingLocale
+      ? (pkg.locales[editingLocale]?.sku_title ?? "")
+      : pkg.sku_title;
+    setSkuTitleEdit({ packageKey: pkg.key, value });
   };
 
   const cancelSkuTitleEdit = () => {
@@ -477,12 +592,24 @@ export function ProductPackageSettings({
       return;
     }
     const title = skuTitleEdit.value.trim();
-    const nextPackages = packages.map((item) =>
-      item.key === pkg.key ? { ...item, sku_title: title } : item,
-    );
+    // 多语言模式：只覆盖当前语言的属性标题，不改默认值
+    const nextPackages = packages.map((item) => {
+      if (item.key !== pkg.key) return item;
+      if (editingLocale) {
+        const cur = item.locales[editingLocale] ?? emptyLocaleNames();
+        return {
+          ...item,
+          locales: {
+            ...item.locales,
+            [editingLocale]: { ...cur, sku_title: title },
+          },
+        };
+      }
+      return { ...item, sku_title: title };
+    });
     const ok = await persistPackages(nextPackages, {
       reload: false,
-      successText: "属性标题已保存",
+      successText: editingLocale ? "语言属性标题已保存" : "属性标题已保存",
     });
     if (!ok) return;
     setPackages(nextPackages);
@@ -718,6 +845,75 @@ export function ProductPackageSettings({
     }
   };
 
+  const copyAttrs = (pkg: DraftPackage) => {
+    if (editingLocale) return;
+    if (skuEdit) {
+      message.warning("请先保存或取消正在编辑的独立属性");
+      return;
+    }
+    if (skuTitleEdit) {
+      message.warning("请先保存或取消正在编辑的属性标题");
+      return;
+    }
+    const snapshot = snapshotIndependentAttrs(pkg);
+    if (!snapshot) {
+      message.warning("当前套餐没有可复制的独立属性");
+      return;
+    }
+    setAttrsClipboard(snapshot);
+    message.success(
+      `已复制「${snapshot.fromName}」的 ${snapshot.skus.length} 个独立属性，可到其他套餐粘贴`,
+    );
+  };
+
+  const pasteAttrs = (pkg: DraftPackage) => {
+    if (editingLocale) return;
+    if (!attrsClipboard) {
+      message.warning("请先在其他套餐点击「复制属性」");
+      return;
+    }
+    if (skuEdit) {
+      message.warning("请先保存或取消正在编辑的独立属性");
+      return;
+    }
+    if (skuTitleEdit) {
+      message.warning("请先保存或取消正在编辑的属性标题");
+      return;
+    }
+    if (attrsClipboard.fromKey === pkg.key) {
+      message.info("不能粘贴到复制来源的同一套餐");
+      return;
+    }
+
+    const doPaste = async () => {
+      const nextPackages = packages.map((item) =>
+        item.key === pkg.key
+          ? pasteIndependentAttrs(attrsClipboard, item)
+          : item,
+      );
+      const ok = await persistPackages(nextPackages, {
+        reload: false,
+        successText: "独立属性已粘贴",
+      });
+      if (!ok) return;
+      setPackages(nextPackages);
+      if (skuEdit?.packageKey === pkg.key) setSkuEdit(null);
+      if (skuTitleEdit?.packageKey === pkg.key) setSkuTitleEdit(null);
+    };
+
+    if (pkg.skus.some(hasSkuContent)) {
+      Modal.confirm({
+        title: "覆盖独立属性？",
+        content: `将用「${attrsClipboard.fromName}」的独立属性覆盖套餐「${pkg.name.trim() || "未命名套餐"}」现有属性（含属性标题与多语言覆盖）。`,
+        okText: "确认粘贴",
+        cancelText: "取消",
+        onOk: () => doPaste(),
+      });
+      return;
+    }
+    void doPaste();
+  };
+
   const editingLocale =
     contentLocale !== "default" ? contentLocale : null;
   const localeLabel = editingLocale
@@ -731,7 +927,7 @@ export function ProductPackageSettings({
         {!editingLocale ? (
           <span>
             {" "}
-            开启某个套餐的「独立选属性」后，套餐下方会显示独立属性表格，可直接添加、编辑、删除；行内「保存 / 删除」立即生效，未上传图片时默认使用套餐图片。表格上方的「属性标题」可点击「编辑」设置落地页展示标题。
+            开启某个套餐的「独立选属性」后，套餐下方会显示独立属性表格，可直接添加、编辑、删除；行内「保存 / 删除」立即生效，未上传图片时默认使用套餐图片。表格上方的「属性标题」可点击「编辑」设置落地页展示标题；也可先「复制属性」再在其他套餐「粘贴属性」（覆盖目标套餐现有属性）。
           </span>
         ) : null}
         {editingLocale ? (
@@ -742,7 +938,7 @@ export function ProductPackageSettings({
               {localeLabel} · {editingLocale}（
               {saPathPrefixForLocale(editingLocale, regionName)}）
             </b>{" "}
-            的套餐名称、外文名与图片；独立属性可在下方表格中点「编辑」修改该语言的名称和图片。价格/数量等仍在「默认」语言下修改。
+            的套餐名称、外文名与图片；独立属性可在下方表格中点「编辑」修改该语言的名称和图片，属性标题也可单独编辑（留空回退默认语言）。价格/数量等仍在「默认」语言下修改。
           </span>
         ) : addedLocales.length > 0 ? (
           <span>
@@ -858,7 +1054,11 @@ export function ProductPackageSettings({
                         autoFocus
                         maxLength={INPUT_LIMITS.name}
                         value={skuTitleEdit?.value ?? ""}
-                        placeholder="属性标题"
+                        placeholder={
+                          editingLocale
+                            ? `属性标题（${localeLabel}，留空回退默认）`
+                            : "属性标题"
+                        }
                         disabled={saving}
                         style={{ maxWidth: 320 }}
                         onChange={(e) =>
@@ -898,18 +1098,85 @@ export function ProductPackageSettings({
                           color: "#1f2d3d",
                         }}
                       >
-                        {row.sku_title.trim() || "属性标题"}
+                        {(() => {
+                          const localeTitle = editingLocale
+                            ? (row.locales[editingLocale]?.sku_title ?? "").trim()
+                            : "";
+                          const display =
+                            localeTitle ||
+                            row.sku_title.trim() ||
+                            "属性标题";
+                          return display;
+                        })()}
                       </span>
+                      {editingLocale &&
+                      !(row.locales[editingLocale]?.sku_title ?? "").trim() &&
+                      row.sku_title.trim() ? (
+                        <span style={{ fontSize: 12, color: "#8c9bab" }}>
+                          （跟随默认）
+                        </span>
+                      ) : null}
+                      <Button
+                        type="link"
+                        size="small"
+                        style={{ padding: 0 }}
+                        disabled={saving || Boolean(skuEdit)}
+                        onClick={() => editSkuTitle(row)}
+                      >
+                        编辑
+                      </Button>
                       {!disabled ? (
-                        <Button
-                          type="link"
-                          size="small"
-                          style={{ padding: 0 }}
-                          disabled={saving || Boolean(skuEdit)}
-                          onClick={() => editSkuTitle(row)}
+                        <Tooltip
+                          title={
+                            packageHasCopyableAttrs(row)
+                              ? "复制当前套餐的独立属性，可粘贴到同一商品的其他套餐"
+                              : "请先添加至少一条独立属性后再复制"
+                          }
                         >
-                          编辑
-                        </Button>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<CopyOutlined />}
+                            style={{ padding: 0 }}
+                            disabled={
+                              saving ||
+                              Boolean(skuEdit) ||
+                              Boolean(skuTitleEdit) ||
+                              !packageHasCopyableAttrs(row)
+                            }
+                            onClick={() => copyAttrs(row)}
+                          >
+                            复制属性
+                          </Button>
+                        </Tooltip>
+                      ) : null}
+                      {!disabled ? (
+                        <Tooltip
+                          title={
+                            !attrsClipboard
+                              ? "请先在其他套餐点击「复制属性」"
+                              : attrsClipboard.fromKey === row.key
+                                ? "不能粘贴到复制来源的同一套餐"
+                                : `粘贴「${attrsClipboard.fromName}」的 ${attrsClipboard.skus.length} 个独立属性（将覆盖当前套餐）`
+                          }
+                        >
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<SnippetsOutlined />}
+                            style={{ padding: 0 }}
+                            disabled={
+                              saving ||
+                              Boolean(skuEdit) ||
+                              Boolean(skuTitleEdit) ||
+                              !attrsClipboard ||
+                              attrsClipboard.fromKey === row.key
+                            }
+                            onClick={() => pasteAttrs(row)}
+                          >
+                            粘贴属性
+                          </Button>
+                        </Tooltip>
                       ) : null}
                     </>
                   )}
@@ -1213,7 +1480,8 @@ export function ProductPackageSettings({
                 </button>
                 {disabled ? (
                   <div style={{ fontSize: 12, color: "#8c9bab", marginTop: 6 }}>
-                    当前为 {localeLabel} 语言：可编辑独立属性的名称和图片；
+                    当前为 {localeLabel}{" "}
+                    语言：可编辑属性标题、独立属性的名称和图片；
                     添加/删除请在「默认」语言下操作。
                   </div>
                 ) : null}

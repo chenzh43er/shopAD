@@ -289,6 +289,21 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     if (typeof pkg.sku_title === "string" && pkg.sku_title.length > 120) {
       return c.json({ error: `第 ${index + 1} 个套餐属性标题过长` }, 400);
     }
+    if (pkg.locales && typeof pkg.locales === "object") {
+      for (const [locale, value] of Object.entries(pkg.locales)) {
+        if (
+          typeof value?.sku_title === "string" &&
+          value.sku_title.length > 120
+        ) {
+          return c.json(
+            {
+              error: `第 ${index + 1} 个套餐「${locale}」属性标题过长`,
+            },
+            400,
+          );
+        }
+      }
+    }
   }
 
   const supabase = createServiceClient(c.env);
@@ -559,6 +574,7 @@ packagesRoutes.put("/:productId/packages", async (c) => {
         name: string;
         name_external: string;
         image_url?: string | null;
+        sku_title?: string | null;
         skus?: Record<string, LocaleSkuValue>;
       }
     >
@@ -576,6 +592,7 @@ packagesRoutes.put("/:productId/packages", async (c) => {
         name: string;
         name_external: string;
         image_url?: string | null;
+        sku_title?: string | null;
         skus?: Record<string, LocaleSkuValue>;
       }
     > = {};
@@ -592,10 +609,12 @@ packagesRoutes.put("/:productId/packages", async (c) => {
           ...(skuImage ? { image_url: skuImage } : {}),
         };
       }
+      const skuTitle = value?.sku_title?.trim() || "";
       next[locale] = {
         name: value?.name?.trim() || "",
         name_external: value?.name_external?.trim() || "",
         image_url: value?.image_url?.trim() || null,
+        ...(skuTitle ? { sku_title: skuTitle } : {}),
         ...(Object.keys(skus).length > 0 ? { skus } : {}),
       };
     }
