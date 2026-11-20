@@ -197,6 +197,7 @@ await uploadJson(`products/${product.id}/en.json`, {
   facebook_pixel_id: null,
   google_conversion_id: null,
   google_label: null,
+  kwai_pixel_id: null,
   description:
     "Dimmable smart LED lamp with app control.\n\nEnergy-efficient lighting for living room and bedroom. Cash on delivery available.",
   description_entries: [

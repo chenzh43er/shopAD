@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Col,
   Form,
   Input,
   InputNumber,
   Modal,
+  Row,
   Select,
   Space,
   Spin,
@@ -33,11 +35,37 @@ type EditOrderFormValues = {
   product_id: string;
   package_id?: string;
   quantity: number;
+  /** 商品金额（不含运费） */
+  item_value: number;
+  /** 运费 */
+  shipping_fee: number;
+  /** 总金额 = 商品金额 + 运费（可手动覆盖） */
   total_amount: number;
   owner_member?: string;
   shipping_order_no?: string;
   remark?: string;
 };
+
+function resolveOrderProductAmount(order: Order): number {
+  const itemValue = Number(order.item_value);
+  if (Number.isFinite(itemValue) && itemValue >= 0) {
+    return Number(itemValue.toFixed(2));
+  }
+  const line = Number(order.unit_price) * Number(order.quantity || 0);
+  if (Number.isFinite(line) && line >= 0) return Number(line.toFixed(2));
+  const total = Number(order.total_amount) || 0;
+  const fee =
+    order.free_shipping === true
+      ? 0
+      : Number(order.shipping_fee) || 0;
+  return Number(Math.max(0, total - (Number.isFinite(fee) ? fee : 0)).toFixed(2));
+}
+
+function resolveOrderShippingFee(order: Order): number {
+  const fee = Number(order.shipping_fee);
+  if (Number.isFinite(fee) && fee >= 0) return Number(fee.toFixed(2));
+  return 0;
+}
 
 function packageItemCount(pkg: ProductPackageWithItems): number {
   const sum = (pkg.items ?? []).reduce((acc, item) => {
@@ -250,7 +278,6 @@ export function OrderEditModal({
   const [packagesEnabled, setPackagesEnabled] = useState(false);
   const [form] = Form.useForm<EditOrderFormValues>();
   const [gifts, setGifts] = useState<GiftEditRow[]>([]);
-  const totalAmount = Form.useWatch("total_amount", form);
   const watchedProvince = Form.useWatch("shipping_province", form);
   const watchedCity = Form.useWatch("shipping_city", form);
   const watchedDistrict = Form.useWatch("shipping_district", form);
@@ -265,32 +292,48 @@ export function OrderEditModal({
       }),
     [watchedDetail, watchedDistrict, watchedCity, watchedProvince],
   );
-  const totalAmountFieldWidth = useMemo(() => {
-    const amountText = Number.isFinite(Number(totalAmount))
-      ? Number(totalAmount).toFixed(2)
-      : "0.00";
-    const prefixText = order?.currency?.symbol_suffix
-      ? ""
-      : order?.currency?.symbol?.trim() || "¥";
-    const suffixText = order?.currency?.symbol_suffix
-      ? order?.currency?.symbol?.trim() || ""
-      : order?.currency?.code && order.currency.code !== "CNY"
+  const currencyAddon = useMemo(() => {
+    const symbol = order?.currency?.symbol?.trim() || "¥";
+    if (order?.currency?.symbol_suffix) {
+      return { addonBefore: undefined as string | undefined, addonAfter: symbol };
+    }
+    const code =
+      order?.currency?.code && order.currency.code !== "CNY"
         ? order.currency.code
-        : "";
-    const contentWidth =
-      amountText.length * 10 +
-      prefixText.length * 12 +
-      suffixText.length * 12 +
-      72;
-    return Math.max(260, Math.min(420, contentWidth));
-  }, [totalAmount, order?.currency]);
-  const syncTotalAmount = (price: number, qty?: number) => {
+        : undefined;
+    return { addonBefore: symbol, addonAfter: code };
+  }, [order?.currency]);
+
+  /** 按单价×数量同步商品金额，并重算总金额 = 商品 + 运费 */
+  const syncProductAndTotal = (price: number, qty?: number) => {
     const quantityValue = Math.max(
       1,
       Number(qty ?? form.getFieldValue("quantity")) || 1,
     );
+    const productAmount = Number((price * quantityValue).toFixed(2));
+    const fee = Number(form.getFieldValue("shipping_fee")) || 0;
     form.setFieldsValue({
-      total_amount: Number((price * quantityValue).toFixed(2)),
+      item_value: productAmount,
+      total_amount: Number((productAmount + fee).toFixed(2)),
+    });
+  };
+
+  const recalcTotalFromParts = (
+    productAmount?: number,
+    shippingFee?: number,
+  ) => {
+    const product =
+      productAmount ??
+      (Number.isFinite(Number(form.getFieldValue("item_value")))
+        ? Number(form.getFieldValue("item_value"))
+        : 0);
+    const fee =
+      shippingFee ??
+      (Number.isFinite(Number(form.getFieldValue("shipping_fee")))
+        ? Number(form.getFieldValue("shipping_fee"))
+        : 0);
+    form.setFieldsValue({
+      total_amount: Number((Math.max(0, product) + Math.max(0, fee)).toFixed(2)),
     });
   };
 
@@ -351,7 +394,7 @@ export function OrderEditModal({
         product_id: productId,
         package_id: selected.id,
       });
-      syncTotalAmount(nextUnitPrice);
+      syncProductAndTotal(nextUnitPrice);
     } else {
       const nextUnitPrice = Number(product.price) || 0;
       setPackageCount(1);
@@ -360,7 +403,7 @@ export function OrderEditModal({
         product_id: productId,
         package_id: undefined,
       });
-      syncTotalAmount(nextUnitPrice);
+      syncProductAndTotal(nextUnitPrice);
     }
 
     try {
@@ -378,7 +421,7 @@ export function OrderEditModal({
     setPackageCount(packageItemCount(pkg));
     setUnitPrice(nextUnitPrice);
     form.setFieldsValue({ package_id: packageId });
-    syncTotalAmount(nextUnitPrice);
+    syncProductAndTotal(nextUnitPrice);
   };
 
   const initFromOrder = async (data: Order) => {
@@ -437,6 +480,8 @@ export function OrderEditModal({
       product_id: data.product_id ?? undefined,
       package_id: data.package_id ?? undefined,
       quantity: Math.max(1, Number(data.quantity) || 1),
+      item_value: resolveOrderProductAmount(data),
+      shipping_fee: resolveOrderShippingFee(data),
       total_amount: Number(data.total_amount) || 0,
       owner_member: data.owner_member ?? "",
       shipping_order_no: data.shipping_order_no ?? "",
@@ -561,6 +606,8 @@ export function OrderEditModal({
             province: values.shipping_province,
           }) || null,
         quantity: values.quantity,
+        item_value: values.item_value,
+        shipping_fee: values.shipping_fee,
         total_amount: values.total_amount,
         owner_member: values.owner_member?.trim() || null,
         shipping_order_no: values.shipping_order_no?.trim() || null,
@@ -613,7 +660,7 @@ export function OrderEditModal({
     >
       <Spin spinning={loading}>
         <p style={{ color: "#666", marginBottom: 12 }}>
-          打开时单价、件数、预估总金额均按订单快照展示；更换商品或套餐后，单价与件数会按商品实际数据同步并重算金额。
+          打开时单价、件数、商品金额、运费、总金额均按订单快照展示；更换商品/套餐或改数量时，商品金额按单价×数量同步，总金额按「商品金额 + 运费」重算。三者均可单独编辑。
         </p>
         <Form form={form} layout="vertical" disabled={loading || !order}>
           <Space wrap style={{ width: "100%" }} size="middle">
@@ -751,37 +798,73 @@ export function OrderEditModal({
                 precision={0}
                 style={{ width: "100%" }}
                 onChange={(value) => {
-                  syncTotalAmount(unitPrice, Number(value) || 1);
+                  syncProductAndTotal(unitPrice, Number(value) || 1);
                 }}
               />
             </Form.Item>
-            <Form.Item
-              name="total_amount"
-              label="预估总金额"
-              rules={[{ required: true, message: "请填写预估总金额" }]}
-              style={{ width: totalAmountFieldWidth, minWidth: 260, flex: "1 1 auto" }}
-            >
-              <InputNumber
-                min={0}
-                precision={2}
-                controls={false}
-                style={{ width: "100%" }}
-                addonBefore={
-                  order?.currency?.symbol_suffix
-                    ? undefined
-                    : order?.currency?.symbol?.trim() || "¥"
-                }
-                addonAfter={
-                  order?.currency?.symbol_suffix
-                    ? order?.currency?.symbol?.trim() || undefined
-                    : order?.currency?.code &&
-                        order.currency.code !== "CNY"
-                      ? order.currency.code
-                      : undefined
-                }
-              />
-            </Form.Item>
           </Space>
+          <Row gutter={16}>
+            <Col xs={24} sm={8}>
+              <Form.Item
+                name="item_value"
+                label="商品金额"
+                rules={[{ required: true, message: "请填写商品金额" }]}
+              >
+                <InputNumber
+                  min={0}
+                  precision={2}
+                  controls={false}
+                  style={{ width: "100%" }}
+                  addonBefore={currencyAddon.addonBefore}
+                  addonAfter={currencyAddon.addonAfter}
+                  onChange={(value) => {
+                    recalcTotalFromParts(Number(value) || 0);
+                  }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={8}>
+              <Form.Item
+                name="shipping_fee"
+                label="运费"
+                rules={[{ required: true, message: "请填写运费" }]}
+              >
+                <InputNumber
+                  min={0}
+                  precision={2}
+                  controls={false}
+                  style={{ width: "100%" }}
+                  addonBefore={currencyAddon.addonBefore}
+                  addonAfter={currencyAddon.addonAfter}
+                  onChange={(value) => {
+                    recalcTotalFromParts(undefined, Number(value) || 0);
+                  }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={8}>
+              <Form.Item
+                name="total_amount"
+                label="总金额"
+                rules={[{ required: true, message: "请填写总金额" }]}
+              >
+                <InputNumber
+                  min={0}
+                  precision={2}
+                  controls={false}
+                  style={{ width: "100%" }}
+                  addonBefore={currencyAddon.addonBefore}
+                  addonAfter={currencyAddon.addonAfter}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <p style={{ color: "#888", margin: "-8px 0 16px", fontSize: 12 }}>
+            商品金额不含运费；改数量/商品会按单价×数量同步。总金额默认 =
+            商品金额 + 运费，可单独覆盖
+            {order?.free_shipping === true ? "。当前订单标记为包邮" : ""}
+            。
+          </p>
           <Space wrap style={{ width: "100%" }} size="middle">
             <Form.Item
               name="owner_member"

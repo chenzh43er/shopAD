@@ -298,6 +298,8 @@ export interface Product {
   google_conversion_id: string | null;
   /** Google Label */
   google_label: string | null;
+  /** Kwai像素id，多个用#分隔 */
+  kwai_pixel_id: string | null;
   /** 附加HTML代码列表（落地页按顺序注入） */
   extra_html: string[];
   /** 规格值 / 后端SKU（导出拼成「sku * 数量」） */
@@ -312,6 +314,8 @@ export interface Product {
   sales_count: number;
   /** 默认重量（物流导出） */
   weight: number;
+  /** 是否包邮；默认 false（不包邮） */
+  free_shipping: boolean;
   /** 关联地区 id */
   region_id: string | null;
   /** 关联地区（查询时附带） */
@@ -425,6 +429,7 @@ export interface ProductLocale {
   facebook_pixel_id: string | null;
   google_conversion_id: string | null;
   google_label: string | null;
+  kwai_pixel_id: string | null;
   description: string | null;
   description_entries: string[];
   cover_url: string | null;
@@ -441,6 +446,7 @@ export type UpsertProductLocaleInput = {
   facebook_pixel_id?: string | null;
   google_conversion_id?: string | null;
   google_label?: string | null;
+  kwai_pixel_id?: string | null;
   description?: string | null;
   description_entries?: string[];
   cover_url?: string | null;
@@ -706,6 +712,8 @@ export interface Order {
   express_type: string | null;
   shipping_fee: number | null;
   other_fee: number | null;
+  /** 下单时是否包邮快照；null=历史订单未记录 */
+  free_shipping: boolean | null;
   /** 套餐内商品件数快照（下单时写入；用于物流/财务「中文属性*数量」） */
   package_count: number;
   weight: number | null;
@@ -919,6 +927,8 @@ export interface AddressRegion {
   name: string;
   level: number;
   sort_order: number;
+  /** 实际运费；通常仅叶子有值 */
+  actual_shipping_fee: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -932,6 +942,8 @@ export interface AddressRegionPath {
   /** 默认语言路径（切换语言时对照） */
   default_path?: string[];
   level: number;
+  /** 实际运费（导入「实际运费」列；缺省为 null） */
+  actual_shipping_fee: number | null;
 }
 
 export interface CreateAddressLibraryInput {
@@ -950,10 +962,13 @@ export interface UpdateAddressLibraryInput {
 /**
  * 导入地址库：按地区名称 upsert 库，并用 paths 全量覆盖地域树。
  * paths 每一项为 [一级, 二级, 三级, ...]，级数可大于 3。
+ * path_fees 与 paths 等长；缺省或对应项为 null 表示该行无实际运费。
  */
 export interface ImportAddressLibraryInput {
   name: string;
   paths: string[][];
+  /** 与 paths 一一对应的实际运费；可省略 */
+  path_fees?: Array<number | null>;
 }
 
 export interface ImportAddressLibraryResult {
@@ -1032,6 +1047,7 @@ export interface CreateProductInput {
   facebook_pixel_id?: string | null;
   google_conversion_id?: string | null;
   google_label?: string | null;
+  kwai_pixel_id?: string | null;
   extra_html?: string[];
   sku_code?: string | null;
   sku_display?: string | null;
@@ -1039,6 +1055,8 @@ export interface CreateProductInput {
   /** 虚拟销量 */
   sales_count?: number;
   weight?: number;
+  /** 是否包邮；默认 false */
+  free_shipping?: boolean;
   region_id?: string | null;
   domain_id?: string | null;
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
@@ -1060,6 +1078,7 @@ export interface UpdateProductInput {
   facebook_pixel_id?: string | null;
   google_conversion_id?: string | null;
   google_label?: string | null;
+  kwai_pixel_id?: string | null;
   extra_html?: string[];
   sku_code?: string | null;
   sku_display?: string | null;
@@ -1067,6 +1086,8 @@ export interface UpdateProductInput {
   /** 虚拟销量 */
   sales_count?: number;
   weight?: number;
+  /** 是否包邮 */
+  free_shipping?: boolean;
   region_id?: string | null;
   domain_id?: string | null;
   /** 所属人（profiles.id 列表）；仅超级管理员可指定，可多名 */
@@ -1091,7 +1112,14 @@ export interface UpdateOrderInput {
   owner_member?: string | null;
   shipping_order_no?: string | null;
   remark?: string | null;
-  /** 手动调整预估总金额；未传时数量/商品/套餐变更仍按单价×数量重算 */
+  /** 商品金额（对应 item_value）；与运费分开编辑 */
+  item_value?: number | null;
+  /** 运费；包邮订单可传 0 */
+  shipping_fee?: number | null;
+  /**
+   * 订单总金额（商品金额 + 运费）。
+   * 未传时：数量/商品/套餐/商品金额/运费变更仍按 商品金额+运费 重算。
+   */
   total_amount?: number;
   /**
    * 订单赠品快照。传空数组或 null 表示清空。

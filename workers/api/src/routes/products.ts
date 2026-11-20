@@ -159,7 +159,7 @@ const PRODUCT_SELECT =
 
 /** 列表页：排除 description / gallery / detail / extra_html 等大字段 */
 const PRODUCT_LIST_SELECT =
-  "id, name, price, currency_id, domain_id, cover_url, status, link_suffix, title_external, facebook_pixel_id, google_conversion_id, google_label, sku_code, sku_display, packages_enabled, sales_count, weight, region_id, created_by, updated_by, created_at, updated_at, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix), domain:domains!products_domain_id_fkey(id, host, name, remark)";
+  "id, name, price, currency_id, domain_id, cover_url, status, link_suffix, title_external, facebook_pixel_id, google_conversion_id, google_label, kwai_pixel_id, sku_code, sku_display, packages_enabled, sales_count, weight, free_shipping, region_id, created_by, updated_by, created_at, updated_at, region:address_libraries!products_region_id_fkey(id, name, remark), currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix), domain:domains!products_domain_id_fkey(id, host, name, remark)";
 
 /** 下拉/筛选项：仅 id + name */
 const PRODUCT_OPTIONS_SELECT = "id, name";
@@ -843,6 +843,7 @@ productsRoutes.post("/:id/copy", async (c) => {
     facebook_pixel_id: source.facebook_pixel_id ?? null,
     google_conversion_id: source.google_conversion_id ?? null,
     google_label: source.google_label ?? null,
+    kwai_pixel_id: source.kwai_pixel_id ?? null,
     extra_html: source.extra_html ?? [],
     description_entries:
       normalizeDescriptionEntries(source.description_entries) ?? [],
@@ -855,6 +856,7 @@ productsRoutes.post("/:id/copy", async (c) => {
         : null,
     sales_count: Math.max(0, Math.floor(Number(source.sales_count ?? 0))),
     weight: Number(source.weight ?? 1),
+    free_shipping: Boolean(source.free_shipping),
     region_id: source.region_id ?? null,
     currency_id: source.currency_id ?? null,
     domain_id: source.domain_id ?? null,
@@ -1417,6 +1419,7 @@ productsRoutes.post("/", async (c) => {
     facebook_pixel_id: body.facebook_pixel_id?.trim() || null,
     google_conversion_id: body.google_conversion_id?.trim() || null,
     google_label: body.google_label?.trim() || null,
+    kwai_pixel_id: body.kwai_pixel_id?.trim() || null,
     extra_html: extraHtml as string[] | string,
     description_entries: descriptionEntries,
     sku_code: body.sku_code?.trim() || null,
@@ -1424,6 +1427,7 @@ productsRoutes.post("/", async (c) => {
     packages_enabled: body.packages_enabled ?? false,
     sales_count: body.sales_count ?? 0,
     weight: body.weight ?? 1,
+    free_shipping: Boolean(body.free_shipping),
     region_id: regionResolved.regionId,
     currency_id: currencyResolved.currencyId,
     domain_id: domainResolved.domainId,
@@ -1567,6 +1571,9 @@ productsRoutes.put("/:id", async (c) => {
   if (body.google_label !== undefined) {
     patch.google_label = body.google_label?.trim() || null;
   }
+  if (body.kwai_pixel_id !== undefined) {
+    patch.kwai_pixel_id = body.kwai_pixel_id?.trim() || null;
+  }
   if (body.extra_html !== undefined) {
     const normalized = normalizeExtraHtml(body.extra_html);
     if (normalized === null) {
@@ -1609,6 +1616,9 @@ productsRoutes.put("/:id", async (c) => {
       return c.json({ error: "重量无效" }, 400);
     }
     patch.weight = body.weight;
+  }
+  if (body.free_shipping !== undefined) {
+    patch.free_shipping = Boolean(body.free_shipping);
   }
   if (body.region_id !== undefined) {
     patch.region_id = body.region_id;

@@ -1617,10 +1617,28 @@ export function OrdersPage() {
         ]
       : []),
     {
-      title: "金额",
+      title: "总金额",
       dataIndex: "total_amount",
       width: 120,
       render: (v: number, row) => formatMoney(v, row.currency),
+    },
+    {
+      title: "运费",
+      key: "shipping_fee",
+      width: 100,
+      render: (_: unknown, row) => {
+        if (row.free_shipping === true) {
+          return formatMoney(0, row.currency);
+        }
+        const fee =
+          typeof row.shipping_fee === "number"
+            ? row.shipping_fee
+            : Number(row.shipping_fee);
+        return formatMoney(
+          Number.isFinite(fee) ? fee : 0,
+          row.currency,
+        );
+      },
     },
     {
       title: "状态",

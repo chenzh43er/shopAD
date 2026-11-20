@@ -93,12 +93,15 @@ interface FormValues {
   facebook_pixel_id?: string;
   google_conversion_id?: string;
   google_label?: string;
+  kwai_pixel_id?: string;
   extra_html?: string[];
   sku_code?: string;
   sku_display?: string;
   packages_enabled?: boolean;
   sales_count?: number;
   weight?: number;
+  /** 是否包邮；默认 false */
+  free_shipping?: boolean;
   region_id?: string | null;
   currency_id?: string | null;
   domain_id?: string | null;
@@ -366,12 +369,14 @@ export function ProductFormPage() {
           facebook_pixel_id: data.facebook_pixel_id ?? undefined,
           google_conversion_id: data.google_conversion_id ?? undefined,
           google_label: data.google_label ?? undefined,
+          kwai_pixel_id: data.kwai_pixel_id ?? undefined,
           extra_html: normalizeExtraHtmlList(data.extra_html),
           sku_code: data.sku_code ?? undefined,
           sku_display: data.sku_display ?? undefined,
           packages_enabled: data.packages_enabled ?? false,
           sales_count: Number(data.sales_count ?? 0),
           weight: Number(data.weight ?? 1),
+          free_shipping: Boolean(data.free_shipping),
           region_id: data.region_id ?? undefined,
           currency_id: data.currency_id ?? undefined,
           domain_id: data.domain_id ?? undefined,
@@ -500,6 +505,7 @@ export function ProductFormPage() {
       facebook_pixel_id: values.facebook_pixel_id?.trim() || null,
       google_conversion_id: values.google_conversion_id?.trim() || null,
       google_label: values.google_label?.trim() || null,
+      kwai_pixel_id: values.kwai_pixel_id?.trim() || null,
       extra_html: (values.extra_html ?? [])
         .map((item) => item?.trim() || "")
         .filter(Boolean)
@@ -509,6 +515,7 @@ export function ProductFormPage() {
       packages_enabled: Boolean(values.packages_enabled),
       sales_count: Math.max(0, Math.floor(Number(values.sales_count ?? 0))),
       weight: values.weight ?? 1,
+      free_shipping: Boolean(values.free_shipping),
       region_id: values.region_id || null,
       currency_id: values.currency_id || null,
       domain_id: values.domain_id || null,
@@ -644,6 +651,7 @@ export function ProductFormPage() {
           facebook_pixel_id: null,
           google_conversion_id: null,
           google_label: null,
+          kwai_pixel_id: null,
           description: null,
           description_entries: [],
           cover_url: null,
@@ -706,6 +714,7 @@ export function ProductFormPage() {
           facebook_pixel_id: draft.facebook_pixel_id.trim() || null,
           google_conversion_id: draft.google_conversion_id.trim() || null,
           google_label: draft.google_label.trim() || null,
+          kwai_pixel_id: draft.kwai_pixel_id.trim() || null,
           description: draft.description.trim() || null,
           description_entries: draft.description_entries,
           cover_url: draft.cover_url,
@@ -861,6 +870,7 @@ export function ProductFormPage() {
         price: 0,
         sales_count: 0,
         weight: 1,
+        free_shipping: false,
         packages_enabled: false,
         description_entries: [],
         extra_html: [],
@@ -1061,6 +1071,20 @@ export function ProductFormPage() {
           </Form.Item>
         </Col>
       </Row>
+      <Row gutter={24} align="top">
+        <Col xs={24} md={12}>
+          <Form.Item
+            label="Kwai像素id"
+            name="kwai_pixel_id"
+            extra="多个用 # 隔开"
+          >
+            <Input
+              maxLength={INPUT_LIMITS.mediumText}
+              placeholder="请输入，多个用#隔开"
+            />
+          </Form.Item>
+        </Col>
+      </Row>
       <Form.Item
         label="附加HTML代码"
         extra={`可添加多段，落地页按顺序注入，最多 ${MAX_EXTRA_HTML} 条`}
@@ -1151,6 +1175,14 @@ export function ProductFormPage() {
         extra="开启后可在「套餐设置」中配置多档套餐；关闭则前台不展示套餐选项"
       >
         <Switch />
+      </Form.Item>
+      <Form.Item
+        label="是否包邮"
+        name="free_shipping"
+        valuePropName="checked"
+        extra="默认不包邮。包邮仅作商品配置与订单快照，不改变既有订单总价计算"
+      >
+        <Switch checkedChildren="包邮" unCheckedChildren="不包邮" />
       </Form.Item>
       <Form.Item
         label="商品描述条目"

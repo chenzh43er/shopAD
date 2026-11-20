@@ -34,6 +34,7 @@ export type LocaleDraft = {
   facebook_pixel_id: string;
   google_conversion_id: string;
   google_label: string;
+  kwai_pixel_id: string;
   description: string;
   description_entries: string[];
   cover_url: string | null;
@@ -47,6 +48,7 @@ export function emptyLocaleDraft(): LocaleDraft {
     facebook_pixel_id: "",
     google_conversion_id: "",
     google_label: "",
+    kwai_pixel_id: "",
     description: "",
     description_entries: [],
     cover_url: null,
@@ -61,6 +63,7 @@ export function localeFromApi(row: ProductLocale): LocaleDraft {
     facebook_pixel_id: row.facebook_pixel_id ?? "",
     google_conversion_id: row.google_conversion_id ?? "",
     google_label: row.google_label ?? "",
+    kwai_pixel_id: row.kwai_pixel_id ?? "",
     description: row.description ?? "",
     description_entries: Array.isArray(row.description_entries)
       ? row.description_entries
@@ -445,6 +448,7 @@ export function ProductLocaleEditor({
         facebook_pixel_id: draft.facebook_pixel_id.trim() || null,
         google_conversion_id: draft.google_conversion_id.trim() || null,
         google_label: draft.google_label.trim() || null,
+        kwai_pixel_id: draft.kwai_pixel_id.trim() || null,
         description: draft.description.trim() || null,
         description_entries: draft.description_entries
           .map((s) => s.trim())
@@ -512,6 +516,18 @@ export function ProductLocaleEditor({
             value={draft.google_label}
             onChange={(e) => patch({ google_label: e.target.value })}
             placeholder="该语言 Label"
+          />
+        </Form.Item>
+
+        <Form.Item
+          label="Kwai像素id"
+          extra="多个用 # 隔开；留空则跟随默认"
+        >
+          <Input
+            maxLength={INPUT_LIMITS.mediumText}
+            value={draft.kwai_pixel_id}
+            onChange={(e) => patch({ kwai_pixel_id: e.target.value })}
+            placeholder="该语言像素ID，多个用#隔开"
           />
         </Form.Item>
 

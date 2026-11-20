@@ -64,6 +64,7 @@ const enLocale = {
   facebook_pixel_id: null,
   google_conversion_id: null,
   google_label: null,
+  kwai_pixel_id: null,
   description:
     "Expandable Garden Hose Pipe\n\nStretch up to 3× length. Lightweight, tangle-free, great for garden watering, car wash and outdoor cleaning. Cash on delivery available.",
   description_entries: [

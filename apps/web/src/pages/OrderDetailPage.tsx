@@ -362,7 +362,19 @@ export function OrderDetailPage() {
     order.status === "awaiting_confirm" ||
     order.status === "awaiting_shipment";
   const canRevert = canRevertCodOrder(paymentType, order.status);
-  const lineTotal = Number(order.unit_price) * Number(order.quantity || 0);
+  const productAmount = (() => {
+    const itemValue = Number(order.item_value);
+    if (Number.isFinite(itemValue) && itemValue >= 0) {
+      return Number(itemValue.toFixed(2));
+    }
+    const line = Number(order.unit_price) * Number(order.quantity || 0);
+    return Number.isFinite(line) && line >= 0 ? Number(line.toFixed(2)) : 0;
+  })();
+  const shippingFeeDisplay = (() => {
+    const fee = Number(order.shipping_fee);
+    if (Number.isFinite(fee) && fee >= 0) return fee;
+    return order.free_shipping === true ? 0 : null;
+  })();
   const giftItems = buildGiftDisplayItems(order.gift_snapshot);
   const backPath = fromPath || resolveCodListPath(order);
 
@@ -451,13 +463,35 @@ export function OrderDetailPage() {
         <Descriptions.Item label="单价">
           {formatMoney(order.unit_price, order.currency)}
         </Descriptions.Item>
-        <Descriptions.Item label="小计">
-          {formatMoney(lineTotal, order.currency)}
-        </Descriptions.Item>
         <Descriptions.Item label="审核状态">
           <Tag color={reviewColor[reviewStatus]}>
             {REVIEW_STATUS_LABELS[reviewStatus]}
           </Tag>
+        </Descriptions.Item>
+        <Descriptions.Item label="商品金额">
+          {formatMoney(productAmount, order.currency)}
+        </Descriptions.Item>
+        <Descriptions.Item label="运费">
+          {shippingFeeDisplay != null
+            ? order.free_shipping === true && shippingFeeDisplay === 0
+              ? `${formatMoney(0, order.currency)}（包邮）`
+              : formatMoney(shippingFeeDisplay, order.currency)
+            : "—"}
+        </Descriptions.Item>
+        <Descriptions.Item label="总金额">
+          {formatMoney(order.total_amount, order.currency)}
+        </Descriptions.Item>
+        <Descriptions.Item label="是否包邮">
+          {order.free_shipping === true
+            ? "包邮"
+            : order.free_shipping === false
+              ? "不包邮"
+              : "—"}
+        </Descriptions.Item>
+        <Descriptions.Item label="代收货款">
+          {order.cod_amount != null
+            ? formatMoney(order.cod_amount, order.currency)
+            : "—"}
         </Descriptions.Item>
         {(order.status === "cancelled" ||
           reviewStatus === "rejected" ||
@@ -485,14 +519,6 @@ export function OrderDetailPage() {
         </Descriptions.Item>
         <Descriptions.Item label="支付方式">
           {order.payment_method || "—"}
-        </Descriptions.Item>
-        <Descriptions.Item label="订单总金额">
-          {formatMoney(order.total_amount, order.currency)}
-        </Descriptions.Item>
-        <Descriptions.Item label="代收货款">
-          {order.cod_amount != null
-            ? formatMoney(order.cod_amount, order.currency)
-            : "—"}
         </Descriptions.Item>
         <Descriptions.Item label="创建人">
           {formatActor(order.creator)}

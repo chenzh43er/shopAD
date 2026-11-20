@@ -2,6 +2,13 @@ import * as XLSX from "xlsx";
 
 const LEVEL_HEADER_RE = /^(\d+)\s*级区域$/;
 const PREFERRED_SHEET_HINTS = ["导入", "地址库", "后台"];
+const FEE_HEADER_ALIASES = [
+  "实际运费",
+  "运费",
+  "ACTUAL SHIPPING FEE",
+  "SHIPPING FEE",
+  "FREIGHT",
+];
 
 /** 极兔 Sheet1 列名兜底映射 */
 const LEGACY_LEVEL_HEADERS = [
@@ -54,6 +61,25 @@ function detectLevelColumns(headers: string[]): number[] | null {
   return cols.length >= 1 ? cols : null;
 }
 
+function detectFeeColumn(headers: string[]): number | null {
+  const upperAliases = FEE_HEADER_ALIASES.map((a) => a.toUpperCase());
+  const col = headers.findIndex((h) => upperAliases.includes(h.toUpperCase()));
+  return col >= 0 ? col : null;
+}
+
+/** 解析运费单元格；空 / 无法识别 → null */
+function parseFeeCell(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  const text = cellText(value).replace(/,/g, "");
+  if (!text) return null;
+  const n = Number(text);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
 function pickSheet(workbook: XLSX.WorkBook): XLSX.WorkSheet {
   const names = workbook.SheetNames;
   if (names.length === 0) {
@@ -82,14 +108,19 @@ function pickSheet(workbook: XLSX.WorkBook): XLSX.WorkSheet {
 
 export type ParseAddressRegionExcelResult = {
   paths: string[][];
+  /** 与 paths 等长；无「实际运费」列或单元格为空时为 null */
+  pathFees: Array<number | null>;
   maxLevel: number;
   sheetName: string;
+  /** 是否识别到运费列 */
+  hasFeeColumn: boolean;
 };
 
 /**
  * 解析地区区域 Excel。
- * 支持表头「一级区域 / 二级区域 / 三级区域 / 四级区域…」（二级及以上均可），
+ * 支持表头「一级区域 / 二级区域 / 三级区域 / …」及可选「实际运费」，
  * 以及 PROVINSI / KABUPATEN / DESTINASI KECAMATAN。
+ * 无实际运费列或缺值时 pathFees 对应项为 null，仍可正常导入区域。
  */
 export function parseAddressRegionExcel(
   data: ArrayBuffer,
@@ -103,10 +134,11 @@ export function parseAddressRegionExcel(
     "";
   const sheet = pickSheet(workbook);
 
+  // raw:true 保留数字运费；表头仍走 normalize
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
     defval: "",
-    raw: false,
+    raw: true,
   });
 
   if (rows.length < 2) {
@@ -121,7 +153,9 @@ export function parseAddressRegionExcel(
     );
   }
 
+  const feeCol = detectFeeColumn(headers);
   const paths: string[][] = [];
+  const pathFees: Array<number | null> = [];
   let maxLevel = 0;
 
   for (let r = 1; r < rows.length; r++) {
@@ -135,6 +169,7 @@ export function parseAddressRegionExcel(
     if (parts.length === 0) continue;
     maxLevel = Math.max(maxLevel, parts.length);
     paths.push(parts);
+    pathFees.push(feeCol === null ? null : parseFeeCell(row[feeCol]));
   }
 
   if (paths.length === 0) {
@@ -143,8 +178,10 @@ export function parseAddressRegionExcel(
 
   return {
     paths,
+    pathFees,
     maxLevel,
     sheetName:
       workbook.SheetNames.find((n) => workbook.Sheets[n] === sheet) ?? sheetName,
+    hasFeeColumn: feeCol !== null,
   };
 }

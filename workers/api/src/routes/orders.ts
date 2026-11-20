@@ -88,10 +88,10 @@ async function fetchAllExportRows(
 }
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, shipping_fee, free_shipping, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 /** 带地区筛选时用 !inner，避免把地区展开成超大 product_id IN (...) */
 const ORDER_LIST_SELECT_REGION =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, shipping_fee, free_shipping, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
 function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
@@ -2915,9 +2915,63 @@ ordersRoutes.patch("/:id", async (c) => {
     touched = true;
   }
 
+  const parseNonNegMoney = (
+    value: unknown,
+    label: string,
+  ): { ok: true; value: number } | { ok: false; error: string } => {
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n) || n < 0) {
+      return { ok: false, error: `${label}须为非负数` };
+    }
+    return { ok: true, value: Number(n.toFixed(2)) };
+  };
+
+  let shippingFee =
+    typeof before.shipping_fee === "number"
+      ? before.shipping_fee
+      : Number(before.shipping_fee) || 0;
+  if (body.shipping_fee !== undefined) {
+    if (body.shipping_fee === null) {
+      patch.shipping_fee = null;
+      shippingFee = 0;
+      touched = true;
+    } else {
+      const parsed = parseNonNegMoney(body.shipping_fee, "运费");
+      if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+      patch.shipping_fee = parsed.value;
+      shippingFee = parsed.value;
+      touched = true;
+    }
+  }
+
+  let itemValue =
+    typeof before.item_value === "number"
+      ? before.item_value
+      : Number(before.item_value);
+  if (!Number.isFinite(itemValue) || itemValue < 0) {
+    itemValue = Number((unitPrice * quantity).toFixed(2));
+  }
+  if (body.item_value !== undefined) {
+    if (body.item_value === null) {
+      patch.item_value = null;
+      itemValue = Number((unitPrice * quantity).toFixed(2));
+      touched = true;
+    } else {
+      const parsed = parseNonNegMoney(body.item_value, "商品金额");
+      if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+      patch.item_value = parsed.value;
+      itemValue = parsed.value;
+      touched = true;
+    }
+  } else if (productIdChanging || packageIdChanging || body.quantity !== undefined) {
+    // 更换商品/套餐或改数量且未显式传商品金额时，按单价×数量同步
+    itemValue = Number((unitPrice * quantity).toFixed(2));
+    patch.item_value = itemValue;
+    touched = true;
+  }
+
   const applyTotalAmount = (totalAmount: number) => {
     patch.total_amount = totalAmount;
-    patch.item_value = totalAmount;
     if (before.payment_type === "cod") {
       patch.cod_amount = totalAmount;
     }
@@ -2925,24 +2979,22 @@ ordersRoutes.patch("/:id", async (c) => {
   };
 
   if (body.total_amount !== undefined) {
-    const totalAmount =
-      typeof body.total_amount === "number"
-        ? body.total_amount
-        : Number(body.total_amount);
-    if (!Number.isFinite(totalAmount) || totalAmount < 0) {
-      return c.json({ error: "预估总金额须为非负数" }, 400);
+    const parsed = parseNonNegMoney(body.total_amount, "总金额");
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    applyTotalAmount(parsed.value);
+    // 未单独传商品金额时，用 总金额-运费 回填 item_value，避免物品价值被写成含运费
+    if (body.item_value === undefined && patch.item_value === undefined) {
+      const derived = Number(Math.max(0, parsed.value - shippingFee).toFixed(2));
+      patch.item_value = derived;
     }
-    applyTotalAmount(Number(totalAmount.toFixed(2)));
   } else if (
     body.quantity !== undefined ||
+    body.shipping_fee !== undefined ||
+    body.item_value !== undefined ||
     productIdChanging ||
     packageIdChanging
   ) {
-    const shippingFee =
-      typeof before.shipping_fee === "number"
-        ? before.shipping_fee
-        : Number(before.shipping_fee) || 0;
-    applyTotalAmount(Number((unitPrice * quantity + shippingFee).toFixed(2)));
+    applyTotalAmount(Number((itemValue + shippingFee).toFixed(2)));
   }
 
   // 结构化地址变更且未显式传 shipping_address 时自动拼接
@@ -3001,6 +3053,8 @@ ordersRoutes.patch("/:id", async (c) => {
     sku_code: before.sku_code,
     quantity: before.quantity,
     unit_price: before.unit_price,
+    item_value: before.item_value,
+    shipping_fee: before.shipping_fee,
     total_amount: before.total_amount,
     shipping_province: before.shipping_province,
     shipping_city: before.shipping_city,
@@ -3022,6 +3076,8 @@ ordersRoutes.patch("/:id", async (c) => {
     sku_code: data.sku_code,
     quantity: data.quantity,
     unit_price: data.unit_price,
+    item_value: data.item_value,
+    shipping_fee: data.shipping_fee,
     total_amount: data.total_amount,
     shipping_province: data.shipping_province,
     shipping_city: data.shipping_city,

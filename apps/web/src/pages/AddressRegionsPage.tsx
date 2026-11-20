@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
+  Checkbox,
   Drawer,
   Form,
   Input,
@@ -66,6 +67,8 @@ export function AddressRegionsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<AddressLibrary | null>(null);
   const [createFile, setCreateFile] = useState<File | null>(null);
+  /** 新建导入是否写入实际运费；默认否，避免影响现网免邮 */
+  const [createIncludeFees, setCreateIncludeFees] = useState(false);
   const [form] = Form.useForm<CreateForm>();
   const [editForm] = Form.useForm<CreateForm>();
 
@@ -90,6 +93,8 @@ export function AddressRegionsPage() {
   const [importNewLocaleName, setImportNewLocaleName] = useState("");
   const [importNewLocaleCode, setImportNewLocaleCode] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
+  /** 默认语言导入是否写入实际运费；默认否（仅后台预留，未接入前台计价） */
+  const [importIncludeFees, setImportIncludeFees] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,6 +174,7 @@ export function AddressRegionsPage() {
   const importPathsToLibrary = async (
     libraryId: string,
     file: File,
+    includeFees = false,
   ): Promise<ImportAddressLibraryResult> => {
     const buffer = await file.arrayBuffer();
     const parsed = parseAddressRegionExcel(buffer);
@@ -176,7 +182,13 @@ export function AddressRegionsPage() {
       `/api/address-libraries/${libraryId}/import`,
       {
         method: "POST",
-        body: JSON.stringify({ paths: parsed.paths }),
+        body: JSON.stringify({
+          paths: parsed.paths,
+          // 未勾选时不传运费，全部为 null（现网 ID 免邮不受影响）
+          path_fees: includeFees
+            ? parsed.pathFees
+            : parsed.paths.map(() => null),
+        }),
       },
     );
   };
@@ -184,6 +196,7 @@ export function AddressRegionsPage() {
   const openCreate = () => {
     form.resetFields();
     setCreateFile(null);
+    setCreateIncludeFees(false);
     setCreateOpen(true);
   };
 
@@ -221,12 +234,14 @@ export function AddressRegionsPage() {
     setImportNewLocaleName("");
     setImportNewLocaleCode("");
     setImportFile(null);
+    setImportIncludeFees(false);
   };
 
   const closeImportModal = () => {
     if (importing) return;
     setImportModal(null);
     setImportFile(null);
+    setImportIncludeFees(false);
   };
 
   const handleAddLocale = async (code: string, label: string) => {
@@ -356,9 +371,13 @@ export function AddressRegionsPage() {
                 </p>
                 <p>
                   共 {parsed.paths.length} 条，{parsed.maxLevel} 级区域
+                  {importIncludeFees && parsed.hasFeeColumn
+                    ? `；将写入实际运费 ${parsed.pathFees.filter((f) => f != null).length} 条（仅后台预留）`
+                    : "；不写入实际运费（现网免邮不受影响）"}
                 </p>
                 <p style={{ color: "#666" }}>
                   将覆盖现有默认区域数据，并清空各语言译文（语言条目保留，需重新导入译文）。
+                  实际运费未接入前台/下单计价。
                 </p>
               </div>
             ),
@@ -374,7 +393,12 @@ export function AddressRegionsPage() {
           `/api/address-libraries/${library.id}/import`,
           {
             method: "POST",
-            body: JSON.stringify({ paths: parsed.paths }),
+            body: JSON.stringify({
+              paths: parsed.paths,
+              path_fees: importIncludeFees
+                ? parsed.pathFees
+                : parsed.paths.map(() => null),
+            }),
           },
         );
         message.success(
@@ -579,13 +603,22 @@ export function AddressRegionsPage() {
   ];
 
   const detailColumns: ColumnsType<AddressRegionPath> = useMemo(
-    () =>
-      Array.from({ length: detailMaxLevel }, (_, i) => ({
+    () => [
+      ...Array.from({ length: detailMaxLevel }, (_, i) => ({
         title: levelLabel(i + 1),
         key: `level_${i + 1}`,
         width: 180,
         render: (_: unknown, row: AddressRegionPath) => row.path[i] ?? "—",
       })),
+      {
+        title: "实际运费（预留）",
+        key: "actual_shipping_fee",
+        dataIndex: "actual_shipping_fee",
+        width: 140,
+        render: (v: number | null) =>
+          v == null || Number.isNaN(Number(v)) ? "—" : Number(v),
+      },
+    ],
     [detailMaxLevel],
   );
 
@@ -602,7 +635,8 @@ export function AddressRegionsPage() {
       </div>
       <p style={{ color: "#666", marginTop: -8, marginBottom: 16 }}>
         导入时可选择写入「默认语言」或「其他多语言」。Excel 表头为「一级区域 /
-        二级区域 / …」。覆盖语言译文须与默认叶路径行数、级数一致。
+        二级区域 / 三级区域 / …」，可选「实际运费」。实际运费仅后台预留、默认不写入，
+        未接入前台/下单（现网如 ID 仍免邮）。覆盖语言译文须与默认叶路径行数、级数一致。
       </p>
 
       <Table
@@ -641,7 +675,11 @@ export function AddressRegionsPage() {
                 },
               );
               try {
-                const res = await importPathsToLibrary(created.id, createFile);
+                const res = await importPathsToLibrary(
+                  created.id,
+                  createFile,
+                  createIncludeFees,
+                );
                 message.success(
                   `已创建并导入 ${res.imported_paths} 条（${res.max_level} 级）`,
                 );
@@ -717,7 +755,7 @@ export function AddressRegionsPage() {
           </Form.Item>
           <Form.Item
             label="导入默认语言文件（可选）"
-            extra="xlsx/xls；新建时仅写入默认主表。其他语言请创建后用「导入」选择目标语言"
+            extra="xlsx/xls；表头「一级区域 / 二级区域 / …」。新建时仅写入默认主表；其他语言请创建后用「导入」"
           >
             <Upload
               accept=".xlsx,.xls"
@@ -739,11 +777,24 @@ export function AddressRegionsPage() {
               }}
               onRemove={() => {
                 setCreateFile(null);
+                setCreateIncludeFees(false);
               }}
             >
               <Button icon={<UploadOutlined />}>选择 Excel</Button>
             </Upload>
           </Form.Item>
+          {createFile ? (
+            <Form.Item
+              extra="仅后台预留，未接入前台/下单；现网免邮不受影响。默认不勾选。"
+            >
+              <Checkbox
+                checked={createIncludeFees}
+                onChange={(e) => setCreateIncludeFees(e.target.checked)}
+              >
+                同时写入「实际运费」列（预留）
+              </Checkbox>
+            </Form.Item>
+          ) : null}
         </Form>
       </Modal>
 
@@ -912,7 +963,7 @@ export function AddressRegionsPage() {
           <Form.Item
             label="Excel 文件"
             required
-            extra="表头「一级区域 / 二级区域 / …」或 PROVINSI / KABUPATEN / …"
+            extra="表头「一级区域 / 二级区域 / …」或 PROVINSI / KABUPATEN / …；可选「实际运费」"
           >
             <Upload
               accept=".xlsx,.xls"
@@ -937,6 +988,18 @@ export function AddressRegionsPage() {
               <Button icon={<UploadOutlined />}>选择 Excel</Button>
             </Upload>
           </Form.Item>
+          {importMode === "default" ? (
+            <Form.Item
+              extra="仅后台预留，未接入前台/下单计价；现网如 ID 免邮不受影响。默认不勾选。"
+            >
+              <Checkbox
+                checked={importIncludeFees}
+                onChange={(e) => setImportIncludeFees(e.target.checked)}
+              >
+                同时写入「实际运费」列（预留）
+              </Checkbox>
+            </Form.Item>
+          ) : null}
         </Form>
       </Modal>
 

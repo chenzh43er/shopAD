@@ -17,6 +17,10 @@ import {
   listAddressLibraryLocales,
   upsertAddressLibraryLocale,
 } from "../lib/addressLocales";
+import {
+  deleteAddressRegionTreeSnapshot,
+  publishAddressRegionTreeSnapshot,
+} from "../lib/addressRegionTree";
 import { requireSuperAdmin } from "../middleware/auth";
 import type { Env, Variables } from "../types";
 
@@ -35,6 +39,7 @@ type RegionRow = {
   name: string;
   level: number;
   sort_order: number;
+  actual_shipping_fee: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -95,9 +100,42 @@ function parseDialCode(
   return t;
 }
 
+function parseFeeValue(
+  value: unknown,
+  rowIndex: number,
+): { ok: true; fee: number | null } | { ok: false; error: string } {
+  if (value === null || value === undefined || value === "") {
+    return { ok: true, fee: null };
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) {
+      return { ok: false, error: `第 ${rowIndex + 1} 行实际运费无效` };
+    }
+    return { ok: true, fee: value };
+  }
+  if (typeof value === "string") {
+    const t = value.trim().replace(/,/g, "");
+    if (!t) return { ok: true, fee: null };
+    const n = Number(t);
+    if (!Number.isFinite(n) || n < 0) {
+      return { ok: false, error: `第 ${rowIndex + 1} 行实际运费无效` };
+    }
+    return { ok: true, fee: n };
+  }
+  return { ok: false, error: `第 ${rowIndex + 1} 行实际运费格式无效` };
+}
+
 function normalizePaths(
   paths: unknown,
-): { ok: true; paths: string[][]; maxLevel: number } | { ok: false; error: string } {
+  pathFees?: unknown,
+):
+  | {
+      ok: true;
+      paths: string[][];
+      pathFees: Array<number | null>;
+      maxLevel: number;
+    }
+  | { ok: false; error: string } {
   if (!Array.isArray(paths)) {
     return { ok: false, error: "paths 必须是数组" };
   }
@@ -108,7 +146,17 @@ function normalizePaths(
     return { ok: false, error: `单次最多导入 ${MAX_PATHS} 条` };
   }
 
+  if (
+    pathFees !== undefined &&
+    pathFees !== null &&
+    (!Array.isArray(pathFees) || pathFees.length !== paths.length)
+  ) {
+    return { ok: false, error: "path_fees 须与 paths 等长" };
+  }
+
+  const feesInput = Array.isArray(pathFees) ? pathFees : null;
   const normalized: string[][] = [];
+  const normalizedFees: Array<number | null> = [];
   let maxLevel = 0;
 
   for (let i = 0; i < paths.length; i++) {
@@ -146,13 +194,26 @@ function normalizePaths(
     }
     maxLevel = Math.max(maxLevel, parts.length);
     normalized.push(parts);
+
+    if (feesInput) {
+      const parsed = parseFeeValue(feesInput[i], i);
+      if (!parsed.ok) return parsed;
+      normalizedFees.push(parsed.fee);
+    } else {
+      normalizedFees.push(null);
+    }
   }
 
   if (normalized.length === 0) {
     return { ok: false, error: "没有有效的地域行" };
   }
 
-  return { ok: true, paths: normalized, maxLevel };
+  return {
+    ok: true,
+    paths: normalized,
+    pathFees: normalizedFees,
+    maxLevel,
+  };
 }
 
 async function summarizeLibrary(
@@ -262,7 +323,15 @@ async function insertRegionsTree(
   libraryId: string,
   paths: string[][],
   maxLevel: number,
+  pathFees: Array<number | null> = [],
 ): Promise<number> {
+  // 仅叶子路径写入运费；同路径后行覆盖前行
+  const feeByLeafKey = new Map<string, number | null>();
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i]!;
+    feeByLeafKey.set(path.join("\0"), pathFees[i] ?? null);
+  }
+
   // parentKey (joined path of ancestors) -> id
   let parentMap = new Map<string, string>();
   let inserted = 0;
@@ -270,7 +339,12 @@ async function insertRegionsTree(
   for (let level = 1; level <= maxLevel; level++) {
     const unique = new Map<
       string,
-      { parentId: string | null; name: string; sortOrder: number }
+      {
+        parentId: string | null;
+        name: string;
+        sortOrder: number;
+        actualShippingFee: number | null;
+      }
     >();
 
     for (const path of paths) {
@@ -290,6 +364,10 @@ async function insertRegionsTree(
         parentId,
         name,
         sortOrder: unique.size,
+        // 仅当该 key 恰好是某行完整路径时写运费（叶子）
+        actualShippingFee: feeByLeafKey.has(key)
+          ? (feeByLeafKey.get(key) ?? null)
+          : null,
       });
     }
 
@@ -300,6 +378,7 @@ async function insertRegionsTree(
       name: v.name,
       level,
       sort_order: v.sortOrder,
+      actual_shipping_fee: v.actualShippingFee,
     }));
 
     const nextMap = new Map<string, string>();
@@ -309,13 +388,23 @@ async function insertRegionsTree(
       const { data, error } = await supabase
         .from("address_regions")
         .insert(
-          chunk.map(({ library_id, parent_id, name, level: lv, sort_order }) => ({
-            library_id,
-            parent_id,
-            name,
-            level: lv,
-            sort_order,
-          })),
+          chunk.map(
+            ({
+              library_id,
+              parent_id,
+              name,
+              level: lv,
+              sort_order,
+              actual_shipping_fee,
+            }) => ({
+              library_id,
+              parent_id,
+              name,
+              level: lv,
+              sort_order,
+              actual_shipping_fee,
+            }),
+          ),
         )
         .select("id");
 
@@ -340,6 +429,7 @@ function buildLeafPaths(regions: RegionRow[]): {
   id: string;
   path: string[];
   level: number;
+  actual_shipping_fee: number | null;
 }[] {
   const byId = new Map(regions.map((r) => [r.id, r]));
   const children = new Map<string | null, RegionRow[]>();
@@ -357,13 +447,30 @@ function buildLeafPaths(regions: RegionRow[]): {
     );
   }
 
-  const leaves: { id: string; path: string[]; level: number }[] = [];
+  const leaves: {
+    id: string;
+    path: string[];
+    level: number;
+    actual_shipping_fee: number | null;
+  }[] = [];
 
   const walk = (node: RegionRow, prefix: string[]) => {
     const path = [...prefix, node.name];
     const kids = children.get(node.id) ?? [];
     if (kids.length === 0) {
-      leaves.push({ id: node.id, path, level: node.level });
+      const raw = node.actual_shipping_fee as number | string | null;
+      let fee: number | null = null;
+      if (typeof raw === "number" && Number.isFinite(raw)) fee = raw;
+      else if (raw != null && raw !== "") {
+        const n = Number(raw);
+        fee = Number.isFinite(n) ? n : null;
+      }
+      leaves.push({
+        id: node.id,
+        path,
+        level: node.level,
+        actual_shipping_fee: fee,
+      });
       return;
     }
     for (const kid of kids) walk(kid, path);
@@ -373,7 +480,7 @@ function buildLeafPaths(regions: RegionRow[]): {
     walk(root, []);
   }
 
-  // 防御节点若无子节点已作为叶子；保证与 byId 无悬空
+  // 孤儿节点若无子节点已作为叶子；保证与 byId 无悬空
   void byId;
   return leaves;
 }
@@ -469,14 +576,14 @@ addressLibrariesRoutes.post("/", requireSuperAdmin, async (c) => {
 /** 向已有地区导入 / 覆盖地域树（须在 /:id 通配之前注册） */
 addressLibrariesRoutes.post("/:id/import", requireSuperAdmin, async (c) => {
   const id = c.req.param("id");
-  let body: { paths?: unknown };
+  let body: { paths?: unknown; path_fees?: unknown };
   try {
-    body = (await c.req.json()) as { paths?: unknown };
+    body = (await c.req.json()) as { paths?: unknown; path_fees?: unknown };
   } catch {
     return c.json({ error: "请求体无效" }, 400);
   }
 
-  const normalized = normalizePaths(body.paths);
+  const normalized = normalizePaths(body.paths, body.path_fees);
   if (!normalized.ok) return c.json({ error: normalized.error }, 400);
 
   const supabase = createServiceClient(c.env);
@@ -510,6 +617,7 @@ addressLibrariesRoutes.post("/:id/import", requireSuperAdmin, async (c) => {
       id,
       normalized.paths,
       normalized.maxLevel,
+      normalized.pathFees,
     );
     // 默认树已替换，旧路径 key 失效 → 清空各语言译名（保留语言条目）
     try {
@@ -517,6 +625,14 @@ addressLibrariesRoutes.post("/:id/import", requireSuperAdmin, async (c) => {
     } catch (e) {
       console.warn(
         "clear address locale names failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
+    try {
+      await publishAddressRegionTreeSnapshot(supabase, id);
+    } catch (e) {
+      console.warn(
+        "publish region tree snapshot failed:",
         e instanceof Error ? e.message : e,
       );
     }
@@ -556,7 +672,7 @@ addressLibrariesRoutes.post("/import", requireSuperAdmin, async (c) => {
     );
   }
 
-  const normalized = normalizePaths(body.paths);
+  const normalized = normalizePaths(body.paths, body.path_fees);
   if (!normalized.ok) return c.json({ error: normalized.error }, 400);
 
   const supabase = createServiceClient(c.env);
@@ -609,12 +725,21 @@ addressLibrariesRoutes.post("/import", requireSuperAdmin, async (c) => {
       library.id,
       normalized.paths,
       normalized.maxLevel,
+      normalized.pathFees,
     );
     try {
       await clearAddressLocaleNames(supabase, library.id);
     } catch (e) {
       console.warn(
         "clear address locale names failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
+    try {
+      await publishAddressRegionTreeSnapshot(supabase, library.id);
+    } catch (e) {
+      console.warn(
+        "publish region tree snapshot failed:",
         e instanceof Error ? e.message : e,
       );
     }
@@ -731,6 +856,14 @@ addressLibrariesRoutes.delete("/:id", requireSuperAdmin, async (c) => {
       e instanceof Error ? e.message : e,
     );
   }
+  try {
+    await deleteAddressRegionTreeSnapshot(supabase, id);
+  } catch (e) {
+    console.warn(
+      "delete region tree snapshot failed:",
+      e instanceof Error ? e.message : e,
+    );
+  }
   return c.json({ ok: true });
 });
 
@@ -840,7 +973,7 @@ addressLibrariesRoutes.post(
       const { data, error } = await supabase
         .from("address_regions")
         .select(
-          "id, library_id, parent_id, name, level, sort_order, created_at, updated_at",
+          "id, library_id, parent_id, name, level, sort_order, actual_shipping_fee, created_at, updated_at",
         )
         .eq("library_id", id)
         .order("level", { ascending: true })
@@ -916,7 +1049,7 @@ addressLibrariesRoutes.get("/:id/regions", async (c) => {
     const { data, error } = await supabase
       .from("address_regions")
       .select(
-        "id, library_id, parent_id, name, level, sort_order, created_at, updated_at",
+        "id, library_id, parent_id, name, level, sort_order, actual_shipping_fee, created_at, updated_at",
       )
       .eq("library_id", id)
       .order("level", { ascending: true })
@@ -958,6 +1091,7 @@ addressLibrariesRoutes.get("/:id/regions", async (c) => {
       path,
       default_path: defaultPath,
       level: leaf.level,
+      actual_shipping_fee: leaf.actual_shipping_fee,
     };
   });
 

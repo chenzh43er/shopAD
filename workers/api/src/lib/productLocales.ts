@@ -259,6 +259,9 @@ export function buildLocaleUpsertRow(
       ...(body.google_label !== undefined
         ? { google_label: body.google_label?.trim() || null }
         : {}),
+      ...(body.kwai_pixel_id !== undefined
+        ? { kwai_pixel_id: body.kwai_pixel_id?.trim() || null }
+        : {}),
       ...(body.description !== undefined
         ? { description: body.description?.trim() || null }
         : {}),
