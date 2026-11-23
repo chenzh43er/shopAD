@@ -2999,17 +2999,8 @@ ordersRoutes.patch("/:id", async (c) => {
     touched = true;
   };
 
-  if (body.total_amount !== undefined) {
-    const parsed = parseNonNegMoney(body.total_amount, "总金额");
-    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-    applyTotalAmount(parsed.value);
-    // 未单独传商品金额时，用 总金额-运费 回填，避免物品价值被写成含运费
-    if (productAmountInput === undefined && patch.item_value === undefined) {
-      const derived = Number(Math.max(0, parsed.value - shippingFee).toFixed(2));
-      patch.item_value = derived;
-      patch.product_amount = derived;
-    }
-  } else if (
+  // 商品金额/运费/数量/商品变更时，总金额一律按 商品金额+运费 重算（不可手工覆盖）
+  if (
     body.quantity !== undefined ||
     shippingAmountInput !== undefined ||
     productAmountInput !== undefined ||
@@ -3017,6 +3008,16 @@ ordersRoutes.patch("/:id", async (c) => {
     packageIdChanging
   ) {
     applyTotalAmount(Number((itemValue + shippingFee).toFixed(2)));
+  } else if (body.total_amount !== undefined) {
+    // 兼容仅传总金额的旧调用：回填商品金额 = 总金额 - 运费
+    const parsed = parseNonNegMoney(body.total_amount, "总金额");
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    applyTotalAmount(parsed.value);
+    if (productAmountInput === undefined && patch.item_value === undefined) {
+      const derived = Number(Math.max(0, parsed.value - shippingFee).toFixed(2));
+      patch.item_value = derived;
+      patch.product_amount = derived;
+    }
   }
 
   // 结构化地址变更且未显式传 shipping_address 时自动拼接

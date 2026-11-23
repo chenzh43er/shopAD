@@ -39,7 +39,7 @@ type EditOrderFormValues = {
   product_amount: number;
   /** 运费 */
   shipping_amount: number;
-  /** 总金额 = 商品金额 + 运费（可手动覆盖） */
+  /** 总金额 = 商品金额 + 运费（只读，自动计算） */
   total_amount: number;
   /** 商品链接 */
   product_link?: string;
@@ -472,6 +472,8 @@ export function OrderEditModal({
     }
     setProducts(list);
 
+    const productAmount = resolveOrderProductAmount(data);
+    const shippingAmount = resolveOrderShippingFee(data);
     form.setFieldsValue({
       customer_name: data.customer_name,
       customer_phone: data.customer_phone ?? "",
@@ -482,9 +484,9 @@ export function OrderEditModal({
       product_id: data.product_id ?? undefined,
       package_id: data.package_id ?? undefined,
       quantity: Math.max(1, Number(data.quantity) || 1),
-      product_amount: resolveOrderProductAmount(data),
-      shipping_amount: resolveOrderShippingFee(data),
-      total_amount: Number(data.total_amount) || 0,
+      product_amount: productAmount,
+      shipping_amount: shippingAmount,
+      total_amount: Number((productAmount + shippingAmount).toFixed(2)),
       product_link: data.product_link ?? "",
       owner_member: data.owner_member ?? "",
       shipping_order_no: data.shipping_order_no ?? "",
@@ -594,6 +596,10 @@ export function OrderEditModal({
         return;
       }
       setSaving(true);
+      const productAmount = Math.max(0, Number(values.product_amount) || 0);
+      const shippingAmount = Math.max(0, Number(values.shipping_amount) || 0);
+      const totalAmount = Number((productAmount + shippingAmount).toFixed(2));
+      form.setFieldsValue({ total_amount: totalAmount });
       const payload: UpdateOrderInput = {
         customer_name: values.customer_name.trim(),
         customer_phone: values.customer_phone?.trim() || null,
@@ -609,12 +615,12 @@ export function OrderEditModal({
             province: values.shipping_province,
           }) || null,
         quantity: values.quantity,
-        product_amount: values.product_amount,
-        shipping_amount: values.shipping_amount,
+        product_amount: productAmount,
+        shipping_amount: shippingAmount,
         // 兼容旧字段写入（服务端会同步别名）
-        item_value: values.product_amount,
-        shipping_fee: values.shipping_amount,
-        total_amount: values.total_amount,
+        item_value: productAmount,
+        shipping_fee: shippingAmount,
+        total_amount: totalAmount,
         product_link: values.product_link?.trim() || null,
         owner_member: values.owner_member?.trim() || null,
         shipping_order_no: values.shipping_order_no?.trim() || null,
@@ -667,7 +673,7 @@ export function OrderEditModal({
     >
       <Spin spinning={loading}>
         <p style={{ color: "#666", marginBottom: 12 }}>
-          打开时单价、件数、商品金额、运费、总金额均按订单快照展示；更换商品/套餐或改数量时，商品金额按单价×数量同步，总金额按「商品金额 + 运费」重算。三者均可单独编辑。
+          打开时单价、件数、商品金额、运费、总金额均按订单快照展示；更换商品/套餐或改数量时，商品金额按单价×数量同步，总金额按「商品金额 + 运费」自动重算（不可编辑）。
         </p>
         <Form form={form} layout="vertical" disabled={loading || !order}>
           <Space wrap style={{ width: "100%" }} size="middle">
@@ -853,12 +859,13 @@ export function OrderEditModal({
               <Form.Item
                 name="total_amount"
                 label="总金额"
-                rules={[{ required: true, message: "请填写总金额" }]}
+                rules={[{ required: true, message: "总金额不能为空" }]}
               >
                 <InputNumber
                   min={0}
                   precision={2}
                   controls={false}
+                  disabled
                   style={{ width: "100%" }}
                   addonBefore={currencyAddon.addonBefore}
                   addonAfter={currencyAddon.addonAfter}
@@ -878,8 +885,8 @@ export function OrderEditModal({
             />
           </Form.Item>
           <p style={{ color: "#888", margin: "-8px 0 16px", fontSize: 12 }}>
-            商品金额不含运费；改数量/商品会按单价×数量同步。总金额默认 =
-            商品金额 + 运费，可单独覆盖
+            商品金额不含运费；改数量/商品会按单价×数量同步。总金额 =
+            商品金额 + 运费，自动计算不可编辑
             {order?.free_shipping === true ? "。当前订单标记为包邮" : ""}
             。
           </p>
