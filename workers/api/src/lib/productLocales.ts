@@ -461,6 +461,8 @@ type PackageLocaleEntry = {
   image_url?: string | null;
   /** 独立属性标题（该语言；留空回退默认语言） */
   sku_title?: string | null;
+  /** 默认选中文案（该语言；留空回退默认语言） */
+  badge_text?: string | null;
   /** sku_code → 该语言的属性名称/图片覆盖 */
   skus?: Record<string, PackageSkuLocaleEntry>;
 };
@@ -520,6 +522,7 @@ export async function listPackageLocalesByPackageIds(
             name_external: value?.name_external ?? "",
             image_url: value?.image_url ?? null,
             sku_title: value?.sku_title ?? null,
+            badge_text: value?.badge_text ?? null,
             skus: value?.skus ?? {},
           });
         }
@@ -543,6 +546,7 @@ export async function replacePackageLocales(
           name_external?: string;
           image_url?: string | null;
           sku_title?: string | null;
+          badge_text?: string | null;
           skus?: Record<
             string,
             { sku_display?: string | null; image_url?: string | null }
@@ -567,13 +571,15 @@ export async function replacePackageLocales(
       const nameExternal = value?.name_external?.trim() || "";
       const imageUrl = value?.image_url?.trim() || null;
       const skuTitle = value?.sku_title?.trim() || "";
+      const badgeText = value?.badge_text?.trim() || "";
       const skus = cleanPackageSkuLocales(value?.skus);
-      if (!name && !nameExternal && !imageUrl && !skuTitle && !skus) continue;
+      if (!name && !nameExternal && !imageUrl && !skuTitle && !badgeText && !skus) continue;
       next[check.locale] = {
         name,
         name_external: nameExternal,
         image_url: imageUrl,
         ...(skuTitle ? { sku_title: skuTitle } : {}),
+        ...(badgeText ? { badge_text: badgeText } : {}),
         ...(skus ? { skus } : {}),
       };
     }
@@ -605,13 +611,15 @@ export async function saveAllPackageLocales(
       const nameExternal = value?.name_external?.trim() || "";
       const imageUrl = value?.image_url?.trim() || null;
       const skuTitle = value?.sku_title?.trim() || "";
+      const badgeText = value?.badge_text?.trim() || "";
       const skus = cleanPackageSkuLocales(value?.skus);
-      if (!name && !nameExternal && !imageUrl && !skuTitle && !skus) continue;
+      if (!name && !nameExternal && !imageUrl && !skuTitle && !badgeText && !skus) continue;
       next[check.locale] = {
         name,
         name_external: nameExternal,
         image_url: imageUrl,
         ...(skuTitle ? { sku_title: skuTitle } : {}),
+        ...(badgeText ? { badge_text: badgeText } : {}),
         ...(skus ? { skus } : {}),
       };
     }

@@ -64,6 +64,9 @@ const PRODUCT_FIELD_LABELS: Record<string, string> = {
   gift_count: "赠品数量",
   gift_added: "新增赠品",
   gift_removed: "删除赠品",
+  is_default: "默认选中套餐",
+  badge_text: "默认选中文案",
+  package_default_changed: "默认套餐",
 };
 
 export function fieldLabelZh(field: string): string {
@@ -170,10 +173,17 @@ export function packageSnapshot(pkg: {
   image_url?: string | null;
   sku_title?: string | null;
   is_visible?: boolean | null;
+  is_default?: boolean | null;
+  badge_text?: string | null;
   sort_order?: number | null;
   locales?: Record<
     string,
-    { name?: string; name_external?: string; image_url?: string | null }
+    {
+      name?: string;
+      name_external?: string;
+      image_url?: string | null;
+      badge_text?: string | null;
+    }
   > | null;
   items?: Array<{
     ref_product_id?: string | null;
@@ -198,17 +208,24 @@ export function packageSnapshot(pkg: {
   }));
   const locales: Record<
     string,
-    { name: string; name_external: string; image_url: string | null }
+    {
+      name: string;
+      name_external: string;
+      image_url: string | null;
+      badge_text: string | null;
+    }
   > = {};
   for (const [code, value] of Object.entries(pkg.locales ?? {})) {
     const name = value?.name?.trim() || "";
     const nameExternal = value?.name_external?.trim() || "";
     const imageUrl = value?.image_url?.trim() || null;
-    if (!name && !nameExternal && !imageUrl) continue;
+    const badgeText = value?.badge_text?.trim() || null;
+    if (!name && !nameExternal && !imageUrl && !badgeText) continue;
     locales[code] = {
       name,
       name_external: nameExternal,
       image_url: imageUrl,
+      badge_text: badgeText,
     };
   }
   return {
@@ -221,6 +238,8 @@ export function packageSnapshot(pkg: {
     image_url: (pkg.image_url ?? "").trim() || null,
     sku_title: (pkg.sku_title ?? "").trim() || null,
     is_visible: pkg.is_visible ?? true,
+    is_default: pkg.is_default ?? false,
+    badge_text: (pkg.badge_text ?? "").trim() || null,
     sort_order: Number(pkg.sort_order) || 0,
     item_count: items.length,
     items,
@@ -240,6 +259,8 @@ const PACKAGE_SUB_FIELD_LABELS: Record<string, string> = {
   image_url: "图片",
   sku_title: "属性标题",
   is_visible: "是否显示",
+  is_default: "默认选中套餐",
+  badge_text: "默认选中文案",
   sort_order: "排序",
   item_count: "明细件数",
   items: "明细内容",
@@ -263,6 +284,7 @@ function formatLocalesBrief(
       const row = locales[code]!;
       const parts = [row.name || row.name_external || "未命名"];
       if (row.image_url) parts.push("有图");
+      if (row.badge_text) parts.push(`角标:${row.badge_text}`);
       return `${code}(${parts.join("·")})`;
     })
     .join(", ");
@@ -273,6 +295,13 @@ function formatSkusBrief(skus: PackageSnap["skus"]): string {
   return skus.map((sku) => `${sku.sku_display}(${sku.sku_code})`).join("、");
 }
 
+/** 角标文案：空值统一显示为「无文案」，避免日志出现无意义的破折号 */
+function formatBadgeTextBrief(value: unknown): string {
+  if (value === undefined || value === null) return "无文案";
+  const text = String(value).trim();
+  return text || "无文案";
+}
+
 /** 对比套餐全量替换前后，生成可读变更摘要与明细 */
 export function buildPackageUpdateDiffs(
   beforeList: PackageSnap[],
@@ -280,6 +309,26 @@ export function buildPackageUpdateDiffs(
 ): { diffs: AuditFieldDiff[]; summary: string } {
   const diffs: AuditFieldDiff[] = [];
   const lines: string[] = [];
+
+  // 默认套餐切换单独成条，避免只散落在各套餐明细里看不清
+  const beforeDefault = beforeList.find((p) => p.is_default);
+  const afterDefault = afterList.find((p) => p.is_default);
+  const beforeDefaultName = beforeDefault
+    ? beforeDefault.name || beforeDefault.name_external || "未命名套餐"
+    : null;
+  const afterDefaultName = afterDefault
+    ? afterDefault.name || afterDefault.name_external || "未命名套餐"
+    : null;
+  if (!valuesEqual(beforeDefaultName, afterDefaultName)) {
+    diffs.push({
+      field: "package_default_changed",
+      from: beforeDefaultName,
+      to: afterDefaultName,
+    });
+    lines.push(
+      `默认套餐: ${beforeDefaultName ? `「${beforeDefaultName}」` : "无"} → ${afterDefaultName ? `「${afterDefaultName}」` : "无"}`,
+    );
+  }
 
   if (beforeList.length !== afterList.length) {
     diffs.push({
@@ -320,6 +369,7 @@ export function buildPackageUpdateDiffs(
       "image_url",
       "sku_title",
       "is_visible",
+      "badge_text",
       "sort_order",
       "item_count",
       "locale_count",
@@ -332,8 +382,16 @@ export function buildPackageUpdateDiffs(
           to: after[field],
         });
         const label = PACKAGE_SUB_FIELD_LABELS[String(field)] ?? String(field);
+        const fromText =
+          field === "badge_text"
+            ? formatBadgeTextBrief(before[field])
+            : formatBrief(before[field]);
+        const toText =
+          field === "badge_text"
+            ? formatBadgeTextBrief(after[field])
+            : formatBrief(after[field]);
         fieldChanges.push(
-          `${label}: ${formatBrief(before[field])} → ${formatBrief(after[field])}`,
+          `${label}: ${fromText} → ${toText}`,
         );
       }
     }

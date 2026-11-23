@@ -4,6 +4,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Space,
   Switch,
   Table,
@@ -60,6 +61,8 @@ type LocaleNames = {
   image_url: string | null;
   /** 独立属性标题（该语言；留空回退默认语言） */
   sku_title: string;
+  /** 默认选中文案（该语言；留空回退默认语言） */
+  badge_text: string;
   /** sku_code → 该语言的属性名称/图片覆盖 */
   skus: Record<string, SkuLocaleOverride>;
 };
@@ -75,6 +78,10 @@ type DraftPackage = {
   /** 独立属性标题（落地页属性选择区标题） */
   sku_title: string;
   is_visible: boolean;
+  /** 是否默认选中（同一商品仅一个） */
+  is_default: boolean;
+  /** 默认选中套餐角标文案；为空不显示 */
+  badge_text: string;
   quantity: number;
   independent_attrs: boolean;
   /** 独立属性（开启「独立选属性」后配置） */
@@ -131,6 +138,8 @@ function emptyPackage(): DraftPackage {
     image_url: null,
     sku_title: "",
     is_visible: true,
+    is_default: false,
+    badge_text: "",
     quantity: 1,
     independent_attrs: false,
     skus: [],
@@ -144,6 +153,7 @@ function emptyLocaleNames(): LocaleNames {
     name_external: "",
     image_url: null,
     sku_title: "",
+    badge_text: "",
     skus: {},
   };
 }
@@ -167,6 +177,7 @@ function localesFromApi(
       name_external: row.name_external ?? "",
       image_url: row.image_url ?? null,
       sku_title: row.sku_title?.trim() || "",
+      badge_text: row.badge_text?.trim() || "",
       skus,
     };
   }
@@ -396,6 +407,8 @@ export function ProductPackageSettings({
           image_url: pkg.image_url,
           sku_title: pkg.sku_title ?? "",
           is_visible: pkg.is_visible,
+          is_default: Boolean(pkg.is_default),
+          badge_text: pkg.badge_text ?? "",
           quantity: first?.quantity ?? 1,
           independent_attrs: first?.independent_attrs ?? false,
           skus: (pkg.skus ?? []).map((sku) => ({
@@ -407,6 +420,14 @@ export function ProductPackageSettings({
           locales: localesFromApi(pkg.locales as ProductPackageLocale[]),
         };
       });
+      // 默认套餐：没有配置时默认第一个（表格第一行）
+      let defaultSeen = false;
+      for (const draft of drafts) {
+        if (!draft.is_default) continue;
+        if (defaultSeen) draft.is_default = false;
+        defaultSeen = true;
+      }
+      if (!defaultSeen && drafts[0]) drafts[0].is_default = true;
       setPackages(drafts);
       setActiveKey(drafts[0]?.key ?? "");
     } catch (e) {
@@ -505,6 +526,10 @@ export function ProductPackageSettings({
       return false;
     }
 
+    const defaultIndex = Math.max(
+      0,
+      listToSave.findIndex((pkg) => pkg.is_default),
+    );
     const payload: UpsertProductPackageInput[] = listToSave.map((pkg, index) => ({
       name: pkg.name.trim(),
       name_external: pkg.name_external.trim(),
@@ -514,6 +539,8 @@ export function ProductPackageSettings({
       image_url: pkg.image_url,
       sku_title: pkg.sku_title.trim() || null,
       is_visible: pkg.is_visible,
+      is_default: index === defaultIndex,
+      badge_text: pkg.badge_text.trim() || null,
       sort_order: index,
       skus: pkg.skus
         .filter(hasSkuContent)
@@ -916,6 +943,7 @@ export function ProductPackageSettings({
 
   const editingLocale =
     contentLocale !== "default" ? contentLocale : null;
+  const defaultPackage = packages.find((pkg) => pkg.is_default);
   const localeLabel = editingLocale
     ? localeDisplayLabel(editingLocale, localeLabels[editingLocale])
     : null;
@@ -938,13 +966,13 @@ export function ProductPackageSettings({
               {localeLabel} · {editingLocale}（
               {saPathPrefixForLocale(editingLocale, regionName)}）
             </b>{" "}
-            的套餐名称、外文名与图片；独立属性可在下方表格中点「编辑」修改该语言的名称和图片，属性标题也可单独编辑（留空回退默认语言）。价格/数量等仍在「默认」语言下修改。
+            的套餐名称、外文名、默认选中文案与图片；独立属性可在下方表格中点「编辑」修改该语言的名称和图片，属性标题也可单独编辑（留空回退默认语言）。价格/数量等仍在「默认」语言下修改。
           </span>
         ) : addedLocales.length > 0 ? (
           <span>
             {" "}
             已添加语言：{addedLocales.join(", ")}
-            。上方切换语言后，可填写该语言的套餐名称、外文名与图片。
+            。上方切换语言后，可填写该语言的套餐名称、外文名、默认选中文案与图片。
           </span>
         ) : null}
       </div>
@@ -970,6 +998,51 @@ export function ProductPackageSettings({
         )}
         <span>当前商品：{currentProduct.name}</span>
       </Space>
+
+      <div
+        style={{
+          marginBottom: 12,
+          padding: "12px 14px",
+          background: "#fafafa",
+          border: "1px solid #f0f0f0",
+          borderRadius: 8,
+          maxWidth: 560,
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>
+          {editingLocale ? `默认选中文案（${localeLabel}）` : "默认选中文案"}
+        </div>
+        <Input
+          maxLength={60}
+          showCount
+          value={
+            editingLocale
+              ? (defaultPackage?.locales[editingLocale]?.badge_text ?? "")
+              : (defaultPackage?.badge_text ?? "")
+          }
+          disabled={!defaultPackage}
+          placeholder={
+            editingLocale
+              ? "该语言文案；留空回退默认语言，默认也为空则不显示"
+              : "如 MAIS POPULARES；留空则不显示角标"
+          }
+          onChange={(e) => {
+            if (!defaultPackage) return;
+            if (editingLocale) {
+              updateLocaleNames(defaultPackage.key, editingLocale, {
+                badge_text: e.target.value,
+              });
+            } else {
+              updatePackage(defaultPackage.key, { badge_text: e.target.value });
+            }
+          }}
+        />
+        <div style={{ color: "#8c8c8c", fontSize: 12, marginTop: 6 }}>
+          {editingLocale
+            ? `当前编辑 ${localeLabel} 文案；留空回退默认语言（${defaultPackage?.badge_text.trim() || "无文案"}）。仅显示在「默认选中」的套餐卡片上。`
+            : "默认语言文案；各语言可单独设置，留空时回退此处。仅显示在「默认选中」的套餐卡片上。"}
+        </div>
+      </div>
 
       <Table<DraftPackage>
         className="package-table"
@@ -1695,6 +1768,40 @@ export function ProductPackageSettings({
             },
           },
           {
+            title: (
+              <Tooltip title="商品页默认选中的套餐；未设置时默认第一个">
+                <span>默认选中</span>
+              </Tooltip>
+            ),
+            dataIndex: "is_default",
+            width: 100,
+            align: "center",
+            fixed: "right",
+            render: (_, row) => (
+              <Radio
+                checked={row.is_default}
+                disabled={Boolean(editingLocale)}
+                onChange={() => {
+                  setPackages((prev) => {
+                    const currentText =
+                      prev.find((pkg) => pkg.is_default)?.badge_text ?? "";
+                    return prev.map((pkg) =>
+                      pkg.key === row.key
+                        ? {
+                            ...pkg,
+                            is_default: true,
+                            badge_text: pkg.badge_text || currentText,
+                          }
+                        : { ...pkg, is_default: false },
+                    );
+                  });
+                }}
+              >
+                默认
+              </Radio>
+            ),
+          },
+          {
             title: "操作",
             width: 80,
             fixed: "right",
@@ -1706,7 +1813,16 @@ export function ProductPackageSettings({
                 disabled={Boolean(editingLocale)}
                 onClick={() => {
                   setPackages((prev) => {
+                    const removedText =
+                      prev.find((p) => p.key === row.key)?.badge_text ?? "";
                     const next = prev.filter((p) => p.key !== row.key);
+                    if (next.length > 0 && !next.some((p) => p.is_default)) {
+                      next[0] = {
+                        ...next[0]!,
+                        is_default: true,
+                        badge_text: next[0]!.badge_text || removedText,
+                      };
+                    }
                     if (activeKey === row.key) {
                       setActiveKey(next[0]?.key ?? "");
                     }
@@ -1726,7 +1842,10 @@ export function ProductPackageSettings({
           disabled={Boolean(editingLocale)}
           onClick={() => {
             const pkg = emptyPackage();
-            setPackages((prev) => [...prev, pkg]);
+            setPackages((prev) => {
+              const shouldDefault = !prev.some((p) => p.is_default);
+              return [...prev, { ...pkg, is_default: shouldDefault }];
+            });
             setActiveKey(pkg.key);
           }}
         >

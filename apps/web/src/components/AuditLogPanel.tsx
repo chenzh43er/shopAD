@@ -71,11 +71,14 @@ const FIELD_LABELS: Record<string, string> = {
   package_count: "套餐数量",
   package_added: "新增套餐",
   package_removed: "删除套餐",
+  package_default_changed: "默认套餐",
   original_price: "原价",
   discount_price: "折扣价",
   summary: "套餐说明",
   image_url: "图片",
   is_visible: "是否显示",
+  is_default: "默认选中套餐",
+  badge_text: "默认选中文案",
   sort_order: "排序",
   item_count: "明细件数",
   items: "套餐明细",
@@ -222,8 +225,20 @@ function formatScalar(value: unknown): string {
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
 }
 
+/** 默认选中文案为空时显示「无文案」，与后台表单口径一致 */
+function formatBadgeText(value: unknown): string {
+  if (value === undefined || value === null) return "无文案";
+  const text = String(value).trim();
+  return text || "无文案";
+}
+
 function formatDiffLine(d: FieldDiff): string {
   const label = fieldLabel(d.field);
+  if (d.field === "package_default_changed") {
+    const from = d.from ? `「${String(d.from)}」` : "无";
+    const to = d.to ? `「${String(d.to)}」` : "无";
+    return `${label}：${from} → ${to}`;
+  }
   if (
     d.field === "package_added" ||
     d.field === "gift_added" ||
@@ -243,6 +258,9 @@ function formatDiffLine(d: FieldDiff): string {
     : d.field;
   if (IMAGE_FIELDS.has(baseField) || IMAGE_FIELDS.has(d.field)) {
     return `${label}：${formatImageLike(d.from)} → ${formatImageLike(d.to)}`;
+  }
+  if (baseField === "badge_text") {
+    return `${label}：${formatBadgeText(d.from)} → ${formatBadgeText(d.to)}`;
   }
   return `${label}：${formatScalar(d.from)} → ${formatScalar(d.to)}`;
 }

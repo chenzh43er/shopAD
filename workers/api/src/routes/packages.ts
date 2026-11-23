@@ -289,6 +289,9 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     if (typeof pkg.sku_title === "string" && pkg.sku_title.length > 120) {
       return c.json({ error: `第 ${index + 1} 个套餐属性标题过长` }, 400);
     }
+    if (typeof pkg.badge_text === "string" && pkg.badge_text.length > 60) {
+      return c.json({ error: `第 ${index + 1} 个套餐默认选中文案过长` }, 400);
+    }
     if (pkg.locales && typeof pkg.locales === "object") {
       for (const [locale, value] of Object.entries(pkg.locales)) {
         if (
@@ -298,6 +301,17 @@ packagesRoutes.put("/:productId/packages", async (c) => {
           return c.json(
             {
               error: `第 ${index + 1} 个套餐「${locale}」属性标题过长`,
+            },
+            400,
+          );
+        }
+        if (
+          typeof value?.badge_text === "string" &&
+          value.badge_text.length > 60
+        ) {
+          return c.json(
+            {
+              error: `第 ${index + 1} 个套餐「${locale}」默认选中文案过长`,
             },
             400,
           );
@@ -460,8 +474,15 @@ packagesRoutes.put("/:productId/packages", async (c) => {
     image_url: pkg.image_url || null,
     sku_title: pkg.sku_title?.trim() || null,
     is_visible: pkg.is_visible ?? true,
+    is_default: false,
+    badge_text: pkg.badge_text?.trim() || null,
     sort_order: pkg.sort_order ?? index,
   }));
+
+  // 同一商品只保留一个默认套餐；未指定时默认第一个
+  const requestedDefaultIndex = list.findIndex((pkg) => pkg.is_default === true);
+  const defaultIndex = requestedDefaultIndex >= 0 ? requestedDefaultIndex : 0;
+  if (packageRows[defaultIndex]) packageRows[defaultIndex].is_default = true;
 
   const { data: insertedPackages, error: insertPkgError } = await supabase
     .from("product_packages")
@@ -575,6 +596,7 @@ packagesRoutes.put("/:productId/packages", async (c) => {
         name_external: string;
         image_url?: string | null;
         sku_title?: string | null;
+        badge_text?: string | null;
         skus?: Record<string, LocaleSkuValue>;
       }
     >
@@ -593,6 +615,7 @@ packagesRoutes.put("/:productId/packages", async (c) => {
         name_external: string;
         image_url?: string | null;
         sku_title?: string | null;
+        badge_text?: string | null;
         skus?: Record<string, LocaleSkuValue>;
       }
     > = {};
@@ -610,11 +633,13 @@ packagesRoutes.put("/:productId/packages", async (c) => {
         };
       }
       const skuTitle = value?.sku_title?.trim() || "";
+      const badgeText = value?.badge_text?.trim() || "";
       next[locale] = {
         name: value?.name?.trim() || "",
         name_external: value?.name_external?.trim() || "",
         image_url: value?.image_url?.trim() || null,
         ...(skuTitle ? { sku_title: skuTitle } : {}),
+        ...(badgeText ? { badge_text: badgeText } : {}),
         ...(Object.keys(skus).length > 0 ? { skus } : {}),
       };
     }
@@ -670,6 +695,8 @@ packagesRoutes.put("/:productId/packages", async (c) => {
       image_url: pkg.image_url,
       sku_title: pkg.sku_title,
       is_visible: pkg.is_visible,
+      is_default: index === defaultIndex,
+      badge_text: pkg.badge_text,
       sort_order: pkg.sort_order ?? index,
       locales: pkg.locales ?? {},
       items: pkg.items ?? [],

@@ -471,6 +471,8 @@ export interface ProductPackageLocale {
   image_url?: string | null;
   /** 独立属性标题（该语言；留空回退默认语言） */
   sku_title?: string | null;
+  /** 默认选中文案（该语言；留空回退默认语言） */
+  badge_text?: string | null;
   /** sku_code → 该语言的属性名称/图片覆盖 */
   skus?: Record<string, ProductPackageSkuLocale> | null;
   created_at?: string;
@@ -523,6 +525,10 @@ export interface ProductPackage {
   sku_title?: string | null;
   /** 是否前端可见 */
   is_visible: boolean;
+  /** 是否默认选中（同一商品仅一个） */
+  is_default?: boolean;
+  /** 默认选中套餐角标文案；为空不显示 */
+  badge_text?: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -564,6 +570,10 @@ export interface UpsertProductPackageInput {
   /** 独立属性标题（落地页属性选择区标题，可空） */
   sku_title?: string | null;
   is_visible?: boolean;
+  /** 是否默认选中（同一商品仅一个） */
+  is_default?: boolean;
+  /** 默认选中套餐角标文案；为空不显示 */
+  badge_text?: string | null;
   sort_order?: number;
   /** 套餐独立属性（随套餐整组保存） */
   skus?: UpsertProductPackageSkuInput[];
@@ -576,6 +586,8 @@ export interface UpsertProductPackageInput {
       image_url?: string | null;
       /** 独立属性标题（该语言；留空回退默认语言） */
       sku_title?: string | null;
+      /** 默认选中文案（该语言；留空回退默认语言） */
+      badge_text?: string | null;
       /** sku_code → 该语言的属性名称/图片覆盖 */
       skus?: Record<
         string,
