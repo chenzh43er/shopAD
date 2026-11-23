@@ -36,20 +36,22 @@ type EditOrderFormValues = {
   package_id?: string;
   quantity: number;
   /** 商品金额（不含运费） */
-  item_value: number;
+  product_amount: number;
   /** 运费 */
-  shipping_fee: number;
+  shipping_amount: number;
   /** 总金额 = 商品金额 + 运费（可手动覆盖） */
   total_amount: number;
+  /** 商品链接 */
+  product_link?: string;
   owner_member?: string;
   shipping_order_no?: string;
   remark?: string;
 };
 
 function resolveOrderProductAmount(order: Order): number {
-  const itemValue = Number(order.item_value);
-  if (Number.isFinite(itemValue) && itemValue >= 0) {
-    return Number(itemValue.toFixed(2));
+  const preferred = Number(order.product_amount ?? order.item_value);
+  if (Number.isFinite(preferred) && preferred >= 0) {
+    return Number(preferred.toFixed(2));
   }
   const line = Number(order.unit_price) * Number(order.quantity || 0);
   if (Number.isFinite(line) && line >= 0) return Number(line.toFixed(2));
@@ -57,12 +59,12 @@ function resolveOrderProductAmount(order: Order): number {
   const fee =
     order.free_shipping === true
       ? 0
-      : Number(order.shipping_fee) || 0;
+      : Number(order.shipping_amount ?? order.shipping_fee) || 0;
   return Number(Math.max(0, total - (Number.isFinite(fee) ? fee : 0)).toFixed(2));
 }
 
 function resolveOrderShippingFee(order: Order): number {
-  const fee = Number(order.shipping_fee);
+  const fee = Number(order.shipping_amount ?? order.shipping_fee);
   if (Number.isFinite(fee) && fee >= 0) return Number(fee.toFixed(2));
   return 0;
 }
@@ -311,9 +313,9 @@ export function OrderEditModal({
       Number(qty ?? form.getFieldValue("quantity")) || 1,
     );
     const productAmount = Number((price * quantityValue).toFixed(2));
-    const fee = Number(form.getFieldValue("shipping_fee")) || 0;
+    const fee = Number(form.getFieldValue("shipping_amount")) || 0;
     form.setFieldsValue({
-      item_value: productAmount,
+      product_amount: productAmount,
       total_amount: Number((productAmount + fee).toFixed(2)),
     });
   };
@@ -324,13 +326,13 @@ export function OrderEditModal({
   ) => {
     const product =
       productAmount ??
-      (Number.isFinite(Number(form.getFieldValue("item_value")))
-        ? Number(form.getFieldValue("item_value"))
+      (Number.isFinite(Number(form.getFieldValue("product_amount")))
+        ? Number(form.getFieldValue("product_amount"))
         : 0);
     const fee =
       shippingFee ??
-      (Number.isFinite(Number(form.getFieldValue("shipping_fee")))
-        ? Number(form.getFieldValue("shipping_fee"))
+      (Number.isFinite(Number(form.getFieldValue("shipping_amount")))
+        ? Number(form.getFieldValue("shipping_amount"))
         : 0);
     form.setFieldsValue({
       total_amount: Number((Math.max(0, product) + Math.max(0, fee)).toFixed(2)),
@@ -480,9 +482,10 @@ export function OrderEditModal({
       product_id: data.product_id ?? undefined,
       package_id: data.package_id ?? undefined,
       quantity: Math.max(1, Number(data.quantity) || 1),
-      item_value: resolveOrderProductAmount(data),
-      shipping_fee: resolveOrderShippingFee(data),
+      product_amount: resolveOrderProductAmount(data),
+      shipping_amount: resolveOrderShippingFee(data),
       total_amount: Number(data.total_amount) || 0,
+      product_link: data.product_link ?? "",
       owner_member: data.owner_member ?? "",
       shipping_order_no: data.shipping_order_no ?? "",
       remark: data.remark ?? "",
@@ -606,9 +609,13 @@ export function OrderEditModal({
             province: values.shipping_province,
           }) || null,
         quantity: values.quantity,
-        item_value: values.item_value,
-        shipping_fee: values.shipping_fee,
+        product_amount: values.product_amount,
+        shipping_amount: values.shipping_amount,
+        // 兼容旧字段写入（服务端会同步别名）
+        item_value: values.product_amount,
+        shipping_fee: values.shipping_amount,
         total_amount: values.total_amount,
+        product_link: values.product_link?.trim() || null,
         owner_member: values.owner_member?.trim() || null,
         shipping_order_no: values.shipping_order_no?.trim() || null,
         remark: values.remark?.trim() || null,
@@ -806,7 +813,7 @@ export function OrderEditModal({
           <Row gutter={16}>
             <Col xs={24} sm={8}>
               <Form.Item
-                name="item_value"
+                name="product_amount"
                 label="商品金额"
                 rules={[{ required: true, message: "请填写商品金额" }]}
               >
@@ -825,7 +832,7 @@ export function OrderEditModal({
             </Col>
             <Col xs={24} sm={8}>
               <Form.Item
-                name="shipping_fee"
+                name="shipping_amount"
                 label="运费"
                 rules={[{ required: true, message: "请填写运费" }]}
               >
@@ -859,6 +866,17 @@ export function OrderEditModal({
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item
+            name="product_link"
+            label="商品链接"
+            style={{ marginBottom: 8 }}
+          >
+            <Input
+              placeholder="https://..."
+              maxLength={INPUT_LIMITS.mediumText}
+              allowClear
+            />
+          </Form.Item>
           <p style={{ color: "#888", margin: "-8px 0 16px", fontSize: 12 }}>
             商品金额不含运费；改数量/商品会按单价×数量同步。总金额默认 =
             商品金额 + 运费，可单独覆盖

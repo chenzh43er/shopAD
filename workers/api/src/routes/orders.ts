@@ -53,7 +53,7 @@ const LOGISTICS_EXPORT_SELECT =
   "id, order_no, product_id, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, remark, cod_amount, total_amount";
 /** 全部订单导出：业务可读字段（不含内部 UUID） */
 const FULL_EXPORT_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, sku_snapshot, unit_price, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, package_name_external, sku_code, sku_snapshot, unit_price, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_address, total_amount, cod_amount, shipping_fee, shipping_amount, other_fee, status, review_status, payment_type, payment_method, remark, reject_reason, owner_member, weight, express_type, insurance_type, insurance_flag, item_value, product_amount, product_link, item_category, item_type, consignor_flag, consignor_name, consignor_phone, shipper_name, shipper_phone, shipper_province, shipper_city, shipper_district, shipper_address, shipper_address_info, reviewed_at, created_at, updated_at";
 
 type ExportRangeQuery = {
   range: (
@@ -88,10 +88,10 @@ async function fetchAllExportRows(
 }
 /** 列表页所需列 + 审核人 / 币种 embed（单次查询，减少往返） */
 const ORDER_LIST_SELECT =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, shipping_fee, free_shipping, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, shipping_fee, shipping_amount, product_amount, product_link, free_shipping, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey(currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 /** 带地区筛选时用 !inner，避免把地区展开成超大 product_id IN (...) */
 const ORDER_LIST_SELECT_REGION =
-  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, shipping_fee, free_shipping, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
+  "id, order_no, shipping_order_no, product_id, product_name, package_name, sku_code, sku_snapshot, quantity, package_count, gift_snapshot, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, total_amount, shipping_fee, shipping_amount, product_amount, product_link, free_shipping, status, review_status, reject_reason, remark, owner_member, reviewed_by, payment_type, created_at, updated_at, reviewer:profiles!orders_reviewed_by_fkey(id, display_name), product:products!orders_product_id_fkey!inner(region_id, currency:currencies!products_currency_id_fkey(id, code, name, name_zh, symbol, symbol_suffix))";
 
 function parseCsvIds(raw: unknown): string[] {
   const parts: string[] = [];
@@ -2437,6 +2437,7 @@ ordersRoutes.post("/full-export", async (c) => {
       total_amount: asNumberOrEmpty(row.total_amount),
       cod_amount: asNumberOrEmpty(row.cod_amount),
       shipping_fee: asNumberOrEmpty(row.shipping_fee),
+      shipping_amount: asNumberOrEmpty(row.shipping_amount ?? row.shipping_fee),
       other_fee: asNumberOrEmpty(row.other_fee),
       currency_code: asText(currency?.code),
       currency_symbol: asText(currency?.symbol),
@@ -2448,6 +2449,8 @@ ordersRoutes.post("/full-export", async (c) => {
       insurance_type: asText(row.insurance_type),
       insurance_flag: asText(row.insurance_flag),
       item_value: asNumberOrEmpty(row.item_value),
+      product_amount: asNumberOrEmpty(row.product_amount ?? row.item_value),
+      product_link: asText(row.product_link),
       item_category: asText(row.item_category),
       item_type: asText(row.item_type),
       consignor_flag: asText(row.consignor_flag),
@@ -2714,6 +2717,7 @@ ordersRoutes.patch("/:id", async (c) => {
     "owner_member",
     "shipping_order_no",
     "remark",
+    "product_link",
   ] as const) {
     if (body[key] === undefined) continue;
     const v = optionalTrimmedString(body[key]);
@@ -2926,40 +2930,56 @@ ordersRoutes.patch("/:id", async (c) => {
     return { ok: true, value: Number(n.toFixed(2)) };
   };
 
+  // shipping_amount 优先于 shipping_fee（同义字段）
+  const shippingAmountInput =
+    body.shipping_amount !== undefined
+      ? body.shipping_amount
+      : body.shipping_fee;
   let shippingFee =
-    typeof before.shipping_fee === "number"
-      ? before.shipping_fee
-      : Number(before.shipping_fee) || 0;
-  if (body.shipping_fee !== undefined) {
-    if (body.shipping_fee === null) {
+    typeof before.shipping_amount === "number"
+      ? before.shipping_amount
+      : typeof before.shipping_fee === "number"
+        ? before.shipping_fee
+        : Number(before.shipping_amount ?? before.shipping_fee) || 0;
+  if (shippingAmountInput !== undefined) {
+    if (shippingAmountInput === null) {
       patch.shipping_fee = null;
+      patch.shipping_amount = null;
       shippingFee = 0;
       touched = true;
     } else {
-      const parsed = parseNonNegMoney(body.shipping_fee, "运费");
+      const parsed = parseNonNegMoney(shippingAmountInput, "运费");
       if (!parsed.ok) return c.json({ error: parsed.error }, 400);
       patch.shipping_fee = parsed.value;
+      patch.shipping_amount = parsed.value;
       shippingFee = parsed.value;
       touched = true;
     }
   }
 
+  // product_amount 优先于 item_value（同义字段）
+  const productAmountInput =
+    body.product_amount !== undefined ? body.product_amount : body.item_value;
   let itemValue =
-    typeof before.item_value === "number"
-      ? before.item_value
-      : Number(before.item_value);
+    typeof before.product_amount === "number"
+      ? before.product_amount
+      : typeof before.item_value === "number"
+        ? before.item_value
+        : Number(before.product_amount ?? before.item_value);
   if (!Number.isFinite(itemValue) || itemValue < 0) {
     itemValue = Number((unitPrice * quantity).toFixed(2));
   }
-  if (body.item_value !== undefined) {
-    if (body.item_value === null) {
+  if (productAmountInput !== undefined) {
+    if (productAmountInput === null) {
       patch.item_value = null;
+      patch.product_amount = null;
       itemValue = Number((unitPrice * quantity).toFixed(2));
       touched = true;
     } else {
-      const parsed = parseNonNegMoney(body.item_value, "商品金额");
+      const parsed = parseNonNegMoney(productAmountInput, "商品金额");
       if (!parsed.ok) return c.json({ error: parsed.error }, 400);
       patch.item_value = parsed.value;
+      patch.product_amount = parsed.value;
       itemValue = parsed.value;
       touched = true;
     }
@@ -2967,6 +2987,7 @@ ordersRoutes.patch("/:id", async (c) => {
     // 更换商品/套餐或改数量且未显式传商品金额时，按单价×数量同步
     itemValue = Number((unitPrice * quantity).toFixed(2));
     patch.item_value = itemValue;
+    patch.product_amount = itemValue;
     touched = true;
   }
 
@@ -2982,15 +3003,16 @@ ordersRoutes.patch("/:id", async (c) => {
     const parsed = parseNonNegMoney(body.total_amount, "总金额");
     if (!parsed.ok) return c.json({ error: parsed.error }, 400);
     applyTotalAmount(parsed.value);
-    // 未单独传商品金额时，用 总金额-运费 回填 item_value，避免物品价值被写成含运费
-    if (body.item_value === undefined && patch.item_value === undefined) {
+    // 未单独传商品金额时，用 总金额-运费 回填，避免物品价值被写成含运费
+    if (productAmountInput === undefined && patch.item_value === undefined) {
       const derived = Number(Math.max(0, parsed.value - shippingFee).toFixed(2));
       patch.item_value = derived;
+      patch.product_amount = derived;
     }
   } else if (
     body.quantity !== undefined ||
-    body.shipping_fee !== undefined ||
-    body.item_value !== undefined ||
+    shippingAmountInput !== undefined ||
+    productAmountInput !== undefined ||
     productIdChanging ||
     packageIdChanging
   ) {
@@ -3054,7 +3076,10 @@ ordersRoutes.patch("/:id", async (c) => {
     quantity: before.quantity,
     unit_price: before.unit_price,
     item_value: before.item_value,
+    product_amount: before.product_amount,
     shipping_fee: before.shipping_fee,
+    shipping_amount: before.shipping_amount,
+    product_link: before.product_link,
     total_amount: before.total_amount,
     shipping_province: before.shipping_province,
     shipping_city: before.shipping_city,
@@ -3077,7 +3102,10 @@ ordersRoutes.patch("/:id", async (c) => {
     quantity: data.quantity,
     unit_price: data.unit_price,
     item_value: data.item_value,
+    product_amount: data.product_amount,
     shipping_fee: data.shipping_fee,
+    shipping_amount: data.shipping_amount,
+    product_link: data.product_link,
     total_amount: data.total_amount,
     shipping_province: data.shipping_province,
     shipping_city: data.shipping_city,

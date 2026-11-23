@@ -10,7 +10,7 @@ type AppContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 /** 公开查询返回字段（不含审核人、内部备注等敏感列） */
 const PUBLIC_ORDER_SELECT =
-  "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_order_no, total_amount, status, payment_type, created_at, updated_at";
+  "id, order_no, product_id, product_name, package_name, customer_name, customer_phone, shipping_address, shipping_province, shipping_city, shipping_district, shipping_detail, shipping_order_no, total_amount, product_amount, shipping_amount, product_link, status, payment_type, created_at, updated_at";
 
 const PUBLIC_RATE_LIMIT = 30;
 const PUBLIC_RATE_WINDOW_MS = 60_000;

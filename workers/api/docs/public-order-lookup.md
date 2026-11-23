@@ -46,6 +46,9 @@ GET /api/orders/by-order-no?order_no={订单号}
     "shipping_detail": "详细地址",
     "shipping_order_no": "运单号或 null",
     "total_amount": 199000,
+    "product_amount": 179000,
+    "shipping_amount": 20000,
+    "product_link": "https://example.com/p/xxx",
     "status": "awaiting_confirm",
     "payment_type": "cod",
     "created_at": "2026-08-02T10:00:00.000Z",
@@ -129,6 +132,9 @@ GET /api/orders/by-phone?phone={手机号}
     "shipping_detail": "详细地址",
     "shipping_order_no": "运单号或 null",
     "total_amount": 199000,
+    "product_amount": 179000,
+    "shipping_amount": 20000,
+    "product_link": "https://example.com/p/xxx",
     "status": "cod_shipped",
     "payment_type": "cod",
     "created_at": "2026-08-02T10:00:00.000Z",
@@ -184,6 +190,9 @@ Invoke-RestMethod "https://shopad-api.ubeator.workers.dev/api/orders/by-phone?ph
 | `shipping_detail` | string \| null | 详细地址 |
 | `shipping_order_no` | string \| null | 物流运单号 |
 | `total_amount` | number | 订单金额 |
+| `product_amount` | number \| null | 商品金额（不含运费，与 `item_value` 同步） |
+| `shipping_amount` | number \| null | 运费金额（与 `shipping_fee` 同步） |
+| `product_link` | string \| null | 商品链接（下单页/落地页 URL） |
 | `status` | string | 订单状态，见下表 |
 | `payment_type` | string \| null | `cod` / `non_cod` 等 |
 | `created_at` | string (ISO 8601) | 创建时间 |

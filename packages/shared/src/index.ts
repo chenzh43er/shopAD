@@ -711,6 +711,8 @@ export interface Order {
   cod_amount: number | null;
   express_type: string | null;
   shipping_fee: number | null;
+  /** 运费金额（与 shipping_fee 同步） */
+  shipping_amount: number | null;
   other_fee: number | null;
   /** 下单时是否包邮快照；null=历史订单未记录 */
   free_shipping: boolean | null;
@@ -720,6 +722,10 @@ export interface Order {
   insurance_type: string | null;
   insurance_flag: string | null;
   item_value: number | null;
+  /** 商品金额（不含运费；与 item_value 同步） */
+  product_amount: number | null;
+  /** 商品链接（落地页 URL） */
+  product_link: string | null;
   item_category: string | null;
   item_type: string | null;
   consignor_flag: string | null;
@@ -1114,8 +1120,14 @@ export interface UpdateOrderInput {
   remark?: string | null;
   /** 商品金额（对应 item_value）；与运费分开编辑 */
   item_value?: number | null;
+  /** 商品金额别名（与 item_value 同步；优先于 item_value） */
+  product_amount?: number | null;
   /** 运费；包邮订单可传 0 */
   shipping_fee?: number | null;
+  /** 运费别名（与 shipping_fee 同步；优先于 shipping_fee） */
+  shipping_amount?: number | null;
+  /** 商品链接（落地页 URL） */
+  product_link?: string | null;
   /**
    * 订单总金额（商品金额 + 运费）。
    * 未传时：数量/商品/套餐/商品金额/运费变更仍按 商品金额+运费 重算。

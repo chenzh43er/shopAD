@@ -363,15 +363,15 @@ export function OrderDetailPage() {
     order.status === "awaiting_shipment";
   const canRevert = canRevertCodOrder(paymentType, order.status);
   const productAmount = (() => {
-    const itemValue = Number(order.item_value);
-    if (Number.isFinite(itemValue) && itemValue >= 0) {
-      return Number(itemValue.toFixed(2));
+    const amount = Number(order.product_amount ?? order.item_value);
+    if (Number.isFinite(amount) && amount >= 0) {
+      return Number(amount.toFixed(2));
     }
     const line = Number(order.unit_price) * Number(order.quantity || 0);
     return Number.isFinite(line) && line >= 0 ? Number(line.toFixed(2)) : 0;
   })();
   const shippingFeeDisplay = (() => {
-    const fee = Number(order.shipping_fee);
+    const fee = Number(order.shipping_amount ?? order.shipping_fee);
     if (Number.isFinite(fee) && fee >= 0) return fee;
     return order.free_shipping === true ? 0 : null;
   })();
@@ -480,6 +480,15 @@ export function OrderDetailPage() {
         </Descriptions.Item>
         <Descriptions.Item label="总金额">
           {formatMoney(order.total_amount, order.currency)}
+        </Descriptions.Item>
+        <Descriptions.Item label="商品链接" span={2}>
+          {order.product_link ? (
+            <a href={order.product_link} target="_blank" rel="noreferrer">
+              {order.product_link}
+            </a>
+          ) : (
+            "—"
+          )}
         </Descriptions.Item>
         <Descriptions.Item label="是否包邮">
           {order.free_shipping === true
