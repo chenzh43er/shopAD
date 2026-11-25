@@ -1845,19 +1845,11 @@ function parseSkuSnapshot(raw: unknown): ParsedSkuSnapshot[] {
   return list;
 }
 
-/** 订单导出：1-红色 2-蓝色 */
+/** 订单详情展示：1-红色 2-蓝色（仅用于页面展示，导出不要使用） */
 function formatSkuSnapshotLabels(snapshot: ParsedSkuSnapshot[]): string {
   return snapshot
     .map((item, index) => `${index + 1}-${item.sku_code}`)
     .join(" ");
-}
-
-/** 订单导出：1-红色 2-蓝色 2件 */
-function formatSkuSnapshotOrder(snapshot: ParsedSkuSnapshot[]): string {
-  if (snapshot.length === 0) return "";
-  const labels = formatSkuSnapshotLabels(snapshot);
-  const totalUnits = snapshot.reduce((sum, item) => sum + item.quantity, 0);
-  return `${labels} ${totalUnits}件`;
 }
 
 /** 物流/财务：红色*1+蓝色*1（赠品追加在后方） */
@@ -2427,10 +2419,8 @@ ordersRoutes.post("/full-export", async (c) => {
         skuSnapshot.length > 0
           ? formatSkuSnapshotLabels(skuSnapshot)
           : asText(row.sku_code),
-      sku_quantity:
-        skuSnapshot.length > 0
-          ? formatSkuSnapshotOrder(skuSnapshot)
-          : formatSkuQuantityWithGifts(row, giftLookup(productId)),
+      // 导出统一固定为「SKU*数量+SKU*数量」，不要复用订单详情的「1-红色 2-蓝色 2件」展示格式
+      sku_quantity: formatSkuQuantityWithGifts(row, giftLookup(productId)),
       unit_price: asNumberOrEmpty(row.unit_price),
       quantity: orderPurchaseQty(row),
       package_count: asNumberOrEmpty(row.package_count),
