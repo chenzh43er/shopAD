@@ -211,6 +211,26 @@ export const COD_TABS = [
 
 export type CodTabKey = (typeof COD_TABS)[number]["key"];
 
+type OrderStatusCounts = Record<CodTabKey, number>;
+
+type OrderBatchSummary = {
+  total: number;
+  /** 忽略当前 Tab 状态的命中数，用于解释「提交 N 个、本 Tab 只有 M 笔」 */
+  matched_all?: number;
+  /** 本次提交的查询项数量（订单号 / 电话 / 运单号） */
+  query_count?: number;
+  missing_order_nos?: string[];
+  missing_phones?: string[];
+  missing_shipping_order_nos?: string[];
+  truncated?: boolean;
+};
+
+type OrdersListResponse = Paginated<Order> & {
+  counts?: OrderStatusCounts | null;
+  counts_error?: string | null;
+  batch?: OrderBatchSummary | null;
+};
+
 const DEFAULT_COD_TAB: CodTabKey = "pending_review";
 
 export function OrdersPage() {
@@ -238,7 +258,11 @@ export function OrdersPage() {
   const [batchDraft, setBatchDraft] = useState("");
   const [batchPhoneDraft, setBatchPhoneDraft] = useState("");
   const [batchShippingDraft, setBatchShippingDraft] = useState("");
-  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
+  // 默认显示今天：日期选择器同步显示今天范围，列表与 Tab 数字共用该范围
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(() => [
+    dayjs().startOf("day"),
+    dayjs().endOf("day"),
+  ]);
   const [regionId, setRegionId] = useState<string | undefined>();
   const [regions, setRegions] = useState<AddressLibrary[]>([]);
   const [regionsLoading, setRegionsLoading] = useState(false);
@@ -252,10 +276,16 @@ export function OrdersPage() {
   const [sortOrder, setSortOrder] = useState<"ascend" | "descend">("descend");
   const [total, setTotal] = useState(0);
   const [data, setData] = useState<Order[]>([]);
+  const [statusCounts, setStatusCounts] = useState<OrderStatusCounts | null>(null);
+  const [countsLoading, setCountsLoading] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
   const pendingBatchNotify = useRef<
     "order_no" | "phone" | "shipping_order_no" | null
   >(null);
+  /** 列表请求序号：快速切换 Tab/筛选时丢弃过期响应，避免旧 Tab 数据覆盖当前 Tab */
+  const loadSeqRef = useRef(0);
+  /** 计数只在基础筛选变化时刷新；切 Tab / 翻页 / 排序不重复请求 */
+  const lastCountsKeyRef = useRef<string | null>(null);
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
@@ -348,14 +378,51 @@ export function OrdersPage() {
     };
   }, [activeCodTab]);
 
-  const load = useCallback(async () => {
+  /** 计数作用域：不含当前 Tab 的 status / review_status，也不含分页和排序 */
+  const countsKey = useMemo(
+    () =>
+      JSON.stringify({
+        regionId,
+        productIds,
+        dateRange: dateRange
+          ? [dateRange[0].toISOString(), dateRange[1].toISOString()]
+          : null,
+        orderNo,
+        customerPhone,
+        shippingOrderNo,
+        batchOrderNos,
+        batchPhones,
+        batchShippingOrderNos,
+      }),
+    [
+      regionId,
+      productIds,
+      dateRange,
+      orderNo,
+      customerPhone,
+      shippingOrderNo,
+      batchOrderNos,
+      batchPhones,
+      batchShippingOrderNos,
+    ],
+  );
+
+  const load = useCallback(async (opts: { withCounts?: boolean } = {}) => {
+    // 手动刷新 / 订单状态变更默认刷新计数；切 Tab、翻页、排序由调用方显式关闭
+    const withCounts = opts.withCounts !== false;
+    const requestCountsKey = countsKey;
+    const seq = ++loadSeqRef.current;
     // 必须先选定地区再拉列表（默认 ID / 无权限则其他）
     if (!regionId) {
       setData([]);
       setTotal(0);
+      setStatusCounts(null);
+      setCountsLoading(false);
+      setLoading(false);
       return;
     }
     setLoading(true);
+    if (withCounts) setCountsLoading(true);
     try {
       const params = new URLSearchParams({
         page: String(page),
@@ -394,9 +461,22 @@ export function OrdersPage() {
         params.set("product_ids", productIds.join(","));
       }
 
-      const res = await apiFetch<Paginated<Order>>(
+      if (withCounts) {
+        params.set("include_counts", "1");
+      }
+
+      const res = await apiFetch<OrdersListResponse>(
         `/api/orders?${params.toString()}`,
       );
+      // 计数与列表分开判定：切 Tab 不应丢弃仍在途的同一筛选计数
+      if (withCounts && requestCountsKey === lastCountsKeyRef.current) {
+        setStatusCounts(res.counts ?? null);
+        setCountsLoading(false);
+        if (res.counts_error) {
+          console.warn("订单状态计数失败：", res.counts_error);
+        }
+      }
+      if (seq !== loadSeqRef.current) return;
       setData(res.data);
       setTotal(res.total);
       // API 在页码越界时会回落 page=1；同步本地页码以触发重新加载真实数据
@@ -414,7 +494,49 @@ export function OrdersPage() {
             : notifyKind === "phone"
               ? batchPhones
               : batchShippingOrderNos;
-        if (res.total === 0) {
+        const batch = res.batch;
+        if (batch) {
+          // total = 当前 Tab 下的命中数（与列表「共 N 条」一致）
+          // matched_all = 忽略 Tab 状态的命中数，用来解释跨状态差额
+          const queryCount = batch.query_count ?? queryItems.length;
+          const queryUnit =
+            notifyKind === "phone"
+              ? "个电话"
+              : notifyKind === "shipping_order_no"
+                ? "个运单号"
+                : "个订单号";
+          const others = Math.max(
+            0,
+            (batch.matched_all ?? batch.total) - batch.total,
+          );
+          const missing =
+            notifyKind === "order_no"
+              ? (batch.missing_order_nos ?? [])
+              : notifyKind === "phone"
+                ? (batch.missing_phones ?? [])
+                : (batch.missing_shipping_order_nos ?? []);
+          const head =
+            `已匹配 ${batch.total} 笔（查询 ${queryCount} ${queryUnit}` +
+            (others > 0 ? `，另有 ${others} 笔属于其他状态` : "") +
+            (batch.truncated ? `，结果超过 1000 条未逐条校验` : "") +
+            "）";
+          if (missing.length > 0) {
+            const preview = missing.slice(0, 5).join("、");
+            const more = missing.length > 5 ? ` 等 ${missing.length} 个` : "";
+            const label =
+              notifyKind === "phone"
+                ? "未匹配电话"
+                : notifyKind === "shipping_order_no"
+                  ? "未匹配运单号"
+                  : "未匹配";
+            message.info(`${head}；${label}：${preview}${more}`);
+          } else if (batch.total === 0) {
+            message.warning(head);
+          } else {
+            message.success(head);
+          }
+        } else if (res.total === 0) {
+          // 旧版 API 回退
           message.warning("未找到匹配的订单");
         } else if (
           notifyKind === "order_no" &&
@@ -478,6 +600,7 @@ export function OrdersPage() {
         }
       }
     } catch (e) {
+      if (seq !== loadSeqRef.current) return;
       pendingBatchNotify.current = null;
       const msg = e instanceof Error ? e.message : "";
       // 兼容尚未部署 API 修复的旧响应：越界时回第 1 页重试
@@ -487,7 +610,12 @@ export function OrdersPage() {
       }
       message.error(msg || "加载失败");
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) {
+        setLoading(false);
+        if (withCounts && requestCountsKey === lastCountsKeyRef.current) {
+          setCountsLoading(false);
+        }
+      }
     }
   }, [
     page,
@@ -507,11 +635,14 @@ export function OrdersPage() {
     regionId,
     productIds,
     sortOrder,
+    countsKey,
   ]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    const withCounts = lastCountsKeyRef.current !== countsKey;
+    lastCountsKeyRef.current = countsKey;
+    void load({ withCounts });
+  }, [load, countsKey]);
 
   /** 离开支持运单查询的 Tab 时清空运单筛选，避免状态残留 */
   useEffect(() => {
@@ -635,7 +766,6 @@ export function OrdersPage() {
     setBatchShippingDraft("");
     setBatchOrderNos(nos);
     setPage(1);
-    setPageSize(Math.min(Math.max(nos.length, 20), 500));
     setBatchModalOpen(false);
   };
 
@@ -662,7 +792,6 @@ export function OrdersPage() {
     setBatchShippingDraft("");
     setBatchPhones(phones);
     setPage(1);
-    setPageSize(Math.min(Math.max(phones.length, 20), 500));
     setBatchPhoneModalOpen(false);
   };
 
@@ -689,7 +818,6 @@ export function OrdersPage() {
     setBatchPhoneDraft("");
     setBatchShippingOrderNos(nos);
     setPage(1);
-    setPageSize(Math.min(Math.max(nos.length, 20), 500));
     setBatchShippingModalOpen(false);
   };
 
@@ -1727,6 +1855,8 @@ export function OrdersPage() {
             value={regionId}
             onChange={(v) => {
               setPage(1);
+              setStatusCounts(null);
+              lastCountsKeyRef.current = null;
               setRegionId(v);
             }}
             options={regions.map((r) => ({ value: r.id, label: r.name }))}
@@ -1765,7 +1895,16 @@ export function OrdersPage() {
         }}
         items={COD_TABS.map((t) => ({
           key: t.key,
-          label: t.label,
+          label: (
+            <span
+              className={`cod-tab-label${countsLoading ? " is-loading" : ""}`}
+            >
+              {t.label}
+              <span className="cod-tab-count">
+                {statusCounts ? statusCounts[t.key] : "–"}
+              </span>
+            </span>
+          ),
         }))}
       />
       <Space style={{ marginBottom: 16 }} wrap>
@@ -1889,6 +2028,19 @@ export function OrdersPage() {
             }}
           >
             批量运单号（{batchShippingOrderNos.length}）
+          </Tag>
+        ) : null}
+        {isBatchQuery ? (
+          <Tag color="green">
+            {loading
+              ? "匹配中…"
+              : `当前分类匹配 ${total} / 提交 ${
+                  isBatchOrderQuery
+                    ? batchOrderNos.length
+                    : isBatchPhoneQuery
+                      ? batchPhones.length
+                      : batchShippingOrderNos.length
+                }`}
           </Tag>
         ) : null}
         <Button onClick={() => void load()}>刷新</Button>

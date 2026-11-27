@@ -121,6 +121,29 @@ function parsePage(raw: string | undefined, fallback = 1): number {
 
 const ORDER_LIST_MAX_PAGE_SIZE = 500;
 
+/** COD 各 Tab 的计数谓词：必须与前端 COD_TABS 的 status/review_status 保持一致 */
+const COD_ORDER_COUNT_TABS: ReadonlyArray<{
+  key: string;
+  status: OrderStatus;
+  reviewStatus?: ReviewStatus;
+}> = [
+  { key: "pending_review", status: "awaiting_review", reviewStatus: "pending" },
+  {
+    key: "awaiting_confirm",
+    status: "awaiting_confirm",
+    reviewStatus: "approved",
+  },
+  {
+    key: "awaiting_shipment",
+    status: "awaiting_shipment",
+    reviewStatus: "approved",
+  },
+  { key: "shipped", status: "cod_shipped", reviewStatus: "approved" },
+  { key: "completed", status: "cod_completed", reviewStatus: "approved" },
+  { key: "refused", status: "cod_refused", reviewStatus: "approved" },
+  { key: "invalid", status: "cancelled" },
+];
+
 function parsePageSize(raw: string | undefined, fallback = 20): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -1388,16 +1411,49 @@ ordersRoutes.get("/", async (c) => {
   const productIds = parseCsvIds(c.req.query("product_ids"));
   const sortRaw = c.req.query("sort")?.trim() ?? "created_at.desc";
   const sortAsc = sortRaw === "created_at.asc";
+  const includeCounts = c.req.query("include_counts") === "1";
+
+  const dateFromParsed = parseOptionalDateBound(dateFrom, "开始日期");
+  if (!dateFromParsed.ok) {
+    return c.json({ error: dateFromParsed.error }, 400);
+  }
+  const dateToParsed = parseOptionalDateBound(dateTo, "结束日期");
+  if (!dateToParsed.ok) {
+    return c.json({ error: dateToParsed.error }, 400);
+  }
+  if (
+    dateFromParsed.iso &&
+    dateToParsed.iso &&
+    dateFromParsed.iso > dateToParsed.iso
+  ) {
+    return c.json({ error: "开始日期不能晚于结束日期" }, 400);
+  }
+
+  const dateFromIso = dateFromParsed.iso;
+  const dateToIso = dateToParsed.iso;
+
+  // 批量匹配只替换匹配字段，仍叠加当前 Tab 的 status / review_status；
+  // 「全部订单」Tab 不带状态，因此仍能跨状态查看。
+  const batchByOrderNo = orderNos.length > 0;
+  const batchByPhone = !batchByOrderNo && customerPhones.length > 0;
+  const batchByShipping =
+    !batchByOrderNo && !batchByPhone && shippingOrderNos.length > 0;
+
+  if (status && !isOrderStatus(status)) {
+    return c.json({ error: `无效的订单状态：${status}` }, 400);
+  }
+  if (
+    reviewStatus &&
+    reviewStatus !== "not_required" &&
+    reviewStatus !== "pending" &&
+    reviewStatus !== "approved" &&
+    reviewStatus !== "rejected"
+  ) {
+    return c.json({ error: `无效的审核状态：${reviewStatus}` }, 400);
+  }
 
   const supabase = createServiceClient(c.env);
   const listSelect: string = regionId ? ORDER_LIST_SELECT_REGION : ORDER_LIST_SELECT;
-  let query = supabase
-    .from("orders")
-    // exact：后台「共 N 条」需准确；estimated 依赖 PG 表统计，插入后长期滞后会冻在旧值
-    .select(listSelect, { count: "exact" })
-    .order("created_at", { ascending: sortAsc })
-    .order("id", { ascending: sortAsc })
-    .range((page - 1) * pageSize, page * pageSize - 1);
 
   let filterProductIds: string[] | null | "empty";
   try {
@@ -1413,8 +1469,36 @@ ordersRoutes.get("/", async (c) => {
       500,
     );
   }
+
+  const zeroCounts = (): Record<string, number> => {
+    const next: Record<string, number> = { all: 0 };
+    for (const tab of COD_ORDER_COUNT_TABS) next[tab.key] = 0;
+    return next;
+  };
+  const emptyBatchSummary = () => {
+    if (!includeCounts) return null;
+    if (batchByOrderNo) {
+      return { total: 0, missing_order_nos: orderNos };
+    }
+    if (batchByPhone) {
+      return { total: 0, missing_phones: customerPhones };
+    }
+    if (batchByShipping) {
+      return { total: 0, missing_shipping_order_nos: shippingOrderNos };
+    }
+    return null;
+  };
+
   if (filterProductIds === "empty") {
-    return c.json({ data: [], total: 0, page, pageSize });
+    return c.json({
+      data: [],
+      total: 0,
+      page,
+      pageSize,
+      ...(includeCounts
+        ? { counts: zeroCounts(), counts_error: null, batch: emptyBatchSummary() }
+        : {}),
+    });
   }
   if (filterProductIds) {
     // PostgREST URL 过长保护：所属人商品过多时分批不现实，仍用 IN，但已去掉地区展开
@@ -1427,78 +1511,205 @@ ordersRoutes.get("/", async (c) => {
         400,
       );
     }
-    query = query.in("product_id", filterProductIds);
   }
 
-  if (regionId === REGION_UNSET) {
-    query = query.is("product.region_id", null);
-  } else if (regionId) {
-    query = query.eq("product.region_id", regionId);
+  const productIdFilter = filterProductIds as string[] | null;
+
+  /** 列表与计数共用同一套基础筛选，避免「数字 7、列表 6」 */
+  const applyBaseFilters = (source: any) => {
+    let query = source;
+    if (productIdFilter) {
+      query = query.in("product_id", productIdFilter);
+    }
+    if (regionId === REGION_UNSET) {
+      query = query.is("product.region_id", null);
+    } else if (regionId) {
+      query = query.eq("product.region_id", regionId);
+    }
+    if (batchByOrderNo) {
+      query = query.in("order_no", orderNos);
+    } else if (batchByPhone) {
+      const phoneFilter = phoneLookupOrFilter(customerPhones);
+      if (phoneFilter) query = query.or(phoneFilter);
+    } else if (batchByShipping) {
+      query = query.in("shipping_order_no", shippingOrderNos);
+    } else if (orderNo) {
+      // 前缀匹配可走 order_no btree；中间模糊会全表扫描
+      query = query.ilike("order_no", `${orderNo}%`);
+    } else if (customerPhone) {
+      const phoneFilter = phoneLookupOrFilter([customerPhone]);
+      if (phoneFilter) query = query.or(phoneFilter);
+    } else if (shippingOrderNo) {
+      query = query.ilike("shipping_order_no", `${shippingOrderNo}%`);
+    }
+    if (paymentType === "cod" || paymentType === "non_cod") {
+      query = query.eq("payment_type", paymentType);
+    }
+    if (dateFromIso) query = query.gte("created_at", dateFromIso);
+    if (dateToIso) query = query.lte("created_at", dateToIso);
+    return query;
+  };
+
+  let listQuery: any = supabase
+    .from("orders")
+    // exact：后台「共 N 条」需准确；estimated 依赖 PG 表统计，插入后长期滞后会冻在旧值
+    .select(listSelect, { count: "exact" });
+  listQuery = applyBaseFilters(listQuery);
+  if (status) listQuery = listQuery.eq("status", status);
+  if (reviewStatus) listQuery = listQuery.eq("review_status", reviewStatus);
+  listQuery = listQuery
+    .order("created_at", { ascending: sortAsc })
+    .order("id", { ascending: sortAsc })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+
+  const countsPromise: Promise<{
+    counts: Record<string, number> | null;
+    error: string | null;
+  }> = includeCounts
+    ? (async () => {
+        const countSelect = regionId
+          ? "id, product:products!orders_product_id_fkey!inner(region_id)"
+          : "id";
+        const countOne = async (predicate?: {
+          status?: OrderStatus;
+          reviewStatus?: ReviewStatus;
+        }) => {
+          let query: any = supabase
+            .from("orders")
+            .select(countSelect, { count: "exact" })
+            .limit(1);
+          query = applyBaseFilters(query);
+          if (predicate?.status) query = query.eq("status", predicate.status);
+          if (predicate?.reviewStatus) {
+            query = query.eq("review_status", predicate.reviewStatus);
+          }
+          const { count: nextCount, error: countError } = await query;
+          if (countError) throw new Error(countError.message);
+          return nextCount ?? 0;
+        };
+        try {
+          const [allCount, ...tabCounts] = await Promise.all([
+            countOne(),
+            ...COD_ORDER_COUNT_TABS.map((tab) => countOne(tab)),
+          ]);
+          const next: Record<string, number> = { all: allCount };
+          COD_ORDER_COUNT_TABS.forEach((tab, index) => {
+            next[tab.key] = tabCounts[index] ?? 0;
+          });
+          return { counts: next, error: null };
+        } catch (e) {
+          return {
+            counts: null,
+            error: e instanceof Error ? e.message : "状态计数失败",
+          };
+        }
+      })()
+    : Promise.resolve({ counts: null, error: null });
+
+  const [listResult, countResult] = await Promise.all([
+    listQuery,
+    countsPromise,
+  ]);
+  const { data, error, count } = listResult;
+
+  let batchSummary: {
+    total: number;
+    matched_all?: number;
+    query_count?: number;
+    missing_order_nos?: string[];
+    missing_phones?: string[];
+    missing_shipping_order_nos?: string[];
+    truncated?: boolean;
+  } | null = null;
+  if (
+    includeCounts &&
+    (batchByOrderNo || batchByPhone || batchByShipping)
+  ) {
+    // total 取当前 Tab（status/review_status）下的命中数，与列表「共 N 条」一致；
+    // matched_all 为忽略 Tab 状态的命中数，用于解释「提交 149 个、本 Tab 只有 55 笔」
+    const scopedTotal = count ?? 0;
+    const matchedAll = countResult.counts?.all;
+    const queryCount = batchByOrderNo
+      ? orderNos.length
+      : batchByPhone
+        ? customerPhones.length
+        : shippingOrderNos.length;
+    const field = batchByOrderNo
+      ? "order_no"
+      : batchByPhone
+        ? "customer_phone"
+        : "shipping_order_no";
+    const batchSelect = regionId
+      ? `${field}, product:products!orders_product_id_fkey!inner(region_id)`
+      : field;
+    let batchQuery: any = supabase
+      .from("orders")
+      .select(batchSelect)
+      .limit(1000);
+    batchQuery = applyBaseFilters(batchQuery);
+    const { data: batchData, error: batchError } = await batchQuery;
+    if (!batchError) {
+      const values = ((batchData ?? []) as Array<Record<string, unknown>>)
+        .map((row) => (typeof row[field] === "string" ? row[field].trim() : ""))
+        .filter(Boolean);
+      if (values.length >= 1000) {
+        batchSummary = {
+          total: scopedTotal,
+          matched_all: matchedAll,
+          query_count: queryCount,
+          truncated: true,
+        };
+      } else if (batchByOrderNo) {
+        const found = new Set(values);
+        batchSummary = {
+          total: scopedTotal,
+          matched_all: matchedAll,
+          query_count: queryCount,
+          missing_order_nos: orderNos.filter((no) => !found.has(no)),
+        };
+      } else if (batchByShipping) {
+        const found = new Set(values);
+        batchSummary = {
+          total: scopedTotal,
+          matched_all: matchedAll,
+          query_count: queryCount,
+          missing_shipping_order_nos: shippingOrderNos.filter(
+            (no) => !found.has(no),
+          ),
+        };
+      } else {
+        const foundPhones = values.map((value) => phoneSearchDigits(value));
+        batchSummary = {
+          total: scopedTotal,
+          matched_all: matchedAll,
+          query_count: queryCount,
+          missing_phones: customerPhones.filter(
+            (phone) =>
+              !foundPhones.some(
+                (found) => found === phone || found.startsWith(phone),
+              ),
+          ),
+        };
+      }
+    }
   }
 
-  // 批量订单号 / 手机号 / 运单号匹配时，不按子状态收窄，便于跨 Tab 查出结果
-  const batchByOrderNo = orderNos.length > 0;
-  const batchByPhone = !batchByOrderNo && customerPhones.length > 0;
-  const batchByShipping =
-    !batchByOrderNo && !batchByPhone && shippingOrderNos.length > 0;
-  const isBatchLookup = batchByOrderNo || batchByPhone || batchByShipping;
-  if (!isBatchLookup && status) {
-    if (!isOrderStatus(status)) {
-      return c.json({ error: `无效的订单状态：${status}` }, 400);
-    }
-    query = query.eq("status", status);
-  }
-  if (batchByOrderNo) {
-    query = query.in("order_no", orderNos);
-  } else if (batchByPhone) {
-    const phoneFilter = phoneLookupOrFilter(customerPhones);
-    if (phoneFilter) query = query.or(phoneFilter);
-  } else if (batchByShipping) {
-    query = query.in("shipping_order_no", shippingOrderNos);
-  } else if (orderNo) {
-    // 前缀匹配可走 order_no btree；中间模糊会全表扫描
-    query = query.ilike("order_no", `${orderNo}%`);
-  } else if (customerPhone) {
-    const phoneFilter = phoneLookupOrFilter([customerPhone]);
-    if (phoneFilter) query = query.or(phoneFilter);
-  } else if (shippingOrderNo) {
-    query = query.ilike("shipping_order_no", `${shippingOrderNo}%`);
-  }
-  if (!isBatchLookup && reviewStatus) {
-    if (
-      reviewStatus !== "not_required" &&
-      reviewStatus !== "pending" &&
-      reviewStatus !== "approved" &&
-      reviewStatus !== "rejected"
-    ) {
-      return c.json({ error: `无效的审核状态：${reviewStatus}` }, 400);
-    }
-    query = query.eq("review_status", reviewStatus);
-  }
-  if (paymentType === "cod" || paymentType === "non_cod") {
-    query = query.eq("payment_type", paymentType);
-  }
-  // 按订单创建日期筛选日期区间
-  if (dateFrom) {
-    const from = new Date(dateFrom);
-    if (Number.isNaN(from.getTime())) {
-      return c.json({ error: "开始日期无效" }, 400);
-    }
-    query = query.gte("created_at", from.toISOString());
-  }
-  if (dateTo) {
-    const to = new Date(dateTo);
-    if (Number.isNaN(to.getTime())) {
-      return c.json({ error: "结束日期无效" }, 400);
-    }
-    query = query.lte("created_at", to.toISOString());
-  }
-
-  const { data, error, count } = await query;
   if (error) {
     // 页码超出结果集（筛选变少、批量处理后仍停在高页等）→ 回落到第 1 页，避免把 PGRST103 当 500
     if (isPostgrestRangeNotSatisfiable(error)) {
-      return c.json({ data: [], total: 0, page: 1, pageSize });
+      return c.json({
+        data: [],
+        total: 0,
+        page: 1,
+        pageSize,
+        ...(includeCounts
+          ? {
+              counts: countResult.counts,
+              counts_error: countResult.error,
+              batch: batchSummary,
+            }
+          : {}),
+      });
     }
     return c.json({ error: error.message }, 500);
   }
@@ -1536,6 +1747,13 @@ ordersRoutes.get("/", async (c) => {
     total: count ?? 0,
     page,
     pageSize,
+    ...(includeCounts
+      ? {
+          counts: countResult.counts,
+          counts_error: countResult.error,
+          batch: batchSummary,
+        }
+      : {}),
   });
 });
 
