@@ -286,6 +286,34 @@ export function OrdersPage() {
   const loadSeqRef = useRef(0);
   /** 计数只在基础筛选变化时刷新；切 Tab / 翻页 / 排序不重复请求 */
   const lastCountsKeyRef = useRef<string | null>(null);
+  /** 按订单号 / 手机号（含批量）查询时默认不限时间 */
+  const lookupWithoutDate =
+    orderNo.trim() !== "" ||
+    customerPhone.trim() !== "" ||
+    batchOrderNos.length > 0 ||
+    batchPhones.length > 0;
+  /** 进入查询态前的日期范围，退出查询态时恢复 */
+  const dateBeforeLookupRef = useRef<[Dayjs, Dayjs] | null>(null);
+  const lookupActiveRef = useRef(false);
+  /** 查询态下即使选择器里还留着旧日期，也不参与列表 / 计数 / 导出 */
+  const effectiveDateRange = lookupWithoutDate ? null : dateRange;
+
+  useEffect(() => {
+    if (lookupWithoutDate && !lookupActiveRef.current) {
+      lookupActiveRef.current = true;
+      dateBeforeLookupRef.current = dateRange;
+      if (dateRange !== null) setDateRange(null);
+    } else if (!lookupWithoutDate && lookupActiveRef.current) {
+      lookupActiveRef.current = false;
+      const restore = dateBeforeLookupRef.current;
+      dateBeforeLookupRef.current = null;
+      setDateRange(
+        (prev) =>
+          prev ??
+          restore ?? [dayjs().startOf("day"), dayjs().endOf("day")],
+      );
+    }
+  }, [lookupWithoutDate, dateRange]);
 
   const [remarkModalOpen, setRemarkModalOpen] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState("");
@@ -384,8 +412,11 @@ export function OrdersPage() {
       JSON.stringify({
         regionId,
         productIds,
-        dateRange: dateRange
-          ? [dateRange[0].toISOString(), dateRange[1].toISOString()]
+        dateRange: effectiveDateRange
+          ? [
+              effectiveDateRange[0].toISOString(),
+              effectiveDateRange[1].toISOString(),
+            ]
           : null,
         orderNo,
         customerPhone,
@@ -397,7 +428,7 @@ export function OrdersPage() {
     [
       regionId,
       productIds,
-      dateRange,
+      effectiveDateRange,
       orderNo,
       customerPhone,
       shippingOrderNo,
@@ -453,9 +484,9 @@ export function OrdersPage() {
           params.set("shipping_order_no", shippingOrderNo.trim());
         }
       }
-      if (dateRange?.[0] && dateRange?.[1]) {
-        params.set("date_from", dateRange[0].toISOString());
-        params.set("date_to", dateRange[1].toISOString());
+      if (effectiveDateRange?.[0] && effectiveDateRange?.[1]) {
+        params.set("date_from", effectiveDateRange[0].toISOString());
+        params.set("date_to", effectiveDateRange[1].toISOString());
       }
       if (productIds.length > 0) {
         params.set("product_ids", productIds.join(","));
@@ -631,7 +662,7 @@ export function OrdersPage() {
     isBatchPhoneQuery,
     isBatchShippingQuery,
     showWaybillSearch,
-    dateRange,
+    effectiveDateRange,
     regionId,
     productIds,
     sortOrder,
@@ -1357,9 +1388,9 @@ export function OrdersPage() {
       }
 
       // 沿用列表页当前筛选条件（日期 / 单号 / 电话 / 批量查询）
-      if (dateRange?.[0] && dateRange?.[1]) {
-        payload.date_from = dateRange[0].toISOString();
-        payload.date_to = dateRange[1].toISOString();
+      if (effectiveDateRange?.[0] && effectiveDateRange?.[1]) {
+        payload.date_from = effectiveDateRange[0].toISOString();
+        payload.date_to = effectiveDateRange[1].toISOString();
       }
       if (isBatchOrderQuery) {
         payload.order_nos = batchOrderNos;
@@ -1910,6 +1941,7 @@ export function OrdersPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <OrderDateTimeFilter
           value={dateRange}
+          disabled={lookupWithoutDate}
           onChange={(next) => {
             setPage(1);
             setDateRange(next);

@@ -346,6 +346,17 @@ a {
   background: var(--accent-soft);
 }
 
+.order-time-quick__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.order-time-quick__btn:disabled:hover {
+  color: var(--muted);
+  border-color: var(--line);
+  background: #f8fbff;
+}
+
 .order-time-quick__btn--active {
   color: var(--accent);
   border-color: var(--accent);

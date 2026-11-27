@@ -72,6 +72,8 @@ function composeRange(
 type Props = {
   value: [Dayjs, Dayjs] | null;
   onChange: (next: [Dayjs, Dayjs] | null) => void;
+  /** 按订单号/手机号查询时默认不限时间，日期控件置灰 */
+  disabled?: boolean;
 };
 
 /**
@@ -79,7 +81,11 @@ type Props = {
  * - 左侧：只选日期（含快捷区间）
  * - 右侧：开始/结束时分，默认 00:00 ~ 23:59；可滚动微调，也可点常用时分
  */
-export function OrderDateTimeFilter({ value, onChange }: Props) {
+export function OrderDateTimeFilter({
+  value,
+  onChange,
+  disabled = false,
+}: Props) {
   const [timeFrom, setTimeFrom] = useState<Dayjs>(DEFAULT_TIME_FROM);
   const [timeTo, setTimeTo] = useState<Dayjs>(DEFAULT_TIME_TO);
   const [activeSide, setActiveSide] = useState<"from" | "to">("from");
@@ -147,9 +153,17 @@ export function OrderDateTimeFilter({ value, onChange }: Props) {
   };
 
   return (
-    <div className="order-datetime-filter">
+    <div
+      className="order-datetime-filter"
+      title={
+        disabled
+          ? "按订单号/手机号查询时默认不限时间，清空查询后恢复日期筛选"
+          : undefined
+      }
+    >
       <RangePicker
         value={dateValue}
+        disabled={disabled}
         allowClear
         format="YYYY-MM-DD"
         presets={DATE_PRESETS}
@@ -161,7 +175,9 @@ export function OrderDateTimeFilter({ value, onChange }: Props) {
           }
         }}
         style={{ width: 248 }}
-        placeholder={["开始日期", "结束日期"]}
+        placeholder={
+          disabled ? ["不限时间", "不限时间"] : ["开始日期", "结束日期"]
+        }
       />
 
       <div className="order-datetime-filter__times">
@@ -170,6 +186,7 @@ export function OrderDateTimeFilter({ value, onChange }: Props) {
         </Text>
         <TimePicker
           {...timePickerProps}
+          disabled={disabled}
           className={
             activeSide === "from"
               ? "order-time-picker order-time-picker--active"
@@ -188,6 +205,7 @@ export function OrderDateTimeFilter({ value, onChange }: Props) {
         </Text>
         <TimePicker
           {...timePickerProps}
+          disabled={disabled}
           className={
             activeSide === "to"
               ? "order-time-picker order-time-picker--active"
@@ -213,6 +231,7 @@ export function OrderDateTimeFilter({ value, onChange }: Props) {
             <button
               key={item.label}
               type="button"
+              disabled={disabled}
               title={`设为${activeSide === "from" ? "开始" : "结束"} ${item.label}`}
               className={
                 selected
